@@ -15,6 +15,8 @@ import net.raphimc.minecraftauth.MinecraftAuth
 import net.raphimc.minecraftauth.step.bedrock.session.StepFullBedrockSession.FullBedrockSession
 import net.raphimc.minecraftauth.step.msa.StepMsaDeviceCode
 import net.raphimc.minecraftauth.util.MicrosoftConstants
+import org.apache.http.client.config.RequestConfig
+import org.apache.http.impl.client.HttpClientBuilder
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -86,10 +88,13 @@ object MicrosoftAuthManager {
 
         activeSignInJob = scope.launch {
             try {
-                val httpClient = MinecraftAuth.createHttpClient().apply {
-                    connectTimeout = 10_000
-                    readTimeout    = 30_000
-                }
+                val requestConfig = RequestConfig.custom()
+                    .setConnectTimeout(10_000)
+                    .setSocketTimeout(30_000)
+                    .build()
+                val httpClient = HttpClientBuilder.create()
+                    .setDefaultRequestConfig(requestConfig)
+                    .build()
 
                 val session: FullBedrockSession = BEDROCK_FLOW.getFromInput(
                     httpClient,
@@ -172,10 +177,13 @@ object MicrosoftAuthManager {
         if (_accounts.isEmpty()) return
         val now = System.currentTimeMillis()
 
-        val httpClient = MinecraftAuth.createHttpClient().apply {
-            connectTimeout = 10_000
-            readTimeout    = 10_000
-        }
+        val refreshConfig = RequestConfig.custom()
+            .setConnectTimeout(10_000)
+            .setSocketTimeout(10_000)
+            .build()
+        val httpClient = HttpClientBuilder.create()
+            .setDefaultRequestConfig(refreshConfig)
+            .build()
 
         _accounts.toList().forEachIndexed { i, acc ->
             try {
