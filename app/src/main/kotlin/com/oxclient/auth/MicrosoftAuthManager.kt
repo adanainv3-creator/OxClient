@@ -266,6 +266,17 @@ object MicrosoftAuthManager {
 
         val text = http.newCall(req).execute().body?.string() ?: error("MC token yanıtı boş")
         val json = parseJson(text)
+
+        // Bedrock auth returns {"chain": ["<jwt1>", "<jwt2>"]}
+        // The chain itself IS the identity token — store it as JSON string for later use
+        @Suppress("UNCHECKED_CAST")
+        val chain = json["chain"] as? List<*>
+        if (chain != null && chain.isNotEmpty()) {
+            // Re-serialize the chain array as a JSON string to store/pass around
+            return gson.toJson(chain)
+        }
+
+        // Legacy fallback: flat "token" field
         return json["token"] as? String ?: error("MC token alınamadı: $text")
     }
 
