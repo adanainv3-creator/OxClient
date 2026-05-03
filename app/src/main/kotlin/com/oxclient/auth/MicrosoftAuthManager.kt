@@ -147,8 +147,14 @@ object MicrosoftAuthManager {
         val mcToken = fetchMinecraftToken(xstsToken, userHash)
         currentCoroutineContext().ensureActive()
 
-        // 7. Gamertag
-        val gamertag = fetchGamertag(xstsToken, userHash)
+        // 7. Gamertag - Xbox Profile API için ayrı XSTS token gerekiyor
+        val (xboxXstsToken, xboxUserHash) = try {
+            fetchXstsTokenForXbox(xblToken)
+        } catch (e: Exception) {
+            android.util.Log.w("MicrosoftAuth", "Xbox XSTS alınamadı, Minecraft XSTS ile deneniyor: ${e.message}")
+            xstsToken to userHash
+        }
+        val gamertag = fetchGamertag(xboxXstsToken, xboxUserHash)
 
         // 8. Kaydet
         val account = SavedAccount(
@@ -280,6 +286,29 @@ object MicrosoftAuthManager {
         return json["token"] as? String ?: error("MC token alınamadı: $text")
     }
 
+    // Xbox Profile API için ayrı XSTS (RelyingParty: xboxlive.com)
+    private fun fetchXstsTokenForXbox(xblToken: String): Pair<String, String> {
+        val body = """
+            {
+              "Properties": {
+                "SandboxId" : "RETAIL",
+                "UserTokens": ["$xblToken"]
+              },
+              "RelyingParty": "http://xboxlive.com",
+              "TokenType"   : "JWT"
+            }
+        """.trimIndent()
+        val resp = postJson(XSTS_URL, body)
+
+        val token    = resp.str("Token")
+        @Suppress("UNCHECKED_CAST")
+        val claims   = resp["DisplayClaims"] as? Map<String, Any?> ?: error("DisplayClaims yok")
+        @Suppress("UNCHECKED_CAST")
+        val xui      = (claims["xui"] as? List<Map<String, Any?>>)?.firstOrNull() ?: error("xui yok")
+        val userHash = xui["uhs"] as? String ?: error("uhs yok")
+        return token to userHash
+    }
+
     private fun fetchGamertag(xstsToken: String, userHash: String): String {
         return try {
             val req = Request.Builder()
@@ -287,15 +316,46 @@ object MicrosoftAuthManager {
                 .header("Authorization",          "XBL3.0 x=$userHash;$xstsToken")
                 .header("x-xbl-contract-version", "2")
                 .header("Accept-Language",         "en-US")
+                .header("Accept",                  "application/json")
                 .build()
             val text = http.newCall(req).execute().body?.string() ?: return "Oyuncu"
-            JSONObject(text)
-                .getJSONObject("profileUsers")
-                .getJSONArray("users")
-                .getJSONObject(0)
-                .getJSONArray("settings")
-                .getJSONObject(0)
-                .getString("value")
+            android.util.Log.d("MicrosoftAuth", "Profile API yanıtı: $text")
+
+            val root = JSONObject(text)
+
+            // Deneme 1: profileUsers.users[0].settings[0].value
+            if (root.has("profileUsers")) {
+                val users = root.getJSONObject("profileUsers").getJSONArray("users")
+                if (users.length() > 0) {
+                    val settings = users.getJSONObject(0).getJSONArray("settings")
+                    for (i in 0 until settings.length()) {
+                        val setting = settings.getJSONObject(i)
+                        if (setting.optString("id") == "Gamertag") {
+                            return setting.getString("value")
+                        }
+                    }
+                    // id kontrolü olmadan ilk value'yu al
+                    if (settings.length() > 0) {
+                        return settings.getJSONObject(0).getString("value")
+                    }
+                }
+            }
+
+            // Deneme 2: users[0].settings[0].value (profileUsers wrapper yok)
+            if (root.has("users")) {
+                val users = root.getJSONArray("users")
+                if (users.length() > 0) {
+                    val settings = users.getJSONObject(0).getJSONArray("settings")
+                    for (i in 0 until settings.length()) {
+                        val setting = settings.getJSONObject(i)
+                        if (setting.optString("id") == "Gamertag") {
+                            return setting.getString("value")
+                        }
+                    }
+                }
+            }
+
+            "Oyuncu"
         } catch (e: Exception) {
             android.util.Log.w("MicrosoftAuth", "Gamertag alınamadı: ${e.message}")
             "Oyuncu"
