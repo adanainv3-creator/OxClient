@@ -240,17 +240,30 @@ object MicrosoftAuthManager {
     }
 
     private fun fetchMinecraftToken(xstsToken: String, userHash: String): String {
-        val body      = """{"identityPublicKey":""}"""
+        // Generate an EC key pair (prime256v1 / P-256) — required by Minecraft Bedrock auth
+        val keyPairGen = java.security.KeyPairGenerator.getInstance("EC")
+        keyPairGen.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+        val keyPair = keyPairGen.generateKeyPair()
+
+        // DER-encoded public key → Base64 (no wrapping)
+        val publicKeyB64 = android.util.Base64.encodeToString(
+            keyPair.public.encoded,
+            android.util.Base64.NO_WRAP
+        )
+
         val authHeader = "XBL3.0 x=$userHash;$xstsToken"
+        val bodyStr = """{"identityPublicKey":"$publicKeyB64"}"""
+
         val req = Request.Builder()
             .url(MC_BEDROCK_URL)
-            .post(body.toRequestBody("application/json".toMediaType()))
+            .post(bodyStr.toRequestBody("application/json".toMediaType()))
             .header("Authorization",   authHeader)
             .header("Content-Type",    "application/json")
             .header("Accept",          "application/json")
             .header("User-Agent",      "MCPE/UWP")
             .header("client-version",  "1.21.0")
             .build()
+
         val text = http.newCall(req).execute().body?.string() ?: error("MC token yanıtı boş")
         val json = parseJson(text)
         return json["token"] as? String ?: error("MC token alınamadı: $text")
