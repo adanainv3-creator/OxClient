@@ -135,11 +135,11 @@ object MicrosoftAuthManager {
         val refreshToken = tokenResp["refresh_token"] as? String ?: ""
         currentCoroutineContext().ensureActive()
 
-        // 4. Xbox Live
-        val xblToken = fetchXblToken(accessToken)
+        // 4. Xbox Live — Triple(token, uhs, gamertag)
+        val (xblToken, xblUhs, xblGamertag) = fetchXblToken(accessToken)
         currentCoroutineContext().ensureActive()
 
-        // 5. XSTS
+        // 5. XSTS (Minecraft)
         val (xstsToken, userHash) = fetchXstsToken(xblToken)
         currentCoroutineContext().ensureActive()
 
@@ -147,14 +147,19 @@ object MicrosoftAuthManager {
         val mcToken = fetchMinecraftToken(xstsToken, userHash)
         currentCoroutineContext().ensureActive()
 
-        // 7. Gamertag - Xbox Profile API için ayrı XSTS token gerekiyor
-        val (xboxXstsToken, xboxUserHash) = try {
-            fetchXstsTokenForXbox(xblToken)
-        } catch (e: Exception) {
-            android.util.Log.w("MicrosoftAuth", "Xbox XSTS alınamadı, Minecraft XSTS ile deneniyor: ${e.message}")
-            xstsToken to userHash
+        // 7. Gamertag — önce XBL claims'den dene, sonra Profile API
+        val gamertag = if (xblGamertag.isNotBlank()) {
+            android.util.Log.d("MicrosoftAuth", "Gamertag XBL claims'den alındı: $xblGamertag")
+            xblGamertag
+        } else {
+            val (xboxXstsToken, xboxUserHash) = try {
+                fetchXstsTokenForXbox(xblToken)
+            } catch (e: Exception) {
+                android.util.Log.w("MicrosoftAuth", "Xbox XSTS alınamadı: ${e.message}")
+                xstsToken to userHash
+            }
+            fetchGamertag(xboxXstsToken, xboxUserHash)
         }
-        val gamertag = fetchGamertag(xboxXstsToken, xboxUserHash)
 
         // 8. Kaydet
         val account = SavedAccount(
@@ -197,7 +202,8 @@ object MicrosoftAuthManager {
 
     // ── Xbox / Minecraft adımları ─────────────────────────────────────────
 
-    private fun fetchXblToken(msAccessToken: String): String {
+    // Returns Triple(xblToken, uhs, gamertag)
+    private fun fetchXblToken(msAccessToken: String): Triple<String, String, String> {
         val body = """
             {
               "Properties": {
@@ -210,7 +216,22 @@ object MicrosoftAuthManager {
             }
         """.trimIndent()
         val resp = postJson(XBL_URL, body)
-        return resp.str("Token")
+        android.util.Log.d("MicrosoftAuth", "XBL response keys: ${resp.keys}")
+
+        val token = resp.str("Token")
+
+        @Suppress("UNCHECKED_CAST")
+        val claims   = resp["DisplayClaims"] as? Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val xui      = (claims?.get("xui") as? List<Map<String, Any?>>)?.firstOrNull()
+        val uhs      = xui?.get("uhs") as? String ?: ""
+        // gtg = GamerTag field in XBL DisplayClaims
+        val gamertag = xui?.get("gtg") as? String
+            ?: xui?.get("Gamertag") as? String
+            ?: ""
+
+        android.util.Log.d("MicrosoftAuth", "XBL uhs=$uhs gamertag=$gamertag xui=$xui")
+        return Triple(token, uhs, gamertag)
     }
 
     private fun fetchXstsToken(xblToken: String): Pair<String, String> {
