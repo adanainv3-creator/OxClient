@@ -133,19 +133,19 @@ object MicrosoftAuthManager {
         val tokenResp    = pollForToken(deviceCode, intervalMs)
         val accessToken  = tokenResp.str("access_token")
         val refreshToken = tokenResp["refresh_token"] as? String ?: ""
-        ensureActive()
+        currentCoroutineContext().ensureActive()
 
         // 4. Xbox Live
         val xblToken = fetchXblToken(accessToken)
-        ensureActive()
+        currentCoroutineContext().ensureActive()
 
         // 5. XSTS
         val (xstsToken, userHash) = fetchXstsToken(xblToken)
-        ensureActive()
+        currentCoroutineContext().ensureActive()
 
         // 6. Minecraft Bedrock token
         val mcToken = fetchMinecraftToken(xstsToken, userHash)
-        ensureActive()
+        currentCoroutineContext().ensureActive()
 
         // 7. Gamertag
         val gamertag = fetchGamertag(xstsToken, userHash)
@@ -170,9 +170,9 @@ object MicrosoftAuthManager {
     private suspend fun pollForToken(deviceCode: String, intervalMs: Long): Map<String, Any?> {
         val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
-            ensureActive()
+            currentCoroutineContext().ensureActive()
             delay(intervalMs.coerceAtLeast(MIN_INTERVAL_MS))
-            ensureActive()
+            currentCoroutineContext().ensureActive()
 
             val resp  = postForm(TOKEN_URL, mapOf(
                 "client_id"   to CLIENT_ID,
