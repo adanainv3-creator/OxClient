@@ -12,6 +12,13 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Android 11+ (API 30+): PackageManager'ın diğer uygulamaları görebilmesi için -->
+    <queries>
+        <package android:name="com.mojang.minecraftpe" />
+        <package android:name="com.netease.mc" />
+        <package android:name="com.mojang.minecrafttrialpe" />
+    </queries>
+
     <application
         android:name=".OxClientApp"
         android:allowBackup="false"
@@ -20,6 +27,7 @@
         android:roundIcon="@drawable/ic_ox_logo"
         android:supportsRtl="true"
         android:theme="@style/Theme.OxClient"
+        android:usesCleartextTraffic="true"
         tools:targetApi="35">
 
         <activity
@@ -32,6 +40,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Microsoft WebView login ekranı -->
+        <activity
+            android:name=".ui.dashboard.MicrosoftAuthWebViewActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name="com.microsoft.identity.client.BrowserTabActivity"
