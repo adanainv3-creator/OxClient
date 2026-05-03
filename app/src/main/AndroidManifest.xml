@@ -41,24 +41,27 @@
             </intent-filter>
         </activity>
 
-        <!-- Microsoft WebView login ekranı -->
+        <!-- Microsoft OAuth WebView login ekranı -->
+        <!-- exported="true" zorunlu: sistem redirect URI'yi bu Activity'ye yönlendirmeli -->
         <activity
             android:name=".ui.dashboard.MicrosoftAuthWebViewActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustResize" />
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
 
-        <activity
-            android:name="com.microsoft.identity.client.BrowserTabActivity"
-            android:exported="true">
+            <!-- ms-xal-{clientId}://auth redirect'ini yakala -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:host="com.oxclient"
-                    android:path="/REPLACE_BASE64_SIG"
-                    android:scheme="msauth" />
+                <data
+                    android:scheme="ms-xal-0000000048183522"
+                    android:host="auth" />
             </intent-filter>
         </activity>
+
+        <!-- MSAL BrowserTabActivity kaldırıldı: artık WebView flow kullanıyoruz,
+             external browser / MSAL kütüphanesi kullanılmıyor -->
 
         <service
             android:name=".core.vpn.OxVpnService"
