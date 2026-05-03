@@ -72,6 +72,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private lateinit var wm: WindowManager
     private var overlayView: ComposeView? = null
+    private var windowParams: WindowManager.LayoutParams? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -117,6 +118,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
+        windowParams = params
+
         overlayView = ComposeView(this).apply {
             setViewTreeLifecycleOwner(this@OverlayService)
             setViewTreeSavedStateRegistryOwner(this@OverlayService)
@@ -124,6 +127,21 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
 
         wm.addView(overlayView, params)
+    }
+
+    /**
+     * Menü açıkken odak alabilmesi için FLAG_NOT_FOCUSABLE'ı kaldır.
+     * Menü kapanınca geri ekle — böylece oyun touch olaylarını tekrar alır.
+     */
+    private fun setWindowFocusable(focusable: Boolean) {
+        val params = windowParams ?: return
+        val view   = overlayView  ?: return
+        if (focusable) {
+            params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        } else {
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        wm.updateViewLayout(view, params)
     }
 
     private fun removeOverlay() {
@@ -146,6 +164,12 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         // Shortcut bar pozisyonu (sürüklenebilir)
         var shortcutOffsetX by remember { mutableStateOf(20f) }
         var shortcutOffsetY by remember { mutableStateOf(500f) }
+
+        // Menü açılınca odak ver, kapanınca geri al
+        // Bu olmadan menü açıkken back/home tuşları çalışmaz, ekran kilitlenir.
+        LaunchedEffect(menuOpen) {
+            setWindowFocusable(menuOpen)
+        }
 
         Box(modifier = Modifier.fillMaxSize()) {
 
@@ -408,7 +432,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
-                ) { /* tüket */ }
+                ) { onClose() }
         ) {
             Box(
                 modifier = Modifier
@@ -745,3 +769,4 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
 }
+
