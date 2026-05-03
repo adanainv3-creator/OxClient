@@ -12,11 +12,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import net.raphimc.minecraftauth.MinecraftAuth
-import net.raphimc.minecraftauth.step.bedrock.session.StepFullBedrockSession
 import net.raphimc.minecraftauth.step.bedrock.session.StepFullBedrockSession.FullBedrockSession
 import net.raphimc.minecraftauth.step.msa.StepMsaDeviceCode
 import net.raphimc.minecraftauth.util.MicrosoftConstants
-import org.apache.http.impl.client.HttpClients
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -25,26 +23,29 @@ object MicrosoftAuthManager {
     private val TOKEN_REFRESH_INTERVAL_MS  = TimeUnit.MINUTES.toMillis(30)
     private val TOKEN_REFRESH_THRESHOLD_MS = TimeUnit.HOURS.toMillis(2)
 
-    /** Device code akışı — Bedrock Android kimliği */
-    val BEDROCK_DEVICE_CODE_LOGIN: StepFullBedrockSession =
-        MinecraftAuth.builder()
-            .withClientId(MicrosoftConstants.BEDROCK_ANDROID_TITLE_ID)
-            .withScope(MicrosoftConstants.SCOPE_TITLE_AUTH)
-            .deviceCode()
-            .withDeviceToken("Android")
-            .sisuTitleAuthentication(MicrosoftConstants.BEDROCK_XSTS_RELYING_PARTY)
-            .buildMinecraftBedrockChainStep(true, true)
+    /**
+     * Referans: RealmsAuthFlow.BEDROCK_DEVICE_CODE_LOGIN_WITH_REALMS ile aynı yapı.
+     */
+    val BEDROCK_FLOW = MinecraftAuth.builder()
+        .withClientId(MicrosoftConstants.BEDROCK_ANDROID_TITLE_ID)
+        .withScope(MicrosoftConstants.SCOPE_TITLE_AUTH)
+        .deviceCode()
+        .withDeviceToken("Android")
+        .sisuTitleAuthentication(MicrosoftConstants.BEDROCK_XSTS_RELYING_PARTY)
+        .buildMinecraftBedrockChainStep(true, true)
 
     private val gson  = GsonBuilder().setPrettyPrinting().create()
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(
+        Dispatchers.IO + CoroutineName("OxAuthScope") + SupervisorJob()
+    )
 
-    // ── Auth State ────────────────────────────────────────────────────────
+    // ── State ─────────────────────────────────────────────────────────────
 
     sealed class AuthState {
         object Idle    : AuthState()
         object Loading : AuthState()
-        /** Device code akışında kullanıcıya gösterilecek kod + URL */
-        data class DeviceCode(val userCode: String, val verificationUrl: String) : AuthState()
+        /** directVerificationUri WebView'a yüklenecek */
+        data class WebViewReady(val loginUrl: String) : AuthState()
         data class Success(val gamertag: String, val token: String) : AuthState()
         data class Error(val msg: String) : AuthState()
     }
@@ -59,57 +60,65 @@ object MicrosoftAuthManager {
         private set
 
     private lateinit var cacheDir: File
-    private var initialized = false
+    private var initialized    = false
+    private var activeSignInJob: Job? = null
 
     // ── Init ──────────────────────────────────────────────────────────────
 
     fun init(context: Context) {
         if (initialized) return
-        cacheDir = File(context.filesDir, "accounts").apply { mkdirs() }
+        initialized = true
+        cacheDir = File(context.filesDir, "ox_accounts").apply { mkdirs() }
         loadAccounts()
         startRefreshLoop()
-        initialized = true
     }
 
-    // ── Sign In — Device Code akışı ────────────────────────────────────
+    // ── Sign In — WebView akışı (referans: AuthWebView.addAccount()) ───────
+    //
+    //  MinecraftAuth.createHttpClient() kullan (referans ile aynı)
+    //  directVerificationUri → WebView'a yükle, kullanıcı orada giriş yapsın
+    //  getFromInput() WebView login bitince session'ı döndürür.
 
     fun signIn() {
-        if (_authState.value is AuthState.Loading || _authState.value is AuthState.DeviceCode) return
+        if (_authState.value is AuthState.Loading ||
+            _authState.value is AuthState.WebViewReady) return
         _authState.value = AuthState.Loading
 
-        scope.launch {
+        activeSignInJob = scope.launch {
             try {
-                val httpClient = HttpClients.createDefault()
+                val httpClient = MinecraftAuth.createHttpClient().apply {
+                    connectTimeout = 10_000
+                    readTimeout    = 30_000
+                }
 
-                // Device code adımını bul ve callback ile kodu UI'ya yansıt
-                val session: FullBedrockSession = BEDROCK_DEVICE_CODE_LOGIN.getFromInput(
+                val session: FullBedrockSession = BEDROCK_FLOW.getFromInput(
                     httpClient,
                     StepMsaDeviceCode.MsaDeviceCodeCallback { deviceCode ->
-                        // Bu callback device code geldiğinde tetiklenir
-                        _authState.value = AuthState.DeviceCode(
-                            userCode        = deviceCode.userCode,
-                            verificationUrl = deviceCode.verificationUri
-                        )
+                        // directVerificationUri = kod pre-filled Microsoft login URL
+                        _authState.value = AuthState.WebViewReady(deviceCode.directVerificationUri)
                     }
                 )
 
-                val name  = session.mcChain.displayName
-                val token = session.mcChain.xblXsts.token
-
+                // WebView tamamladı → session alındı
                 addAccount(session)
                 selectAccount(session)
-                _authState.value = AuthState.Success(name, token)
+                _authState.value = AuthState.Success(
+                    session.mcChain.displayName,
+                    session.mcChain.xblXsts.token
+                )
 
             } catch (e: CancellationException) {
                 _authState.value = AuthState.Idle
             } catch (e: Exception) {
+                e.printStackTrace()
                 _authState.value = AuthState.Error(e.message ?: "Giriş başarısız")
             }
         }
     }
 
     fun cancelSignIn() {
-        scope.coroutineContext.cancelChildren()
+        activeSignInJob?.cancel()
+        activeSignInJob = null
         _authState.value = AuthState.Idle
     }
 
@@ -148,7 +157,7 @@ object MicrosoftAuthManager {
         }
     }
 
-    // ── Token Refresh ─────────────────────────────────────────────────────
+    // ── Token Refresh — referans: AccountManager.refreshExpiredTokens() ──
 
     private fun startRefreshLoop() {
         scope.launch {
@@ -159,17 +168,25 @@ object MicrosoftAuthManager {
         }
     }
 
-    private suspend fun refreshTokens() {
+    private fun refreshTokens() {
+        if (_accounts.isEmpty()) return
         val now = System.currentTimeMillis()
-        val httpClient = HttpClients.createDefault()
 
-        _accounts.forEachIndexed { i, acc ->
+        val httpClient = MinecraftAuth.createHttpClient().apply {
+            connectTimeout = 10_000
+            readTimeout    = 10_000
+        }
+
+        _accounts.toList().forEachIndexed { i, acc ->
             try {
-                val expire = acc.mcChain.xblXsts.expireTimeMs ?: 0L
-                if (expire - now < TOKEN_REFRESH_THRESHOLD_MS) {
-                    val refreshed: FullBedrockSession = BEDROCK_DEVICE_CODE_LOGIN.refresh(
-                        httpClient, acc
-                    )
+                val msaExpire = acc.mcChain.xblXsts
+                    .initialXblSession?.msaToken?.expireTimeMs ?: 0L
+                val xblExpire = acc.mcChain.xblXsts.expireTimeMs ?: 0L
+                val needsRefresh = (msaExpire - now < TOKEN_REFRESH_THRESHOLD_MS) ||
+                                   (xblExpire  - now < TOKEN_REFRESH_THRESHOLD_MS)
+
+                if (needsRefresh) {
+                    val refreshed = BEDROCK_FLOW.refresh(httpClient, acc)
                     _accounts[i] = refreshed
                     if (selectedAccount?.mcChain?.displayName == acc.mcChain.displayName) {
                         selectAccount(refreshed)
@@ -182,7 +199,7 @@ object MicrosoftAuthManager {
         }
     }
 
-    // ── Persistence ───────────────────────────────────────────────────────
+    // ── Persistence — referans: AccountManager.fetchAccounts() ───────────
 
     private fun loadAccounts() {
         val selectedName = runCatching {
@@ -190,10 +207,14 @@ object MicrosoftAuthManager {
         }.getOrNull()
 
         cacheDir.listFiles()?.forEach { file ->
-            if (file.name == "selectedAccount") return@forEach
+            if (!file.isFile || file.extension != "json") return@forEach
             runCatching {
                 val json = JsonParser.parseString(file.readText()).asJsonObject
-                val acc  = BEDROCK_DEVICE_CODE_LOGIN.fromJson(json)
+                val acc  = try {
+                    BEDROCK_FLOW.fromJson(json)
+                } catch (e: Exception) {
+                    MinecraftAuth.BEDROCK_DEVICE_CODE_LOGIN.fromJson(json)
+                }
                 _accounts.add(acc)
                 if (acc.mcChain.displayName == selectedName) {
                     selectedAccount = acc
@@ -202,15 +223,23 @@ object MicrosoftAuthManager {
                         acc.mcChain.xblXsts.token
                     )
                 }
-            }.onFailure { file.delete() }
+            }.onFailure {
+                println("OxAuth: hesap yüklenemedi ${file.name}: ${it.message}")
+            }
         }
     }
 
     private fun saveAccount(acc: FullBedrockSession) {
         runCatching {
-            val json = BEDROCK_DEVICE_CODE_LOGIN.toJson(acc)
+            val json = try {
+                BEDROCK_FLOW.toJson(acc)
+            } catch (e: Exception) {
+                MinecraftAuth.BEDROCK_DEVICE_CODE_LOGIN.toJson(acc)
+            }
             File(cacheDir, "${acc.mcChain.displayName}.json")
                 .writeText(gson.toJson(json))
+        }.onFailure {
+            println("OxAuth: kayıt başarısız ${acc.mcChain.displayName}: ${it.message}")
         }
     }
 }
