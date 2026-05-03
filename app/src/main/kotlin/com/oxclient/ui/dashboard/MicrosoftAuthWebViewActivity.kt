@@ -1,13 +1,13 @@
 package com.oxclient.ui.dashboard
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AppCompatActivity
 
 /**
  * Microsoft OAuth girişi için WebView Activity.
@@ -20,13 +20,8 @@ import androidx.activity.OnBackPressedCallback
  * MinecraftAuth kütüphanesi arka planda kodu yakalar ve session'ı tamamlar.
  * Bu Activity yalnızca tarayıcı penceresini sağlar — tüm token işlemleri
  * MicrosoftAuthManager.signIn() coroutine'inde zaten yürümektedir.
- *
- * NOT: AppCompatActivity DEĞİL ComponentActivity kullanılıyor.
- * AppCompatActivity, Compose temasıyla (Theme.OxClient) çakışarak
- * "You need to use a Theme.AppCompat theme" crash'ine yol açar.
- * ComponentActivity bu kısıtlamadan muaftır.
  */
-class MicrosoftAuthWebViewActivity : ComponentActivity() {
+class MicrosoftAuthWebViewActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_LOGIN_URL = "login_url"
@@ -85,13 +80,12 @@ class MicrosoftAuthWebViewActivity : ComponentActivity() {
         }
 
         webView.loadUrl(loginUrl)
+    }
 
+    override fun onBackPressed() {
         // Geri tuşuna basılırsa sign-in iptal et
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                MicrosoftAuthManager.cancelSignIn()
-                finish()
-            }
-        })
+        MicrosoftAuthManager.cancelSignIn()
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
     }
 }
