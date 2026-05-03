@@ -207,9 +207,9 @@ object MicrosoftAuthManager {
     private suspend fun pollToken(deviceCode: String, intervalMs: Long): Map<String, Any?> {
         val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
-            ensureActive()
+            currentCoroutineContext().ensureActive()
             delay(intervalMs.coerceAtLeast(POLL_INTERVAL_MS))
-            ensureActive()
+            currentCoroutineContext().ensureActive()
 
             val resp = postForm(
                 TOKEN_URL,
