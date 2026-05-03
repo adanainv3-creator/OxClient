@@ -80,7 +80,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
 
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("net.raphimc:MinecraftAuth:3.0.1")
+    // MinecraftAuth kaldırıldı — OkHttp ile kendi Device Code Flow implementasyonu kullanılıyor
+    // (MinecraftAuth masaüstü Java kütüphanesi, Android'de java.desktop modülü olmadığı için çöküyordu)
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
