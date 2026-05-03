@@ -1,7 +1,7 @@
 package com.oxclient.ui.dashboard
 
 import android.annotation.SuppressLint
-import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
@@ -14,17 +14,19 @@ import androidx.appcompat.app.AppCompatActivity
  *
  * DashboardActivity tarafından şu şekilde başlatılır:
  *   Intent(this, MicrosoftAuthWebViewActivity::class.java)
- *       .putExtra("login_url", url)
+ *       .putExtra(EXTRA_LOGIN_URL, url)
  *
- * WebView, Microsoft login sayfasını gösterir. Kullanıcı giriş yapınca
- * MinecraftAuth kütüphanesi arka planda kodu yakalar ve session'ı tamamlar.
- * Bu Activity yalnızca tarayıcı penceresini sağlar — tüm token işlemleri
- * MicrosoftAuthManager.signIn() coroutine'inde zaten yürümektedir.
+ * WebView login sayfasını gösterir. Kullanıcı giriş yapınca Microsoft,
+ * ms-xal-0000000048183522://auth?code=XXX adresine yönlendirir.
+ * shouldOverrideUrlLoading bu redirect'i yakalar → MicrosoftAuthManager.onAuthCodeReceived()
+ * çağrılır → Activity kapanır → token akışı arka planda tamamlanır.
  */
 class MicrosoftAuthWebViewActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_LOGIN_URL = "login_url"
+        // Redirect URI şeması — CLIENT_ID ile eşleşmeli
+        private const val REDIRECT_SCHEME = "ms-xal-0000000048183522"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -37,53 +39,69 @@ class MicrosoftAuthWebViewActivity : AppCompatActivity() {
             return
         }
 
-        // WebView'u programatik oluştur, XML layout gerektirmez
         val webView = WebView(this).also { setContentView(it) }
 
-        // Cookie'leri temizle — önceki oturumun kalıntısı girişi bozabilir
+        // Önceki oturum cookie'lerini temizle
         CookieManager.getInstance().apply {
             removeAllCookies(null)
             flush()
         }
 
         webView.settings.apply {
-            javaScriptEnabled    = true
-            domStorageEnabled    = true
-            // Microsoft login sayfasının modern UA beklediği durumlar için
-            userAgentString      = "Mozilla/5.0 (Linux; Android 10) " +
-                                   "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                                   "Chrome/120.0.0.0 Mobile Safari/537.36"
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            userAgentString   =
+                "Mozilla/5.0 (Linux; Android 10) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/120.0.0.0 Mobile Safari/537.36"
         }
 
         webView.webViewClient = object : WebViewClient() {
+
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest
             ): Boolean {
-                // Tüm URL'leri WebView içinde aç — dış tarayıcıya yönlendirme
-                return false
-            }
+                val uri = request.url
 
-            override fun onPageFinished(view: WebView, url: String) {
-                super.onPageFinished(view, url)
-                // Kullanıcı onay sayfasını geçince Microsoft "?code=..." ile
-                // yönlendirir. MinecraftAuth bu kodu arka planda zaten dinliyor;
-                // Activity'nin ekstra bir şey yapmasına gerek yok.
-                //
-                // Başarı/hata durumu MicrosoftAuthManager.authState flow'u üzerinden
-                // DashboardActivity'ye iletilir.
-                if (url.contains("code=") || url.contains("error=")) {
-                    // Kısa gecikme: WebView JS'nin son işlemini bitirmesine izin ver
-                    view.postDelayed({ finish() }, 500)
+                // Microsoft, başarılı girişten sonra ms-xal-...://auth?code=XXX adresine yönlendirir
+                if (uri.scheme == REDIRECT_SCHEME) {
+                    handleRedirect(uri)
+                    return true   // WebView'ın bu URL'yi yüklemesini engelle
                 }
+
+                // Diğer tüm URL'leri WebView içinde aç
+                return false
             }
         }
 
         webView.loadUrl(loginUrl)
     }
 
+    private fun handleRedirect(uri: Uri) {
+        val code  = uri.getQueryParameter("code")
+        val error = uri.getQueryParameter("error")
+
+        when {
+            code != null -> {
+                // Authorization code'u Manager'a ilet — token akışı orada tamamlanır
+                MicrosoftAuthManager.onAuthCodeReceived(code)
+            }
+            error != null -> {
+                val desc = uri.getQueryParameter("error_description") ?: error
+                MicrosoftAuthManager.cancelSignIn()
+                // İsteğe bağlı: hata mesajını authState üzerinden iletmek için
+                // MicrosoftAuthManager.onAuthError(desc) metodunu ekleyebilirsin
+            }
+            else -> {
+                MicrosoftAuthManager.cancelSignIn()
+            }
+        }
+
+        finish()   // Activity'yi kapat, kullanıcı Dashboard'a döner
+    }
+
     override fun onBackPressed() {
-        // Geri tuşuna basılırsa sign-in iptal et
         MicrosoftAuthManager.cancelSignIn()
         @Suppress("DEPRECATION")
         super.onBackPressed()
