@@ -147,18 +147,28 @@ object MicrosoftAuthManager {
         val mcToken = fetchMinecraftToken(xstsToken, userHash)
         currentCoroutineContext().ensureActive()
 
-        // 7. Gamertag — önce XBL claims'den dene, sonra Profile API
-        val gamertag = if (xblGamertag.isNotBlank()) {
-            android.util.Log.d("MicrosoftAuth", "Gamertag XBL claims'den alındı: $xblGamertag")
-            xblGamertag
-        } else {
-            val (xboxXstsToken, xboxUserHash) = try {
-                fetchXstsTokenForXbox(xblToken)
-            } catch (e: Exception) {
-                android.util.Log.w("MicrosoftAuth", "Xbox XSTS alınamadı: ${e.message}")
-                xstsToken to userHash
+        // 7. Gamertag — kademeli: XBL gtg → JWT payload → Profile API → fallback
+        val gamertag = when {
+            xblGamertag.isNotBlank() -> {
+                android.util.Log.d("MicrosoftAuth", "Gamertag XBL gtg'den: $xblGamertag")
+                xblGamertag
             }
-            fetchGamertag(xboxXstsToken, xboxUserHash)
+            else -> {
+                // Microsoft access token'ı JWT — payload'ı decode et
+                val jwtGamertag = extractUsernameFromJwt(accessToken)
+                if (jwtGamertag.isNotBlank()) {
+                    android.util.Log.d("MicrosoftAuth", "Gamertag JWT'den: $jwtGamertag")
+                    jwtGamertag
+                } else {
+                    val (xboxXstsToken, xboxUserHash) = try {
+                        fetchXstsTokenForXbox(xblToken)
+                    } catch (e: Exception) {
+                        android.util.Log.w("MicrosoftAuth", "Xbox XSTS alınamadı: ${e.message}")
+                        xstsToken to userHash
+                    }
+                    fetchGamertag(xboxXstsToken, xboxUserHash)
+                }
+            }
         }
 
         // 8. Kaydet
@@ -328,6 +338,43 @@ object MicrosoftAuthManager {
         val xui      = (claims["xui"] as? List<Map<String, Any?>>)?.firstOrNull() ?: error("xui yok")
         val userHash = xui["uhs"] as? String ?: error("uhs yok")
         return token to userHash
+    }
+
+    /**
+     * Microsoft access token (JWT) payload içinden kullanıcı adını çıkarır.
+     * "unique_name" veya "preferred_username" alanlarını dener.
+     * Bu alanlar genellikle email formatındadır: "kullanici@hotmail.com"
+     * → "@" öncesi kısım gamertag olarak kullanılır.
+     */
+    private fun extractUsernameFromJwt(jwt: String): String {
+        return try {
+            val parts = jwt.split(".")
+            if (parts.size < 2) return ""
+            val payload = String(
+                android.util.Base64.decode(
+                    parts[1].replace('-', '+').replace('_', '/'),
+                    android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+                ),
+                Charsets.UTF_8
+            )
+            android.util.Log.d("MicrosoftAuth", "JWT payload: $payload")
+            val obj = JSONObject(payload)
+            // Önce xbl_display_claims dene
+            if (obj.has("xbl_display_claims")) {
+                val xbl = obj.getJSONObject("xbl_display_claims")
+                if (xbl.has("gtg")) return xbl.getString("gtg")
+            }
+            // unique_name veya preferred_username — email formatında olabilir
+            val raw = obj.optString("unique_name").takeIf { it.isNotBlank() }
+                ?: obj.optString("preferred_username").takeIf { it.isNotBlank() }
+                ?: obj.optString("name").takeIf { it.isNotBlank() }
+                ?: return ""
+            // email ise @ öncesini al
+            raw.substringBefore("@")
+        } catch (e: Exception) {
+            android.util.Log.w("MicrosoftAuth", "JWT parse hatası: ${e.message}")
+            ""
+        }
     }
 
     private fun fetchGamertag(xstsToken: String, userHash: String): String {
