@@ -87,7 +87,8 @@ class DashboardActivity : ComponentActivity() {
 
         // Auth yöneticisini başlat
         MicrosoftAuthManager.init(this)
-        ModuleManager.init(this)
+        // ModuleManager.init() OxClientApp.onCreate() içinde zaten çağrılıyor
+        // Burada tekrar çağırmaya gerek yok — çift init crash'e sebep olabilir
 
         setContent {
             OxClientTheme {
@@ -132,9 +133,15 @@ class DashboardActivity : ComponentActivity() {
         Log.d("Dashboard", "launchProxy başlatıldı, hedef paket: $targetPkg")
 
         // VPN servisini başlat
-        startService(Intent(this, OxVpnService::class.java).apply {
+        val vpnIntent = Intent(this, OxVpnService::class.java).apply {
             action = OxVpnService.ACTION_START
-        })
+        }
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(vpnIntent)
+        } else {
+            startService(vpnIntent)
+        }
         Log.d("Dashboard", "VPN servisi başlatma sinyali gönderildi")
 
         // Overlay servisini başlat
@@ -155,14 +162,15 @@ class DashboardActivity : ComponentActivity() {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }
-        }, 500) // 500ms gecikme — overlay'in hazır olması için
+        }, 800) // 800ms gecikme — overlay'in tamamen hazır olması için
     }
 
     private fun stopProxy() {
         Log.d("Dashboard", "Proxy durduruluyor")
-        startService(Intent(this, OxVpnService::class.java).apply {
+        val stopIntent = Intent(this, OxVpnService::class.java).apply {
             action = OxVpnService.ACTION_STOP
-        })
+        }
+        startService(stopIntent)
         OverlayService.stop(this)
         ModuleManager.disableAll()
     }
@@ -597,7 +605,6 @@ private fun TopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment     = Alignment.CenterVertically
     ) {
-        // Sol: uygulama adı
         Text(
             "OxClient",
             fontSize   = 22.sp,
@@ -606,12 +613,10 @@ private fun TopBar(
             fontFamily = FontFamily.Monospace
         )
 
-        // Sağ: gamertag + avatar dairesi
         Row(
             verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Gamertag — sadece giriş yapıldığında göster
             if (isLoggedIn) {
                 Text(
                     text     = (authState as AuthState.Success).gamertag,
@@ -624,7 +629,6 @@ private fun TopBar(
                 )
             }
 
-            // Avatar dairesi
             Box(
                 modifier = Modifier
                     .size(36.dp)

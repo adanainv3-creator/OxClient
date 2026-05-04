@@ -16,7 +16,6 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -134,10 +133,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
-            // FLAG_NOT_FOCUSABLE: tuş olaylarını arka plana iletir (oyunun çalışması için)
-            // FLAG_NOT_TOUCHABLE: dokunma olaylarını arka plana iletir (menü kapalıyken oyun tıklanabilir olur)
-            // FLAG_LAYOUT_IN_SCREEN: ekranın tamamını kaplar
-            // FLAG_LAYOUT_NO_LIMITS: sistem çubuklarının altına da uzanabilir
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -155,7 +150,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             setContent {
                 OxOverlay(
                     onMenuOpenChanged = { menuOpen ->
-                        // Menü durumu değiştiğinde window flags'ı güncelle
                         updateWindowFlags(menuOpen)
                     }
                 )
@@ -171,22 +165,16 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
-    /**
-     * Menü açıkken dokunma olaylarını overlay'in almasını sağla.
-     * Menü kapalıyken tüm dokunma olaylarını oyuna ilet.
-     */
     private fun updateWindowFlags(menuOpen: Boolean) {
         val params = windowParams ?: return
         val view   = overlayView  ?: return
 
         try {
             if (menuOpen) {
-                // Menü açık: dokunma olaylarını overlay alır, tuş olayları hâlâ oyuna gider
                 params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
                 params.flags = params.flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                 Log.d(TAG, "Menü açıldı - overlay dokunma alıyor")
             } else {
-                // Menü kapalı: dokunma olayları oyuna gider
                 params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 params.flags = params.flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
                 Log.d(TAG, "Menü kapandı - dokunma olayları oyuna gidiyor")
@@ -220,22 +208,18 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val menuOpen      by OverlayState.menuOpen.collectAsState()
         val moduleVersion by ModuleManager.version.collectAsState()
 
-        // FAB pozisyonu
         var fabOffsetX by remember { mutableStateOf(50f) }
         var fabOffsetY by remember { mutableStateOf(300f) }
 
-        // Shortcut bar pozisyonu (sürüklenebilir)
         var shortcutOffsetX by remember { mutableStateOf(20f) }
         var shortcutOffsetY by remember { mutableStateOf(500f) }
 
-        // Menü açıldığında/kapandığında window flags'ı güncelle
         LaunchedEffect(menuOpen) {
             onMenuOpenChanged(menuOpen)
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
 
-            // ── Totem counter ──
             if (totemCount > 0) {
                 TotemPill(
                     count    = totemCount,
@@ -243,20 +227,17 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
             }
 
-            // ── Module toast ──
             ModuleToastBanner(
                 toast    = toast,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 10.dp)
             )
 
-            // ── Full-screen hile menüsü ──
             AnimatedVisibility(
                 visible  = menuOpen,
                 enter    = fadeIn() + slideInVertically { it / 2 },
                 exit     = fadeOut() + slideOutVertically { it / 2 },
                 modifier = Modifier.fillMaxSize()
             ) {
-                // Menü arka planı — tıklayınca kapanır
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -276,7 +257,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
             }
 
-            // ── Kısayol tuşları (menü kapalıyken) ──
             if (!menuOpen) {
                 DraggableShortcutBar(
                     offsetX       = shortcutOffsetX,
@@ -287,7 +267,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
             }
 
-            // ── FAB ──
             if (!menuOpen) {
                 DraggableFab(
                     offsetX  = fabOffsetX,
@@ -335,7 +314,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 },
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Tutamaç + daralt/genişlet butonu
             Box(
                 modifier = Modifier
                     .size(width = 90.dp, height = 18.dp)
@@ -353,7 +331,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
             }
 
-            // Kısayol tuşları
             AnimatedVisibility(
                 visible = barExpanded,
                 enter   = fadeIn() + expandVertically(),
@@ -526,12 +503,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
                 )
                 .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {
-                    // Menü içi tıklamaları engelleme — hiçbir şey yapma
-                }
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
 
@@ -577,7 +548,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    ModuleCategory.values().forEach { cat ->
+                    ModuleCategory.entries.forEach { cat ->
                         val sel = cat == selectedCat
                         Box(
                             modifier = Modifier
@@ -735,27 +706,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 var v by remember { mutableStateOf(s.value) }
                 Column {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                        Text(
-                            s.name,
-                            fontSize   = 11.sp,
-                            color      = OxOnSurface,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            "%.2f".format(v),
-                            fontSize   = 11.sp,
-                            color      = OxPurpleLight,
-                            fontFamily = FontFamily.Monospace
-                        )
+                        Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
+                        Text("%.2f".format(v), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
                     }
                     Slider(
                         value         = v,
                         onValueChange = { v = it; s.value = it },
                         valueRange    = s.min..s.max,
-                        colors        = SliderDefaults.colors(
-                            thumbColor       = OxPurple,
-                            activeTrackColor = OxPurple
-                        )
+                        colors        = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
                     )
                 }
             }
@@ -763,62 +721,33 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 var v by remember { mutableFloatStateOf(s.value.toFloat()) }
                 Column {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                        Text(
-                            s.name,
-                            fontSize   = 11.sp,
-                            color      = OxOnSurface,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            v.toInt().toString(),
-                            fontSize   = 11.sp,
-                            color      = OxPurpleLight,
-                            fontFamily = FontFamily.Monospace
-                        )
+                        Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
+                        Text(v.toInt().toString(), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
                     }
                     Slider(
                         value         = v,
                         onValueChange = { v = it; s.value = it.toInt() },
                         valueRange    = s.min.toFloat()..s.max.toFloat(),
                         steps         = (s.max - s.min - 1).coerceAtLeast(0),
-                        colors        = SliderDefaults.colors(
-                            thumbColor       = OxPurple,
-                            activeTrackColor = OxPurple
-                        )
+                        colors        = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
                     )
                 }
             }
             is BoolSetting -> {
                 var v by remember { mutableStateOf(s.value) }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    Arrangement.SpaceBetween,
-                    Alignment.CenterVertically
-                ) {
-                    Text(
-                        s.name,
-                        fontSize   = 11.sp,
-                        color      = OxOnSurface,
-                        fontFamily = FontFamily.Monospace
-                    )
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
                     Switch(
                         checked         = v,
                         onCheckedChange = { v = it; s.value = it },
-                        colors          = SwitchDefaults.colors(
-                            checkedTrackColor = OxPurple
-                        )
+                        colors          = SwitchDefaults.colors(checkedTrackColor = OxPurple)
                     )
                 }
             }
             is EnumSetting<*> -> {
                 var sel by remember { mutableStateOf(s.value) }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        s.name,
-                        fontSize   = 11.sp,
-                        color      = OxOnSurface,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.horizontalScroll(rememberScrollState())
@@ -838,8 +767,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                     .padding(horizontal = 8.dp, vertical = 3.dp)
                             ) {
                                 Text(
-                                    opt.name.lowercase()
-                                        .replaceFirstChar { it.uppercase() },
+                                    opt.name.lowercase().replaceFirstChar { it.uppercase() },
                                     fontSize   = 10.sp,
                                     color      = if (isSel) Color.White else OxOnSurface,
                                     fontFamily = FontFamily.Monospace
@@ -866,20 +794,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Text(
-                    OverlayState.TOTEM_SYMBOL,
-                    color      = Color(0xFFFFD700),
-                    fontSize   = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    count.toString(),
-                    color      = Color.White,
-                    fontSize   = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace
-                )
+                Text(OverlayState.TOTEM_SYMBOL, color = Color(0xFFFFD700), fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Text(count.toString(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
             }
         }
     }
@@ -916,14 +832,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel(
-                CHANNEL_ID,
-                "OxClient Overlay",
-                NotificationManager.IMPORTANCE_MIN
-            ).also {
-                getSystemService(NotificationManager::class.java)
-                    .createNotificationChannel(it)
-            }
+            NotificationChannel(CHANNEL_ID, "OxClient Overlay", NotificationManager.IMPORTANCE_MIN)
+                .also { getSystemService(NotificationManager::class.java).createNotificationChannel(it) }
         }
     }
 

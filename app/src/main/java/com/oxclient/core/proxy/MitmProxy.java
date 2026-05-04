@@ -57,6 +57,10 @@ public class MitmProxy {
     private final ConcurrentHashMap<Long, RakNetSession> sessions = new ConcurrentHashMap<>();
     private final PacketProcessor processor = new PacketProcessor();
 
+    // VPN koruması ve çalışma durumu takibi
+    private volatile boolean vpnProtected = false;
+    private volatile boolean running = false;
+
     public MitmProxy(int localPort, VpnService vpnService) {
         this.localPort  = localPort;
         this.vpnService = vpnService;
@@ -65,9 +69,17 @@ public class MitmProxy {
     // ── Start / Stop ──────────────────────────────────────────────────────
 
     public void start() throws Exception {
+        if (running) {
+            Log.w(TAG, "MitmProxy zaten çalışıyor");
+            return;
+        }
+
+        Log.i(TAG, "MitmProxy başlatılıyor...");
+
         bossGroup = new NioEventLoopGroup(2, r -> {
-            Thread t = new Thread(r, "OxNetty-" + System.nanoTime());
-            t.setDaemon(true); return t;
+            Thread t = new Thread(r, "OxNetty");
+            t.setDaemon(true);
+            return t;
         });
 
         // Inbound: game → proxy
@@ -77,12 +89,16 @@ public class MitmProxy {
             .option(ChannelOption.SO_RCVBUF, 2 << 20)
             .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
             .handler(new ChannelInitializer<NioDatagramChannel>() {
-                @Override protected void initChannel(NioDatagramChannel ch) {
+                @Override
+                protected void initChannel(NioDatagramChannel ch) {
                     ch.pipeline().addLast(new InboundHandler());
                 }
             })
             .bind(new InetSocketAddress("127.0.0.1", localPort))
-            .sync().channel();
+            .sync()
+            .channel();
+
+        Log.i(TAG, "Server channel bağlandı: 127.0.0.1:" + localPort);
 
         // Outbound: proxy → 2b2t.pe
         clientChannel = new Bootstrap()
@@ -91,52 +107,114 @@ public class MitmProxy {
             .option(ChannelOption.SO_SNDBUF, 2 << 20)
             .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
             .handler(new ChannelInitializer<NioDatagramChannel>() {
-                @Override protected void initChannel(NioDatagramChannel ch) {
+                @Override
+                protected void initChannel(NioDatagramChannel ch) {
                     ch.pipeline().addLast(new OutboundHandler());
                 }
             })
-            .bind(0).sync().channel();
+            .bind(0)
+            .sync()
+            .channel();
 
-        // Protect upstream socket from VPN routing loop
-        // javaChannel() is protected in NioDatagramChannel, so we use reflection to access it
-        if (vpnService != null) {
-            try {
-                java.lang.reflect.Method m =
-                    io.netty.channel.nio.AbstractNioChannel.class
-                        .getDeclaredMethod("javaChannel");
-                m.setAccessible(true);
-                DatagramChannel dc = (DatagramChannel) m.invoke(clientChannel);
-                boolean ok = vpnService.protect(dc.socket());
-                if (!ok) Log.w(TAG, "protect() failed — routing loop risk");
-            } catch (Exception e) {
-                Log.e(TAG, "protect() reflection failed", e);
+        int clientPort = ((InetSocketAddress) clientChannel.localAddress()).getPort();
+        Log.i(TAG, "Client channel bağlandı, port: " + clientPort);
+
+        // VPN koruması — safe reflection
+        protectFromVpn();
+
+        running = true;
+        Log.i(TAG, "MitmProxy hazır — local:127.0.0.1:" + localPort + " → " + realServer);
+    }
+
+    /**
+     * VPN routing loop'u engellemek için client socket'i koru.
+     * Reflection yerine güvenli metod çağrısı kullan.
+     */
+    private void protectFromVpn() {
+        if (vpnService == null || vpnProtected || clientChannel == null) return;
+
+        try {
+            // NioDatagramChannel → javaChannel() metoduna güvenli erişim
+            java.nio.channels.DatagramChannel javaChannel = 
+                (java.nio.channels.DatagramChannel) clientChannel
+                    .getClass()
+                    .getMethod("javaChannel")
+                    .invoke(clientChannel);
+
+            if (javaChannel != null) {
+                boolean ok = vpnService.protect(javaChannel.socket());
+                if (ok) {
+                    vpnProtected = true;
+                    Log.i(TAG, "VPN koruması başarılı");
+                } else {
+                    Log.w(TAG, "VPN koruması başarısız — routing loop riski var");
+                }
             }
+        } catch (NoSuchMethodException e) {
+            Log.w(TAG, "javaChannel() metodu bulunamadı, VPN koruması atlanıyor");
+        } catch (Exception e) {
+            Log.e(TAG, "VPN koruması sırasında hata: " + e.getMessage());
+            // Crash yapma, devam et
         }
-
-        Log.i(TAG, "MitmProxy ready — local:127.0.0.1:" + localPort + " → " + realServer);
     }
 
     public void stop() {
-        Log.i(TAG, "MitmProxy stopping");
+        if (!running) return;
+
+        Log.i(TAG, "MitmProxy durduruluyor");
+        running = false;
         sessions.clear();
-        if (serverChannel != null) serverChannel.close().awaitUninterruptibly();
-        if (clientChannel != null) clientChannel.close().awaitUninterruptibly();
-        if (bossGroup     != null) bossGroup.shutdownGracefully().awaitUninterruptibly();
+
+        if (serverChannel != null) {
+            try {
+                serverChannel.close().sync();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            serverChannel = null;
+        }
+
+        if (clientChannel != null) {
+            try {
+                clientChannel.close().sync();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            clientChannel = null;
+        }
+
+        if (bossGroup != null) {
+            try {
+                bossGroup.shutdownGracefully().sync();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            bossGroup = null;
+        }
+
+        vpnProtected = false;
+        Log.i(TAG, "MitmProxy durduruldu");
+    }
+
+    public boolean isRunning() {
+        return running;
     }
 
     // ── Raw IP entry from TUN ─────────────────────────────────────────────
 
     public void handleIncomingPacket(byte[] rawIp, int len) {
-        int ihl = (rawIp[0] & 0xF) * 4;
-        int srcPort = ((rawIp[ihl] & 0xFF) << 8) | (rawIp[ihl + 1] & 0xFF);
-        int payloadOff = ihl + 8;
-        int payloadLen = len - payloadOff;
-        if (payloadLen <= 0) return;
-
-        ByteBuf buf = PooledByteBufAllocator.DEFAULT.buffer(payloadLen);
-        buf.writeBytes(rawIp, payloadOff, payloadLen);
+        if (!running || serverChannel == null) return;
 
         try {
+            int ihl = (rawIp[0] & 0xF) * 4;
+            int srcPort = ((rawIp[ihl] & 0xFF) << 8) | (rawIp[ihl + 1] & 0xFF);
+            int payloadOff = ihl + 8;
+            int payloadLen = len - payloadOff;
+            if (payloadLen <= 0) return;
+
+            ByteBuf buf = PooledByteBufAllocator.DEFAULT.buffer(payloadLen);
+            buf.writeBytes(rawIp, payloadOff, payloadLen);
+
             byte[] srcIpB = { rawIp[12], rawIp[13], rawIp[14], rawIp[15] };
             InetSocketAddress src = new InetSocketAddress(
                 java.net.InetAddress.getByAddress(srcIpB), srcPort);
@@ -146,8 +224,7 @@ public class MitmProxy {
                 new InetSocketAddress("127.0.0.1", localPort), src);
             serverChannel.pipeline().fireChannelRead(dp);
         } catch (Exception e) {
-            Log.e(TAG, "handleIncomingPacket error", e);
-            buf.release();
+            Log.e(TAG, "handleIncomingPacket error: " + e.getMessage());
         }
     }
 
@@ -155,20 +232,24 @@ public class MitmProxy {
 
     /** Inject a fabricated packet Client→Server (to 2b2t.pe). */
     public void injectC2S(byte[] payload) {
-        if (clientChannel == null || payload == null) return;
+        if (clientChannel == null || payload == null || !running) return;
         ByteBuf buf = clientChannel.alloc().buffer(payload.length);
         buf.writeBytes(payload);
         clientChannel.writeAndFlush(new DatagramPacket(buf, realServer))
-            .addListener(f -> { if (!f.isSuccess()) Log.w(TAG, "injectC2S fail: " + f.cause()); });
+            .addListener(f -> {
+                if (!f.isSuccess()) Log.w(TAG, "injectC2S fail: " + f.cause());
+            });
     }
 
     /** Inject a fabricated packet Server→Client (to game). */
     public void injectS2C(byte[] payload) {
-        if (serverChannel == null || gameClientAddress == null || payload == null) return;
+        if (serverChannel == null || gameClientAddress == null || payload == null || !running) return;
         ByteBuf buf = serverChannel.alloc().buffer(payload.length);
         buf.writeBytes(payload);
         serverChannel.writeAndFlush(new DatagramPacket(buf, gameClientAddress))
-            .addListener(f -> { if (!f.isSuccess()) Log.w(TAG, "injectS2C fail: " + f.cause()); });
+            .addListener(f -> {
+                if (!f.isSuccess()) Log.w(TAG, "injectS2C fail: " + f.cause());
+            });
     }
 
     // ── Handlers ─────────────────────────────────────────────────────────
@@ -176,7 +257,9 @@ public class MitmProxy {
     private class InboundHandler extends ChannelDuplexHandler {
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
-            if (!(msg instanceof DatagramPacket dgram)) return;
+            if (!(msg instanceof DatagramPacket)) return;
+            DatagramPacket dgram = (DatagramPacket) msg;
+
             InetSocketAddress clientAddr = dgram.sender();
             long key = clientAddr.hashCode() & 0xFFFFFFFFL;
             RakNetSession session = sessions.computeIfAbsent(key,
@@ -184,7 +267,6 @@ public class MitmProxy {
             try {
                 byte[] payload = session.decode(dgram.content());
                 if (payload == null) {
-                    // Forward control frames (ACK/NAK) as-is
                     forward(ctx, dgram, clientChannel, realServer);
                     return;
                 }
@@ -192,23 +274,29 @@ public class MitmProxy {
                 if (processed == null) return;
                 sendTo(clientChannel, processed, realServer);
             } catch (Exception e) {
-                Log.e(TAG, "InboundHandler error", e);
+                Log.e(TAG, "InboundHandler error: " + e.getMessage());
             } finally {
                 dgram.content().release();
             }
         }
+
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            Log.e(TAG, "InboundHandler exception", cause);
+            Log.e(TAG, "InboundHandler exception: " + cause.getMessage());
         }
     }
 
     private class OutboundHandler extends ChannelDuplexHandler {
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
-            if (!(msg instanceof DatagramPacket dgram)) return;
-            if (gameClientAddress == null) { dgram.content().release(); return; }
-            if (sessions.isEmpty()) { dgram.content().release(); return; }
+            if (!(msg instanceof DatagramPacket)) return;
+            DatagramPacket dgram = (DatagramPacket) msg;
+
+            if (gameClientAddress == null || sessions.isEmpty()) {
+                dgram.content().release();
+                return;
+            }
+
             InetSocketAddress firstClient = sessions.values().iterator().next().getAddr();
             RakNetSession session = sessions.computeIfAbsent(
                 (firstClient.hashCode() & 0xFFFFFFFFL) + 1L,
@@ -223,20 +311,22 @@ public class MitmProxy {
                 if (processed == null) return;
                 sendTo(serverChannel, processed, gameClientAddress);
             } catch (Exception e) {
-                Log.e(TAG, "OutboundHandler error", e);
+                Log.e(TAG, "OutboundHandler error: " + e.getMessage());
             } finally {
                 dgram.content().release();
             }
         }
+
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            Log.e(TAG, "OutboundHandler exception", cause);
+            Log.e(TAG, "OutboundHandler exception: " + cause.getMessage());
         }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private void sendTo(Channel ch, byte[] data, InetSocketAddress dest) {
+        if (ch == null || data == null || dest == null) return;
         ByteBuf buf = ch.alloc().buffer(data.length);
         buf.writeBytes(data);
         ch.writeAndFlush(new DatagramPacket(buf, dest));
@@ -244,12 +334,18 @@ public class MitmProxy {
 
     private void forward(ChannelHandlerContext ctx, DatagramPacket dgram,
                          Channel targetCh, InetSocketAddress dest) {
+        if (targetCh == null || dest == null) return;
         ByteBuf fwd = ctx.alloc().buffer(dgram.content().readableBytes());
         dgram.content().resetReaderIndex();
         fwd.writeBytes(dgram.content());
         targetCh.writeAndFlush(new DatagramPacket(fwd, dest));
     }
 
-    public InetSocketAddress getRealServer()     { return realServer; }
-    public InetSocketAddress getGameClientAddr() { return gameClientAddress; }
+    public InetSocketAddress getRealServer() {
+        return realServer;
+    }
+
+    public InetSocketAddress getGameClientAddr() {
+        return gameClientAddress;
+    }
 }
