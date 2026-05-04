@@ -49,17 +49,6 @@ public class PacketProcessor {
     }
 
     public byte[] processC2S(byte[] payload, InetSocketAddress addr) {
-        if (payload == null || payload.length == 0) return payload;
-
-        // ── Login intercept ───────────────────────────────────────────────
-        // İlk byte'tan packet ID'yi peek et (VarInt, Login için tek byte = 0x01)
-        int firstByte = payload[0] & 0xFF;
-        if ((firstByte & 0x7F) == PacketIds.LOGIN && (firstByte & 0x80) == 0) {
-            // Login paketi — JWT chain'i inject et
-            Log.i(TAG, "🔐 Login paketi yakalandı — token inject ediliyor");
-            payload = LoginInjector.interceptLogin(payload);
-        }
-
         return dispatch(payload, addr, PacketEvent.DIRECTION_C2S);
     }
 
