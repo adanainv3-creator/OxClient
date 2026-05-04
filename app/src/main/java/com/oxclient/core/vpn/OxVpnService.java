@@ -77,9 +77,8 @@ public class OxVpnService extends VpnService {
             proxy.start();
 
             // SessionManager callback'ini proxy hazır olduktan sonra çağır
-            if (proxy.isRunning()) {
-                SessionManager.INSTANCE.onSessionStart(proxy);
-            }
+            // proxy.start() exception fırlatmadan tamamlandıysa hazır kabul edilir
+            SessionManager.INSTANCE.onSessionStart(proxy);
 
             tunnelTask = io.submit(this::tunnelLoop);
         } catch (Exception e) {
