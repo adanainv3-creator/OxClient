@@ -2,17 +2,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- VPN -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+
+    <!-- Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Wake Lock (isteğe bağlı - packet processing için) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Android 11+ (API 30+): PackageManager'ın diğer uygulamaları görebilmesi için -->
+    <!-- Android 11+ Package Visibility -->
     <queries>
         <package android:name="com.mojang.minecraftpe" />
         <package android:name="com.netease.mc" />
@@ -30,7 +38,7 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="35">
 
-        <!-- Ana ekran -->
+        <!-- Ana Dashboard -->
         <activity
             android:name=".ui.dashboard.DashboardActivity"
             android:exported="true"
@@ -42,21 +50,24 @@
             </intent-filter>
         </activity>
 
-        <!-- Microsoft Device Code giriş ekranı (WebView + kod banner) -->
+        <!-- Microsoft Auth WebView -->
         <activity
             android:name=".auth.DeviceCodeLoginActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- VPN servisi -->
+        <!-- ✅ VPN Servisi - DÜZELTİLDİ -->
         <service
             android:name=".core.vpn.OxVpnService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice"
-            android:permission="android.permission.BIND_VPN_SERVICE">
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="VPN_tunnel_for_Minecraft_Bedrock_proxy" />
         </service>
 
         <!-- Oyun içi overlay -->
@@ -66,7 +77,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="In-game HUD overlay" />
+                android:value="In-game_HUD_overlay_for_module_control" />
         </service>
 
     </application>
