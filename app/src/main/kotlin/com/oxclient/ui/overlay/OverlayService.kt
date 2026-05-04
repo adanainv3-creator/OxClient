@@ -13,11 +13,9 @@ import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,7 +26,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -82,9 +79,19 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     override val savedStateRegistry: SavedStateRegistry get() = ssrCtrl.savedStateRegistry
 
     private lateinit var wm: WindowManager
-    private var overlayView: ComposeView? = null
-    private var windowParams: WindowManager.LayoutParams? = null
+    private var fabView: ComposeView? = null
+    private var kaView: ComposeView? = null
+    private var tpView: ComposeView? = null
+    private var menuView: ComposeView? = null
     private var isAttached = false
+
+    // Pozisyonlar
+    private var fabX = 50
+    private var fabY = 300
+    private var kaX = 20
+    private var kaY = 500
+    private var tpX = 20
+    private var tpY = 560
 
     override fun onCreate() {
         super.onCreate()
@@ -116,10 +123,125 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     // ── Window ─────────────────────────────────────────────────────────
 
+    private fun createBaseParams(): WindowManager.LayoutParams {
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+        
+        return WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START }
+    }
+
     private fun showOverlay() {
         if (isAttached) return
 
         Log.d(TAG, "showOverlay")
+
+        // FAB
+        val fabParams = createBaseParams().apply {
+            x = fabX
+            y = fabY
+        }
+        
+        fabView = ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@OverlayService)
+            setViewTreeSavedStateRegistryOwner(this@OverlayService)
+            setContent {
+                DraggableFab(
+                    onDrag = { dx, dy ->
+                        fabX += dx.toInt()
+                        fabY += dy.toInt()
+                        fabParams.x = fabX
+                        fabParams.y = fabY
+                        try {
+                            wm.updateViewLayout(this@apply, fabParams)
+                        } catch (_: Exception) {}
+                    },
+                    onClick = { showMenu() }
+                )
+            }
+        }
+
+        // KillAura shortcut
+        val kaParams = createBaseParams().apply {
+            x = kaX
+            y = kaY
+        }
+        
+        val killAura = ModuleManager.byName("KillAura")
+        if (killAura != null) {
+            kaView = ComposeView(this).apply {
+                setViewTreeLifecycleOwner(this@OverlayService)
+                setViewTreeSavedStateRegistryOwner(this@OverlayService)
+                setContent {
+                    DraggableModuleButton(
+                        module = killAura,
+                        onDrag = { dx, dy ->
+                            kaX += dx.toInt()
+                            kaY += dy.toInt()
+                            kaParams.x = kaX
+                            kaParams.y = kaY
+                            try {
+                                wm.updateViewLayout(this@apply, kaParams)
+                            } catch (_: Exception) {}
+                        }
+                    )
+                }
+            }
+        }
+
+        // TPAura shortcut
+        val tpParams = createBaseParams().apply {
+            x = tpX
+            y = tpY
+        }
+        
+        val tpAura = ModuleManager.byName("TPAura")
+        if (tpAura != null) {
+            tpView = ComposeView(this).apply {
+                setViewTreeLifecycleOwner(this@OverlayService)
+                setViewTreeSavedStateRegistryOwner(this@OverlayService)
+                setContent {
+                    DraggableModuleButton(
+                        module = tpAura,
+                        onDrag = { dx, dy ->
+                            tpX += dx.toInt()
+                            tpY += dy.toInt()
+                            tpParams.x = tpX
+                            tpParams.y = tpY
+                            try {
+                                wm.updateViewLayout(this@apply, tpParams)
+                            } catch (_: Exception) {}
+                        }
+                    )
+                }
+            }
+        }
+
+        try {
+            wm.addView(fabView, fabParams)
+            kaView?.let { wm.addView(it, kaParams) }
+            tpView?.let { wm.addView(it, tpParams) }
+            isAttached = true
+            Log.d(TAG, "Overlay eklendi")
+        } catch (e: Exception) {
+            Log.e(TAG, "Overlay eklenemedi: ${e.message}")
+        }
+    }
+
+    private fun showMenu() {
+        if (menuView != null) return
 
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -128,45 +250,67 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // DÜZELTME: FLAG_NOT_TOUCHABLE eklendi - boş alanlar oyuna geçer, butonlar çalışır
-        val params = WindowManager.LayoutParams(
+        val menuParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,  // ← BU SATIR EKLENDİ
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
-        windowParams = params
-
-        overlayView = ComposeView(this).apply {
+        menuView = ComposeView(this).apply {
             setViewTreeLifecycleOwner(this@OverlayService)
             setViewTreeSavedStateRegistryOwner(this@OverlayService)
             setContent {
-                OxOverlay()
+                val moduleVersion by ModuleManager.version.collectAsState()
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xCC000000))
+                        .pointerInput(Unit) {
+                            detectTapGestures { hideMenu() }
+                        }
+                ) {
+                    HileMenu(
+                        onClose = { hideMenu() },
+                        moduleVersion = moduleVersion,
+                        modifier = Modifier.align(Alignment.CenterEnd)
+                    )
+                }
             }
         }
 
         try {
-            wm.addView(overlayView, params)
-            isAttached = true
-            Log.d(TAG, "Overlay eklendi")
+            wm.addView(menuView, menuParams)
+            OverlayState.setMenuOpen(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Overlay eklenemedi: ${e.message}")
+            Log.e(TAG, "Menü eklenemedi: ${e.message}")
         }
     }
 
-    private fun removeOverlay() {
-        if (!isAttached) return
-        try {
-            overlayView?.let {
+    private fun hideMenu() {
+        menuView?.let {
+            try {
                 wm.removeViewImmediate(it)
-                overlayView = null
-            }
+            } catch (_: Exception) {}
+            menuView = null
+        }
+        OverlayState.setMenuOpen(false)
+    }
+
+    private fun removeOverlay() {
+        hideMenu()
+        try {
+            fabView?.let { wm.removeViewImmediate(it) }
+            kaView?.let { wm.removeViewImmediate(it) }
+            tpView?.let { wm.removeViewImmediate(it) }
+            fabView = null
+            kaView = null
+            tpView = null
             isAttached = false
             Log.d(TAG, "Overlay kaldirildi")
         } catch (e: Exception) {
@@ -174,125 +318,58 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
-    // ── Compose ────────────────────────────────────────────────────────
+    // ── FAB ────────────────────────────────────────────────────────────
 
     @Composable
-    private fun OxOverlay() {
-        val totemCount by OverlayState.totemCount.collectAsState()
-        val toast by OverlayState.moduleToast.collectAsState()
-        val menuOpen by OverlayState.menuOpen.collectAsState()
-        val moduleVersion by ModuleManager.version.collectAsState()
+    private fun DraggableFab(
+        onDrag: (Float, Float) -> Unit,
+        onClick: () -> Unit
+    ) {
+        var totalDist by remember { mutableFloatStateOf(0f) }
+        var isDragging by remember { mutableStateOf(false) }
 
-        // FAB pozisyonu
-        var fabX by remember { mutableFloatStateOf(50f) }
-        var fabY by remember { mutableFloatStateOf(300f) }
-
-        // KillAura shortcut pozisyonu
-        var kaX by remember { mutableFloatStateOf(20f) }
-        var kaY by remember { mutableFloatStateOf(500f) }
-
-        // TPAura shortcut pozisyonu
-        var tpX by remember { mutableFloatStateOf(20f) }
-        var tpY by remember { mutableFloatStateOf(560f) }
-
-        // Modülleri bul
-        val killAura = remember { ModuleManager.byName("KillAura") }
-        val tpAura   = remember { ModuleManager.byName("TPAura") }
-
-        Box(modifier = Modifier.fillMaxSize()) {
-
-            // Menü açıkken arka plan — tüm ekranı kaplayan yarı saydam overlay
-            AnimatedVisibility(
-                visible = menuOpen,
-                enter = fadeIn() + slideInHorizontally { it / 2 },
-                exit = fadeOut() + slideOutHorizontally { it / 2 },
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xCC000000))
-                        .pointerInput(Unit) {
-                            detectTapGestures { OverlayState.setMenuOpen(false) }
-                        }
-                ) {
-                    HileMenu(
-                        onClose = { OverlayState.setMenuOpen(false) },
-                        moduleVersion = moduleVersion,
-                        modifier = Modifier.align(Alignment.CenterEnd)
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        listOf(OxPurple, OxPurpleDark)
                     )
-                }
-            }
-
-            // Totem
-            if (totemCount > 0) {
-                TotemPill(
-                    count = totemCount,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(8.dp)
                 )
-            }
-
-            // Toast
-            ModuleToastBanner(
-                toast = toast,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 10.dp)
-            )
-
-            // FAB — menü kapalıyken göster
-            if (!menuOpen) {
-                Box(
-                    modifier = Modifier
-                        .offset { IntOffset(fabX.roundToInt(), fabY.roundToInt()) }
-                ) {
-                    DraggableFab(
-                        onDrag = { dx, dy ->
-                            fabX += dx
-                            fabY += dy
+                .border(2.dp, OxPurpleLight.copy(alpha = 0.7f), CircleShape)
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = {
+                            isDragging = true
+                            totalDist = 0f
                         },
-                        onClick = { OverlayState.setMenuOpen(true) }
+                        onDragEnd = {
+                            isDragging = false
+                            if (totalDist < 15f) {
+                                onClick()
+                            }
+                        },
+                        onDrag = { change, offset ->
+                            change.consume()
+                            totalDist += abs(offset.x) + abs(offset.y)
+                            onDrag(offset.x, offset.y)
+                        }
                     )
-                }
-
-                // KillAura shortcut butonu
-                if (killAura != null) {
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset(kaX.roundToInt(), kaY.roundToInt()) }
-                    ) {
-                        DraggableModuleButton(
-                            module = killAura,
-                            onDrag = { dx, dy ->
-                                kaX += dx
-                                kaY += dy
-                            }
-                        )
-                    }
-                }
-
-                // TPAura shortcut butonu
-                if (tpAura != null) {
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset(tpX.roundToInt(), tpY.roundToInt()) }
-                    ) {
-                        DraggableModuleButton(
-                            module = tpAura,
-                            onDrag = { dx, dy ->
-                                tpX += dx
-                                tpY += dy
-                            }
-                        )
-                    }
-                }
-            }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "Ox",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = FontFamily.Monospace
+            )
         }
     }
 
-    // ── Sürüklenebilir Modül Butonu (KillAura & TPAura) ──────────────
+    // ── Sürüklenebilir Modül Butonu ────────────────────────────────────
 
     @Composable
     private fun DraggableModuleButton(
@@ -300,7 +377,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         onDrag: (Float, Float) -> Unit
     ) {
         var enabled by remember { mutableStateOf(module.isEnabled) }
-        var isDragging by remember { mutableStateOf(false) }
         var totalDragDist by remember { mutableFloatStateOf(0f) }
 
         LaunchedEffect(module) {
@@ -325,12 +401,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = {
-                            isDragging = true
                             totalDragDist = 0f
                         },
                         onDragEnd = {
-                            isDragging = false
-                            // Kısa hareket = tap → toggle
                             if (totalDragDist < 12f) {
                                 ModuleManager.toggle(module)
                                 enabled = module.isEnabled
@@ -339,10 +412,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         onDrag = { change, offset ->
                             change.consume()
                             totalDragDist += abs(offset.x) + abs(offset.y)
-                            // Sürükleme eşiği aşıldıysa pozisyonu güncelle (px cinsinden)
-                            if (totalDragDist > 12f) {
-                                onDrag(offset.x, offset.y)
-                            }
+                            onDrag(offset.x, offset.y)
                         }
                     )
                 }
@@ -357,59 +427,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-
-    // ── FAB ────────────────────────────────────────────────────────────
-
-    @Composable
-    private fun DraggableFab(
-        onDrag: (Float, Float) -> Unit,
-        onClick: () -> Unit
-    ) {
-        var totalDist by remember { mutableFloatStateOf(0f) }
-
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        listOf(OxPurple, OxPurpleDark)
-                    )
-                )
-                .border(2.dp, OxPurpleLight.copy(alpha = 0.7f), CircleShape)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = { onClick() })
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { totalDist = 0f },
-                        onDragEnd = {
-                            // Çok az hareket = tıklama → menüyü aç
-                            if (totalDist < 15f) {
-                                onClick()
-                            }
-                        },
-                        onDrag = { change, offset ->
-                            change.consume()
-                            totalDist += abs(offset.x) + abs(offset.y)
-                            // Sürükleme eşiği aşılınca taşı (px cinsinden)
-                            if (totalDist > 15f) {
-                                onDrag(offset.x, offset.y)
-                            }
-                        }
-                    )
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Ox",
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.ExtraBold,
-                fontFamily = FontFamily.Monospace
             )
         }
     }
@@ -430,7 +447,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         Box(
             modifier = modifier
                 .fillMaxHeight()
-                .width(300.dp)  // ← 280'den 300'e çıkarıldı (daha geniş)
+                .width(300.dp)
                 .background(
                     Brush.verticalGradient(
                         listOf(Color(0xFF1A1A2E), Color(0xFF16213E))
@@ -442,7 +459,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
                 )
                 .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-                // Menü içine tıklama arka plana yayılmasın
                 .pointerInput(Unit) {
                     detectTapGestures { /* yut */ }
                 }
@@ -611,14 +627,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
             }
 
-            // Settings - TPAura ayarları dahil, min/max değerlerle
+            // Settings
             AnimatedVisibility(visible = expanded && settings.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color(0x22000000))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)  // ← boşluk artırıldı
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     settings.forEach { s -> SettingRow(s) }
                 }
@@ -631,7 +647,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         when (s) {
             is FloatSetting -> {
                 var v by remember { mutableFloatStateOf(s.value) }
-                Column(modifier = Modifier.padding(vertical = 3.dp)) {  // ← padding eklendi
+                Column(modifier = Modifier.padding(vertical = 3.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -643,37 +659,26 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         value = v,
                         onValueChange = { v = it; s.value = it },
                         valueRange = s.min..s.max,
-                        modifier = Modifier.height(24.dp),  // ← yükseklik eklendi
+                        modifier = Modifier.height(24.dp),
                         colors = SliderDefaults.colors(
                             thumbColor = OxPurple, 
                             activeTrackColor = OxPurple,
-                            inactiveTrackColor = OxPurple.copy(alpha = 0.3f)  // ← eklendi
+                            inactiveTrackColor = OxPurple.copy(alpha = 0.3f)
                         )
                     )
-                    // Min/Max değerleri göster
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = "%.2f".format(s.min),
-                            fontSize = 8.sp,
-                            color = OxOnSurface.copy(alpha = 0.4f),
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = "%.2f".format(s.max),
-                            fontSize = 8.sp,
-                            color = OxOnSurface.copy(alpha = 0.4f),
-                            fontFamily = FontFamily.Monospace
-                        )
+                        Text(text = "%.2f".format(s.min), fontSize = 8.sp, color = OxOnSurface.copy(alpha = 0.4f), fontFamily = FontFamily.Monospace)
+                        Text(text = "%.2f".format(s.max), fontSize = 8.sp, color = OxOnSurface.copy(alpha = 0.4f), fontFamily = FontFamily.Monospace)
                     }
                 }
             }
 
             is IntSetting -> {
                 var v by remember { mutableFloatStateOf(s.value.toFloat()) }
-                Column(modifier = Modifier.padding(vertical = 3.dp)) {  // ← padding eklendi
+                Column(modifier = Modifier.padding(vertical = 3.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -686,7 +691,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         onValueChange = { v = it; s.value = it.toInt() },
                         valueRange = s.min.toFloat()..s.max.toFloat(),
                         steps = (s.max - s.min - 1).coerceAtLeast(0),
-                        modifier = Modifier.height(24.dp),  // ← yükseklik eklendi
+                        modifier = Modifier.height(24.dp),
                         colors = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
                     )
                 }
@@ -695,37 +700,20 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             is BoolSetting -> {
                 var v by remember { mutableStateOf(s.value) }
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),  // ← padding eklendi
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(text = s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                    Switch(
-                        checked = v,
-                        onCheckedChange = { v = it; s.value = it },
-                        colors = SwitchDefaults.colors(checkedTrackColor = OxPurple)
-                    )
+                    Switch(checked = v, onCheckedChange = { v = it; s.value = it }, colors = SwitchDefaults.colors(checkedTrackColor = OxPurple))
                 }
             }
 
             is EnumSetting<*> -> {
                 var sel by remember { mutableStateOf(s.value) }
-                Column(
-                    modifier = Modifier.padding(vertical = 3.dp),  // ← padding eklendi
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = s.name,
-                        fontSize = 11.sp,
-                        color = OxOnSurface,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.horizontalScroll(rememberScrollState())
-                    ) {
+                Column(modifier = Modifier.padding(vertical = 3.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(text = s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                         @Suppress("UNCHECKED_CAST")
                         val enumSetting = s as EnumSetting<Enum<*>>
                         enumSetting.values.forEach { opt ->
@@ -734,23 +722,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(if (isSel) OxPurple else OxSurfaceVar)
-                                    .border(  // ← border eklendi
-                                        1.dp,
-                                        if (isSel) OxPurple.copy(alpha = 0.5f) else OxOutline.copy(alpha = 0.3f),
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable {
-                                        sel = opt
-                                        enumSetting.value = opt
-                                    }
+                                    .border(1.dp, if (isSel) OxPurple.copy(alpha = 0.5f) else OxOutline.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                    .clickable { sel = opt; enumSetting.value = opt }
                                     .padding(horizontal = 8.dp, vertical = 3.dp)
                             ) {
-                                Text(
-                                    text = opt.name.lowercase().replaceFirstChar { it.uppercase() },
-                                    fontSize = 10.sp,
-                                    color = if (isSel) Color.White else OxOnSurface,
-                                    fontFamily = FontFamily.Monospace
-                                )
+                                Text(text = opt.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 10.sp, color = if (isSel) Color.White else OxOnSurface, fontFamily = FontFamily.Monospace)
                             }
                         }
                     }
@@ -761,77 +737,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
-    // ── HUD ────────────────────────────────────────────────────────────
-
-    @Composable
-    private fun TotemPill(count: Int, modifier: Modifier = Modifier) {
-        Box(
-            modifier = modifier
-                .background(Color(0xCC000000), RoundedCornerShape(6.dp))
-                .padding(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Text(
-                    text = OverlayState.TOTEM_SYMBOL,
-                    color = Color(0xFFFFD700),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = count.toString(),
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun ModuleToastBanner(
-        toast: ModuleToast?,
-        modifier: Modifier = Modifier
-    ) {
-        AnimatedVisibility(
-            visible = toast != null,
-            enter = fadeIn() + slideInVertically { -it },
-            exit = fadeOut() + slideOutVertically { -it },
-            modifier = modifier
-        ) {
-            if (toast == null) return@AnimatedVisibility
-            val bg = if (toast.enabled) Color(0xCC1AFF1A) else Color(0xCCFF3C3C)
-            Box(
-                modifier = Modifier
-                    .wrapContentSize()
-                    .background(bg, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 18.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = toast.displayText,
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
-
     // ── Notification ──────────────────────────────────────────────────
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "OxClient Overlay",
-                NotificationManager.IMPORTANCE_MIN
-            )
+            val channel = NotificationChannel(CHANNEL_ID, "OxClient Overlay", NotificationManager.IMPORTANCE_MIN)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
