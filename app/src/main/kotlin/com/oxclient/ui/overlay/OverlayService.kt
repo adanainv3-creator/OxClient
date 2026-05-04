@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.animation.*
@@ -54,18 +55,27 @@ import com.oxclient.ui.theme.*
 class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     companion object {
+        private const val TAG        = "OverlayService"
         private const val CHANNEL_ID = "ox_overlay"
         private const val NOTIF_ID   = 1002
 
         fun start(ctx: Context) {
+            Log.d(TAG, "start() çağrıldı")
             val i = Intent(ctx, OverlayService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i)
-            else ctx.startService(i)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.startForegroundService(i)
+            } else {
+                ctx.startService(i)
+            }
         }
-        fun stop(ctx: Context) = ctx.stopService(Intent(ctx, OverlayService::class.java))
+
+        fun stop(ctx: Context) {
+            Log.d(TAG, "stop() çağrıldı")
+            ctx.stopService(Intent(ctx, OverlayService::class.java))
+        }
     }
 
-    private val lcReg  = LifecycleRegistry(this)
+    private val lcReg = LifecycleRegistry(this)
     override val lifecycle: Lifecycle get() = lcReg
     private val ssrCtrl = SavedStateRegistryController.create(this)
     override val savedStateRegistry: SavedStateRegistry get() = ssrCtrl.savedStateRegistry
@@ -73,9 +83,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private lateinit var wm: WindowManager
     private var overlayView: ComposeView? = null
     private var windowParams: WindowManager.LayoutParams? = null
+    private var isAttached = false
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "onCreate")
         ssrCtrl.performRestore(null)
         lcReg.currentState = Lifecycle.State.CREATED
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -83,6 +95,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand")
         startForeground(NOTIF_ID, buildNotif())
         showOverlay()
         lcReg.currentState = Lifecycle.State.RESUMED
@@ -91,6 +104,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     override fun onDestroy() {
+        Log.d(TAG, "onDestroy")
         lcReg.currentState = Lifecycle.State.DESTROYED
         OverlayState.setOverlayVisible(false)
         removeOverlay()
@@ -99,71 +113,108 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ── Window ────────────────────────────────────────────────────────────
+    // ── Window Yönetimi ────────────────────────────────────────────────────
 
     private fun showOverlay() {
-        if (overlayView != null) return
+        if (isAttached) {
+            Log.d(TAG, "Overlay zaten ekli, tekrar eklenmiyor")
+            return
+        }
 
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+        Log.d(TAG, "showOverlay başlatılıyor")
+
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else
-            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
-            // Menü kapalıyken touch olaylarını engellememesi için
+            // FLAG_NOT_FOCUSABLE: tuş olaylarını arka plana iletir (oyunun çalışması için)
+            // FLAG_NOT_TOUCHABLE: dokunma olaylarını arka plana iletir (menü kapalıyken oyun tıklanabilir olur)
+            // FLAG_LAYOUT_IN_SCREEN: ekranın tamamını kaplar
+            // FLAG_LAYOUT_NO_LIMITS: sistem çubuklarının altına da uzanabilir
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or  // ← Bu flag eklendi
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.START }
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
 
         windowParams = params
+
         overlayView = ComposeView(this).apply {
             setViewTreeLifecycleOwner(this@OverlayService)
             setViewTreeSavedStateRegistryOwner(this@OverlayService)
-            setContent { OxOverlay() }
+            setContent {
+                OxOverlay(
+                    onMenuOpenChanged = { menuOpen ->
+                        // Menü durumu değiştiğinde window flags'ı güncelle
+                        updateWindowFlags(menuOpen)
+                    }
+                )
+            }
         }
 
-        wm.addView(overlayView, params)
+        try {
+            wm.addView(overlayView, params)
+            isAttached = true
+            Log.d(TAG, "Overlay başarıyla eklendi")
+        } catch (e: Exception) {
+            Log.e(TAG, "Overlay eklenirken hata: ${e.message}", e)
+        }
     }
 
     /**
-     * Menü açıkken odak alabilmesi için FLAG_NOT_FOCUSABLE'ı kaldır.
-     * Menü kapanınca geri ekle — böylece oyun touch olaylarını tekrar alır.
+     * Menü açıkken dokunma olaylarını overlay'in almasını sağla.
+     * Menü kapalıyken tüm dokunma olaylarını oyuna ilet.
      */
-    private fun setWindowFocusable(focusable: Boolean, touchable: Boolean = true) {
+    private fun updateWindowFlags(menuOpen: Boolean) {
         val params = windowParams ?: return
         val view   = overlayView  ?: return
 
-        params.flags = if (focusable) {
-            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv() or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-        } else {
-            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        try {
+            if (menuOpen) {
+                // Menü açık: dokunma olaylarını overlay alır, tuş olayları hâlâ oyuna gider
+                params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                params.flags = params.flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+                Log.d(TAG, "Menü açıldı - overlay dokunma alıyor")
+            } else {
+                // Menü kapalı: dokunma olayları oyuna gider
+                params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                params.flags = params.flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
+                Log.d(TAG, "Menü kapandı - dokunma olayları oyuna gidiyor")
+            }
+            wm.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Window flags güncellenirken hata: ${e.message}", e)
         }
-
-        // Touchable flag'ini ayarla
-        if (!touchable) {
-            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        } else {
-            params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-        }
-
-        wm.updateViewLayout(view, params)
     }
 
     private fun removeOverlay() {
-        overlayView?.let { wm.removeViewImmediate(it); overlayView = null }
+        if (!isAttached) return
+        try {
+            overlayView?.let {
+                wm.removeViewImmediate(it)
+                overlayView = null
+            }
+            isAttached = false
+            Log.d(TAG, "Overlay kaldırıldı")
+        } catch (e: Exception) {
+            Log.e(TAG, "Overlay kaldırılırken hata: ${e.message}", e)
+        }
     }
 
     // ── Compose Overlay ───────────────────────────────────────────────────
 
     @Composable
-    private fun OxOverlay() {
+    private fun OxOverlay(onMenuOpenChanged: (Boolean) -> Unit) {
         val totemCount    by OverlayState.totemCount.collectAsState()
         val toast         by OverlayState.moduleToast.collectAsState()
         val menuOpen      by OverlayState.menuOpen.collectAsState()
@@ -177,14 +228,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         var shortcutOffsetX by remember { mutableStateOf(20f) }
         var shortcutOffsetY by remember { mutableStateOf(500f) }
 
-        // Menü açılınca odak ver, kapanınca geri al
-        // Bu olmadan menü açıkken back/home tuşları çalışmaz, ekran kilitlenir.
+        // Menü açıldığında/kapandığında window flags'ı güncelle
         LaunchedEffect(menuOpen) {
-            if (menuOpen) {
-                setWindowFocusable(true, true)   // Menü açık: focus + touch al
-            } else {
-                setWindowFocusable(false, false) // Menü kapalı: ne focus ne touch al
-            }
+            onMenuOpenChanged(menuOpen)
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
@@ -208,24 +254,36 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 visible  = menuOpen,
                 enter    = fadeIn() + slideInVertically { it / 2 },
                 exit     = fadeOut() + slideOutVertically { it / 2 },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable { /* Menü dışı tıklamayı engellemek için boş */ }
+                modifier = Modifier.fillMaxSize()
             ) {
-                HileMenu(
-                    onClose       = { OverlayState.setMenuOpen(false) },
-                    moduleVersion = moduleVersion
-                )
+                // Menü arka planı — tıklayınca kapanır
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xCC000000))
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) {
+                            OverlayState.setMenuOpen(false)
+                        }
+                ) {
+                    HileMenu(
+                        onClose       = { OverlayState.setMenuOpen(false) },
+                        moduleVersion = moduleVersion,
+                        modifier      = Modifier.align(Alignment.CenterEnd)
+                    )
+                }
             }
 
             // ── Kısayol tuşları (menü kapalıyken) ──
             if (!menuOpen) {
                 DraggableShortcutBar(
-                    offsetX    = shortcutOffsetX,
-                    offsetY    = shortcutOffsetY,
-                    onDrag     = { dx, dy -> shortcutOffsetX += dx; shortcutOffsetY += dy },
+                    offsetX       = shortcutOffsetX,
+                    offsetY       = shortcutOffsetY,
+                    onDrag        = { dx, dy -> shortcutOffsetX += dx; shortcutOffsetY += dy },
                     moduleVersion = moduleVersion,
-                    modifier   = Modifier.offset(shortcutOffsetX.dp, shortcutOffsetY.dp)
+                    modifier      = Modifier.offset(shortcutOffsetX.dp, shortcutOffsetY.dp)
                 )
             }
 
@@ -244,11 +302,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     // ── Draggable Shortcut Bar ────────────────────────────────────────────
 
-    /**
-     * Hızlı toggle için saydam, sürüklenebilir kısayol çubuğu.
-     * Modüllerin ilk 5'ini (Combat kategorisi öncelikli) listeler.
-     * Her butona uzun basılırsa menü açılır, kısa basılırsa toggle.
-     */
     @Composable
     private fun DraggableShortcutBar(
         offsetX:       Float,
@@ -257,7 +310,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         moduleVersion: Int,
         modifier:      Modifier = Modifier
     ) {
-        // Kısayol olarak gösterilecek modüller (combat önce, max 5)
         val shortcutModules = remember(moduleVersion) {
             (ModuleManager.byCategory(ModuleCategory.COMBAT) +
              ModuleManager.byCategory(ModuleCategory.MOVEMENT))
@@ -283,7 +335,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 },
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Küçük sürükleme tutacağı + daralt/genişlet butonu
+            // Tutamaç + daralt/genişlet butonu
             Box(
                 modifier = Modifier
                     .size(width = 90.dp, height = 18.dp)
@@ -312,17 +364,21 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         .wrapContentSize()
                         .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp, topEnd = 8.dp))
                         .background(Color(0xBB0D0D1A))
-                        .border(1.dp, OxPurple.copy(0.3f), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp, topEnd = 8.dp))
+                        .border(
+                            1.dp,
+                            OxPurple.copy(0.3f),
+                            RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp, topEnd = 8.dp)
+                        )
                         .padding(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     if (shortcutModules.isEmpty()) {
                         Text(
                             "Modül yok",
-                            fontSize = 9.sp,
-                            color = OxOnSurface.copy(0.4f),
+                            fontSize   = 9.sp,
+                            color      = OxOnSurface.copy(0.4f),
                             fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(4.dp)
+                            modifier   = Modifier.padding(4.dp)
                         )
                     } else {
                         shortcutModules.forEach { module ->
@@ -430,134 +486,162 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 },
             contentAlignment = Alignment.Center
         ) {
-            Text("Ox", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+            Text(
+                "Ox",
+                color      = Color.White,
+                fontSize   = 16.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = FontFamily.Monospace
+            )
         }
     }
 
     // ── Hile Menüsü ───────────────────────────────────────────────────────
 
     @Composable
-    private fun HileMenu(onClose: () -> Unit, moduleVersion: Int) {
+    private fun HileMenu(
+        onClose: () -> Unit,
+        moduleVersion: Int,
+        modifier: Modifier = Modifier
+    ) {
         var selectedCat by remember { mutableStateOf(ModuleCategory.COMBAT) }
         val modules = remember(moduleVersion, selectedCat) {
             ModuleManager.byCategory(selectedCat)
         }
 
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xCC000000))
+            modifier = modifier
+                .fillMaxHeight()
+                .width(280.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF1A1A2E), Color(0xFF16213E))
+                    )
+                )
+                .border(
+                    width = 1.dp,
+                    brush = Brush.verticalGradient(
+                        listOf(OxPurple.copy(0.6f), OxPurpleDark.copy(0.3f))
+                    ),
+                    shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
+                )
+                .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
-                ) { onClose() }
+                ) {
+                    // Menü içi tıklamaları engelleme — hiçbir şey yapma
+                }
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(280.dp)
-                    .align(Alignment.CenterEnd)
-                    .background(Brush.verticalGradient(listOf(Color(0xFF1A1A2E), Color(0xFF16213E))))
-                    .border(
-                        width = 1.dp,
-                        brush = Brush.verticalGradient(listOf(OxPurple.copy(0.6f), OxPurpleDark.copy(0.3f))),
-                        shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
-                    )
-                    .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
 
-                    // Header
-                    Row(
-                        modifier              = Modifier
-                            .fillMaxWidth()
-                            .background(OxPurpleDark.copy(alpha = 0.5f))
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment     = Alignment.CenterVertically
+                // Header
+                Row(
+                    modifier              = Modifier
+                        .fillMaxWidth()
+                        .background(OxPurpleDark.copy(alpha = 0.5f))
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "OxClient",
+                        fontSize   = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color      = Color.White,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(OxError.copy(alpha = 0.2f))
+                            .border(1.dp, OxError.copy(0.5f), CircleShape)
+                            .clickable { onClose() },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text("OxClient", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, fontFamily = FontFamily.Monospace)
+                        Text(
+                            "✕",
+                            color      = OxError,
+                            fontSize   = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                // Kategori seçici
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    ModuleCategory.values().forEach { cat ->
+                        val sel = cat == selectedCat
                         Box(
                             modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(OxError.copy(alpha = 0.2f))
-                                .border(1.dp, OxError.copy(0.5f), CircleShape)
-                                .clickable { onClose() },
-                            contentAlignment = Alignment.Center
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (sel) OxPurple else OxSurface)
+                                .border(
+                                    1.dp,
+                                    if (sel) OxPurple else OxOutline,
+                                    RoundedCornerShape(20.dp)
+                                )
+                                .clickable { selectedCat = cat }
+                                .padding(horizontal = 12.dp, vertical = 5.dp)
                         ) {
-                            Text("✕", color = OxError, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            Text(
+                                cat.displayName,
+                                fontSize   = 11.sp,
+                                color      = if (sel) Color.White else OxOnSurface,
+                                fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                                fontFamily = FontFamily.Monospace
+                            )
                         }
                     }
+                }
 
-                    // Kategori seçici
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 8.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        ModuleCategory.values().forEach { cat ->
-                            val sel = cat == selectedCat
+                HorizontalDivider(color = OxOutline.copy(0.3f))
+
+                // Modül listesi
+                LazyColumn(
+                    modifier            = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding      = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(modules, key = { it.name }) { module ->
+                        OverlayModuleCard(module)
+                    }
+                    if (modules.isEmpty()) {
+                        item {
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(if (sel) OxPurple else OxSurface)
-                                    .border(1.dp, if (sel) OxPurple else OxOutline, RoundedCornerShape(20.dp))
-                                    .clickable { selectedCat = cat }
-                                    .padding(horizontal = 12.dp, vertical = 5.dp)
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    cat.displayName,
-                                    fontSize   = 11.sp,
-                                    color      = if (sel) Color.White else OxOnSurface,
-                                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                                    fontFamily = FontFamily.Monospace
+                                    "Bu kategoride modül yok",
+                                    color      = OxOnSurface.copy(0.4f),
+                                    fontSize   = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    textAlign  = TextAlign.Center
                                 )
                             }
                         }
                     }
-
-                    HorizontalDivider(color = OxOutline.copy(0.3f))
-
-                    // Modül listesi
-                    LazyColumn(
-                        modifier            = Modifier.fillMaxWidth().weight(1f),
-                        contentPadding      = PaddingValues(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(modules, key = { it.name }) { module ->
-                            OverlayModuleCard(module)
-                        }
-                        if (modules.isEmpty()) {
-                            item {
-                                Box(
-                                    modifier = Modifier.fillMaxWidth().padding(24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        "Bu kategoride modül yok",
-                                        color = OxOnSurface.copy(0.4f),
-                                        fontSize = 12.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        textAlign = TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = OxOutline.copy(0.3f))
-                    Text(
-                        "2b2tpe.org:19132",
-                        modifier   = Modifier.fillMaxWidth().padding(12.dp),
-                        fontSize   = 10.sp,
-                        color      = OxOnSurface.copy(0.3f),
-                        fontFamily = FontFamily.Monospace,
-                        textAlign  = TextAlign.Center
-                    )
                 }
+
+                HorizontalDivider(color = OxOutline.copy(0.3f))
+                Text(
+                    "2b2tpe.org:19132",
+                    modifier   = Modifier.fillMaxWidth().padding(12.dp),
+                    fontSize   = 10.sp,
+                    color      = OxOnSurface.copy(0.3f),
+                    fontFamily = FontFamily.Monospace,
+                    textAlign  = TextAlign.Center
+                )
             }
         }
     }
@@ -582,7 +666,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .background(OxSurface.copy(alpha = 0.7f))
-                .border(if (enabled) 1.dp else 0.5.dp, borderColor, RoundedCornerShape(10.dp))
+                .border(
+                    if (enabled) 1.dp else 0.5.dp,
+                    borderColor,
+                    RoundedCornerShape(10.dp)
+                )
         ) {
             Row(
                 modifier = Modifier
@@ -602,10 +690,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     )
                     Text(
                         module.description,
-                        fontSize  = 10.sp,
-                        color     = OxOnSurface.copy(0.5f),
-                        maxLines  = 1,
-                        overflow  = TextOverflow.Ellipsis,
+                        fontSize   = 10.sp,
+                        color      = OxOnSurface.copy(0.5f),
+                        maxLines   = 1,
+                        overflow   = TextOverflow.Ellipsis,
                         fontFamily = FontFamily.Monospace
                     )
                 }
@@ -647,14 +735,27 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 var v by remember { mutableStateOf(s.value) }
                 Column {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                        Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                        Text("%.2f".format(v), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
+                        Text(
+                            s.name,
+                            fontSize   = 11.sp,
+                            color      = OxOnSurface,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            "%.2f".format(v),
+                            fontSize   = 11.sp,
+                            color      = OxPurpleLight,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                     Slider(
                         value         = v,
                         onValueChange = { v = it; s.value = it },
                         valueRange    = s.min..s.max,
-                        colors        = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
+                        colors        = SliderDefaults.colors(
+                            thumbColor       = OxPurple,
+                            activeTrackColor = OxPurple
+                        )
                     )
                 }
             }
@@ -662,33 +763,62 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 var v by remember { mutableFloatStateOf(s.value.toFloat()) }
                 Column {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                        Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                        Text(v.toInt().toString(), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
+                        Text(
+                            s.name,
+                            fontSize   = 11.sp,
+                            color      = OxOnSurface,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            v.toInt().toString(),
+                            fontSize   = 11.sp,
+                            color      = OxPurpleLight,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                     Slider(
                         value         = v,
                         onValueChange = { v = it; s.value = it.toInt() },
                         valueRange    = s.min.toFloat()..s.max.toFloat(),
                         steps         = (s.max - s.min - 1).coerceAtLeast(0),
-                        colors        = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
+                        colors        = SliderDefaults.colors(
+                            thumbColor       = OxPurple,
+                            activeTrackColor = OxPurple
+                        )
                     )
                 }
             }
             is BoolSetting -> {
                 var v by remember { mutableStateOf(s.value) }
-                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    Arrangement.SpaceBetween,
+                    Alignment.CenterVertically
+                ) {
+                    Text(
+                        s.name,
+                        fontSize   = 11.sp,
+                        color      = OxOnSurface,
+                        fontFamily = FontFamily.Monospace
+                    )
                     Switch(
                         checked         = v,
                         onCheckedChange = { v = it; s.value = it },
-                        colors          = SwitchDefaults.colors(checkedTrackColor = OxPurple)
+                        colors          = SwitchDefaults.colors(
+                            checkedTrackColor = OxPurple
+                        )
                     )
                 }
             }
             is EnumSetting<*> -> {
                 var sel by remember { mutableStateOf(s.value) }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
+                    Text(
+                        s.name,
+                        fontSize   = 11.sp,
+                        color      = OxOnSurface,
+                        fontFamily = FontFamily.Monospace
+                    )
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier.horizontalScroll(rememberScrollState())
@@ -708,7 +838,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                     .padding(horizontal = 8.dp, vertical = 3.dp)
                             ) {
                                 Text(
-                                    opt.name.lowercase().replaceFirstChar { it.uppercase() },
+                                    opt.name.lowercase()
+                                        .replaceFirstChar { it.uppercase() },
                                     fontSize   = 10.sp,
                                     color      = if (isSel) Color.White else OxOnSurface,
                                     fontFamily = FontFamily.Monospace
@@ -735,8 +866,20 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Text(OverlayState.TOTEM_SYMBOL, color = Color(0xFFFFD700), fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                Text(count.toString(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                Text(
+                    OverlayState.TOTEM_SYMBOL,
+                    color      = Color(0xFFFFD700),
+                    fontSize   = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    count.toString(),
+                    color      = Color.White,
+                    fontSize   = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.Monospace
+                )
             }
         }
     }
@@ -773,8 +916,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel(CHANNEL_ID, "OxClient Overlay", NotificationManager.IMPORTANCE_MIN)
-                .also { getSystemService(NotificationManager::class.java).createNotificationChannel(it) }
+            NotificationChannel(
+                CHANNEL_ID,
+                "OxClient Overlay",
+                NotificationManager.IMPORTANCE_MIN
+            ).also {
+                getSystemService(NotificationManager::class.java)
+                    .createNotificationChannel(it)
+            }
         }
     }
 
@@ -787,4 +936,3 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
 }
-
