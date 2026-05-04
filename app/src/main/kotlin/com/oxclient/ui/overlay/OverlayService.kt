@@ -199,7 +199,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val killAura = remember { ModuleManager.byName("KillAura") }
         val tpAura   = remember { ModuleManager.byName("TPAura") }
 
-        Box(modifier = Modifier.fillMaxSize()) {
+        // Menü kapalıyken dıştaki Box touch'ları YUTMAsin — pass-through
+        Box(modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                // Hiçbir gesture tanımlamıyoruz → touch'lar alt katmana (oyuna) geçer
+            }
+        ) {
 
             // Menü açıkken arka plan — tüm ekranı kaplayan yarı saydam overlay
             AnimatedVisibility(
@@ -257,7 +263,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     )
                 }
 
-                // KillAura sürüklenebilir butonu
+                // KillAura shortcut butonu
                 if (killAura != null) {
                     Box(
                         modifier = Modifier
@@ -273,7 +279,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     }
                 }
 
-                // TPAura sürüklenebilir butonu
+                // TPAura shortcut butonu
                 if (tpAura != null) {
                     Box(
                         modifier = Modifier
@@ -381,14 +387,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
                 .border(2.dp, OxPurpleLight.copy(alpha = 0.7f), CircleShape)
                 .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { onClick() }
-                    )
+                    detectTapGestures(onTap = { onClick() })
                 }
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { totalDist = 0f },
                         onDragEnd = {
+                            // Çok az hareket = tıklama → menüyü aç
                             if (totalDist < 15f) {
                                 onClick()
                             }
@@ -396,6 +401,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         onDrag = { change, offset ->
                             change.consume()
                             totalDist += abs(offset.x) + abs(offset.y)
+                            // Sürükleme eşiği aşılınca taşı (px cinsinden)
                             if (totalDist > 15f) {
                                 onDrag(offset.x, offset.y)
                             }
