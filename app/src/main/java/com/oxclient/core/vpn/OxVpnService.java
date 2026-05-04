@@ -75,11 +75,17 @@ public class OxVpnService extends VpnService {
             Log.i(TAG, "TUN fd=" + tunFd.getFd());
             proxy = new MitmProxy(PROXY_PORT, this);
             proxy.start();
-            SessionManager.INSTANCE.onSessionStart(proxy);
+
+            // SessionManager callback'ini proxy hazır olduktan sonra çağır
+            if (proxy.isRunning()) {
+                SessionManager.INSTANCE.onSessionStart(proxy);
+            }
+
             tunnelTask = io.submit(this::tunnelLoop);
         } catch (Exception e) {
             Log.e(TAG, "startVpn failed", e);
-            running.set(false); stopSelf();
+            running.set(false);
+            stopSelf();
         }
     }
 
@@ -96,13 +102,53 @@ public class OxVpnService extends VpnService {
         b.setSession("OxClient → 2b2tpe.org");
         b.setMtu(TUN_MTU);
         b.addAddress("10.0.0.2", 32);
-        b.addRoute("0.0.0.0", 0);
-        try { b.addAllowedApplication("com.mojang.minecraftpe"); }
-        catch (Exception e) { Log.w(TAG, "Minecraft not found, routing all"); }
+
+        // Tüm trafiği değil, sadece hedef sunucuya giden trafiği yakala
+        // 2b2tpe.org IP'sini DNS çözümlemesiyle al
+        try {
+            java.net.InetAddress serverAddr = java.net.InetAddress.getByName(BuildConfig.SERVER_HOST);
+            String serverIp = serverAddr.getHostAddress();
+            b.addRoute(serverIp, 32);
+        } catch (Exception e) {
+            // Fallback: DNS çözümlenemezse geniş route ama sorun çıkabilir
+            Log.w(TAG, "DNS resolution failed, using fallback route");
+            b.addRoute("0.0.0.0", 0);
+        }
+
+        // DNS için gerekli route
+        b.addRoute("1.1.1.1", 32);
+
+        try {
+            b.addAllowedApplication("com.mojang.minecraftpe");
+        } catch (Exception e) {
+            Log.w(TAG, "Minecraft not found, routing all");
+        }
+
         b.addDnsServer("1.1.1.1");
+        b.addDnsServer("8.8.8.8"); // Yedek DNS ekle
         b.allowFamily(OsConstants.AF_INET);
-        ParcelFileDescriptor pfd = b.establish();
-        if (pfd == null) throw new IllegalStateException("establish() null");
+
+        // Retry mekanizması ekle
+        ParcelFileDescriptor pfd = null;
+        int retryCount = 0;
+        while (pfd == null && retryCount < 3) {
+            try {
+                pfd = b.establish();
+                if (pfd == null) {
+                    retryCount++;
+                    Log.w(TAG, "establish() returned null, retry " + retryCount);
+                    Thread.sleep(200);
+                }
+            } catch (Exception e) {
+                if (retryCount >= 2) throw e;
+                retryCount++;
+                Thread.sleep(300);
+            }
+        }
+
+        if (pfd == null) {
+            throw new IllegalStateException("establish() returned null after retries");
+        }
         return pfd;
     }
 

@@ -113,13 +113,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
+            // Menü kapalıyken touch olaylarını engellememesi için
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or  // ← Bu flag eklendi
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
         windowParams = params
-
         overlayView = ComposeView(this).apply {
             setViewTreeLifecycleOwner(this@OverlayService)
             setViewTreeSavedStateRegistryOwner(this@OverlayService)
@@ -133,14 +135,24 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
      * Menü açıkken odak alabilmesi için FLAG_NOT_FOCUSABLE'ı kaldır.
      * Menü kapanınca geri ekle — böylece oyun touch olaylarını tekrar alır.
      */
-    private fun setWindowFocusable(focusable: Boolean) {
+    private fun setWindowFocusable(focusable: Boolean, touchable: Boolean = true) {
         val params = windowParams ?: return
         val view   = overlayView  ?: return
-        if (focusable) {
-            params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+
+        params.flags = if (focusable) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv() or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         } else {
-            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
+
+        // Touchable flag'ini ayarla
+        if (!touchable) {
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+
         wm.updateViewLayout(view, params)
     }
 
@@ -168,7 +180,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         // Menü açılınca odak ver, kapanınca geri al
         // Bu olmadan menü açıkken back/home tuşları çalışmaz, ekran kilitlenir.
         LaunchedEffect(menuOpen) {
-            setWindowFocusable(menuOpen)
+            if (menuOpen) {
+                setWindowFocusable(true, true)   // Menü açık: focus + touch al
+            } else {
+                setWindowFocusable(false, false) // Menü kapalı: ne focus ne touch al
+            }
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
@@ -192,7 +208,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 visible  = menuOpen,
                 enter    = fadeIn() + slideInVertically { it / 2 },
                 exit     = fadeOut() + slideOutVertically { it / 2 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable { /* Menü dışı tıklamayı engellemek için boş */ }
             ) {
                 HileMenu(
                     onClose       = { OverlayState.setMenuOpen(false) },
