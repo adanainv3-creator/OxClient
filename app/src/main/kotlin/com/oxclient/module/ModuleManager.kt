@@ -20,11 +20,6 @@ import kotlinx.coroutines.launch
 
 private val Context.moduleDataStore by preferencesDataStore("ox_modules")
 
-/**
- * ModuleManager — central registry for all OxClient modules.
- * Handles registration, enable/disable, DataStore persistence,
- * and reactive state for Compose UI.
- */
 object ModuleManager {
     private const val TAG = "ModuleManager"
 
@@ -36,8 +31,6 @@ object ModuleManager {
     private val _version = MutableStateFlow(0)
     val version: StateFlow<Int> = _version.asStateFlow()
 
-    // ── Init ──────────────────────────────────────────────────────────────
-
     fun init(context: Context) {
         if (initialised) return
         ctx = context.applicationContext
@@ -47,36 +40,17 @@ object ModuleManager {
         Log.i(TAG, "ModuleManager init — ${registry.size} modules")
     }
 
-    // ── Registration ──────────────────────────────────────────────────────
-
     private fun registerAll() {
-        // Combat
         register(AutoTotem())
         register(KillAura())
         register(Criticals())
-
-        // Movement
         register(TPAura())
-        // register(Sprint())
-        // register(Speed())
-        // register(NoFall())
-
-        // Visual (placeholders)
-        // register(FullBright())
-        // register(ESP())
-        // register(ChestESP())
-
-        // Misc (placeholders)
-        // register(AutoRespawn())
-        // register(AutoEat())
     }
 
     private fun register(m: BaseModule) {
         registry.add(m)
         Log.d(TAG, "Registered: ${m.name} [${m.category.displayName}]")
     }
-
-    // ── Persistence ───────────────────────────────────────────────────────
 
     private fun restoreState() {
         val c = ctx ?: return
@@ -100,8 +74,6 @@ object ModuleManager {
         }
     }
 
-    // ── Enable / Disable / Toggle ─────────────────────────────────────────
-
     fun enable(m: BaseModule) {
         if (m.isEnabled) return
         m.enable(); persist(m)
@@ -119,8 +91,6 @@ object ModuleManager {
     fun toggle(m: BaseModule) { if (m.isEnabled) disable(m) else enable(m) }
 
     fun disableAll() { registry.filter { it.isEnabled }.forEach { disable(it) } }
-
-    // ── Queries ───────────────────────────────────────────────────────────
 
     val modules: List<BaseModule> get() = registry.toList()
     fun byCategory(cat: ModuleCategory) = registry.filter { it.category == cat }

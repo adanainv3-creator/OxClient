@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
@@ -50,16 +51,16 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.oxclient.R
 import com.oxclient.module.*
 import com.oxclient.ui.theme.*
+import kotlin.math.roundToInt
 
 class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     companion object {
-        private const val TAG        = "OverlayService"
+        private const val TAG = "OverlayService"
         private const val CHANNEL_ID = "ox_overlay"
-        private const val NOTIF_ID   = 1002
+        private const val NOTIF_ID = 1002
 
         fun start(ctx: Context) {
-            Log.d(TAG, "start() çağrıldı")
             val i = Intent(ctx, OverlayService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ctx.startForegroundService(i)
@@ -69,7 +70,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
 
         fun stop(ctx: Context) {
-            Log.d(TAG, "stop() çağrıldı")
             ctx.stopService(Intent(ctx, OverlayService::class.java))
         }
     }
@@ -86,7 +86,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "onCreate")
         ssrCtrl.performRestore(null)
         lcReg.currentState = Lifecycle.State.CREATED
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -94,7 +93,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand")
         startForeground(NOTIF_ID, buildNotif())
         showOverlay()
         lcReg.currentState = Lifecycle.State.RESUMED
@@ -103,7 +101,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy")
         lcReg.currentState = Lifecycle.State.DESTROYED
         OverlayState.setOverlayVisible(false)
         removeOverlay()
@@ -112,21 +109,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ── Window Yönetimi ────────────────────────────────────────────────────
-
     private fun showOverlay() {
-        if (isAttached) {
-            Log.d(TAG, "Overlay zaten ekli, tekrar eklenmiyor")
-            return
-        }
-
-        Log.d(TAG, "showOverlay başlatılıyor")
+        if (isAttached) return
 
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
+            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
         }
 
         val params = WindowManager.LayoutParams(
@@ -138,229 +127,192 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-        }
+        ).apply { gravity = Gravity.TOP or Gravity.START }
 
         windowParams = params
 
         overlayView = ComposeView(this).apply {
             setViewTreeLifecycleOwner(this@OverlayService)
             setViewTreeSavedStateRegistryOwner(this@OverlayService)
-            setContent {
-                OxOverlay(
-                    onMenuOpenChanged = { menuOpen ->
-                        updateWindowFlags(menuOpen)
-                    }
-                )
-            }
+            setContent { OxOverlay { menuOpen -> updateWindowFlags(menuOpen) } }
         }
 
         try {
             wm.addView(overlayView, params)
             isAttached = true
-            Log.d(TAG, "Overlay başarıyla eklendi")
         } catch (e: Exception) {
-            Log.e(TAG, "Overlay eklenirken hata: ${e.message}", e)
+            Log.e(TAG, "Overlay eklenemedi: ${e.message}")
         }
     }
 
     private fun updateWindowFlags(menuOpen: Boolean) {
-        val params = windowParams ?: return
-        val view   = overlayView  ?: return
-
+        val p = windowParams ?: return
+        val v = overlayView ?: return
         try {
             if (menuOpen) {
-                params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                params.flags = params.flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-                Log.d(TAG, "Menü açıldı - overlay dokunma alıyor")
+                p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
             } else {
-                params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                params.flags = params.flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
-                Log.d(TAG, "Menü kapandı - dokunma olayları oyuna gidiyor")
+                p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             }
-            wm.updateViewLayout(view, params)
+            wm.updateViewLayout(v, p)
         } catch (e: Exception) {
-            Log.e(TAG, "Window flags güncellenirken hata: ${e.message}", e)
+            Log.e(TAG, "Flags güncellenemedi: ${e.message}")
         }
     }
 
     private fun removeOverlay() {
         if (!isAttached) return
         try {
-            overlayView?.let {
-                wm.removeViewImmediate(it)
-                overlayView = null
-            }
+            overlayView?.let { wm.removeViewImmediate(it); overlayView = null }
             isAttached = false
-            Log.d(TAG, "Overlay kaldırıldı")
         } catch (e: Exception) {
-            Log.e(TAG, "Overlay kaldırılırken hata: ${e.message}", e)
+            Log.e(TAG, "Overlay kaldırılamadı: ${e.message}")
         }
     }
 
-    // ── Compose Overlay ───────────────────────────────────────────────────
+    // ── COMPOSE OVERLAY ─────────────────────────────────────────────────
 
     @Composable
     private fun OxOverlay(onMenuOpenChanged: (Boolean) -> Unit) {
-        val totemCount    by OverlayState.totemCount.collectAsState()
-        val toast         by OverlayState.moduleToast.collectAsState()
-        val menuOpen      by OverlayState.menuOpen.collectAsState()
+        val totemCount by OverlayState.totemCount.collectAsState()
+        val toast by OverlayState.moduleToast.collectAsState()
+        val menuOpen by OverlayState.menuOpen.collectAsState()
         val moduleVersion by ModuleManager.version.collectAsState()
 
-        var fabOffsetX by remember { mutableStateOf(50f) }
-        var fabOffsetY by remember { mutableStateOf(300f) }
+        // FAB pozisyonu - sürüklenebilir
+        var fabX by remember { mutableFloatStateOf(50f) }
+        var fabY by remember { mutableFloatStateOf(300f) }
 
-        var shortcutOffsetX by remember { mutableStateOf(20f) }
-        var shortcutOffsetY by remember { mutableStateOf(500f) }
+        // Shortcut bar pozisyonu - sürüklenebilir
+        var shortcutX by remember { mutableFloatStateOf(20f) }
+        var shortcutY by remember { mutableFloatStateOf(500f) }
 
-        LaunchedEffect(menuOpen) {
-            onMenuOpenChanged(menuOpen)
-        }
+        LaunchedEffect(menuOpen) { onMenuOpenChanged(menuOpen) }
 
         Box(modifier = Modifier.fillMaxSize()) {
 
+            // Totem counter
             if (totemCount > 0) {
-                TotemPill(
-                    count    = totemCount,
-                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
-                )
+                TotemPill(count = totemCount, modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
             }
 
-            ModuleToastBanner(
-                toast    = toast,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 10.dp)
-            )
+            // Module toast
+            ModuleToastBanner(toast = toast, modifier = Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
 
+            // Menü
             AnimatedVisibility(
-                visible  = menuOpen,
-                enter    = fadeIn() + slideInVertically { it / 2 },
-                exit     = fadeOut() + slideOutVertically { it / 2 },
+                visible = menuOpen,
+                enter = fadeIn() + slideInHorizontally { it / 2 },
+                exit = fadeOut() + slideOutHorizontally { it / 2 },
                 modifier = Modifier.fillMaxSize()
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color(0xCC000000))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) {
+                        .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
                             OverlayState.setMenuOpen(false)
                         }
                 ) {
                     HileMenu(
-                        onClose       = { OverlayState.setMenuOpen(false) },
+                        onClose = { OverlayState.setMenuOpen(false) },
                         moduleVersion = moduleVersion,
-                        modifier      = Modifier.align(Alignment.CenterEnd)
+                        modifier = Modifier.align(Alignment.CenterEnd)
                     )
                 }
             }
 
+            // FAB + Shortcuts (menü kapalıyken)
             if (!menuOpen) {
-                DraggableShortcutBar(
-                    offsetX       = shortcutOffsetX,
-                    offsetY       = shortcutOffsetY,
-                    onDrag        = { dx, dy -> shortcutOffsetX += dx; shortcutOffsetY += dy },
-                    moduleVersion = moduleVersion,
-                    modifier      = Modifier.offset(shortcutOffsetX.dp, shortcutOffsetY.dp)
-                )
-            }
+                // SHORTCUT BAR - sürüklenebilir
+                Box(modifier = Modifier.offset { IntOffset(shortcutX.roundToInt(), shortcutY.roundToInt()) }) {
+                    ShortcutBar(
+                        moduleVersion = moduleVersion,
+                        onDrag = { dx, dy ->
+                            shortcutX += dx
+                            shortcutY += dy
+                        }
+                    )
+                }
 
-            if (!menuOpen) {
-                DraggableFab(
-                    offsetX  = fabOffsetX,
-                    offsetY  = fabOffsetY,
-                    onDrag   = { dx, dy -> fabOffsetX += dx; fabOffsetY += dy },
-                    onClick  = { OverlayState.setMenuOpen(true) },
-                    modifier = Modifier.offset(fabOffsetX.dp, fabOffsetY.dp)
-                )
+                // FAB - sürüklenebilir
+                Box(modifier = Modifier.offset { IntOffset(fabX.roundToInt(), fabY.roundToInt()) }) {
+                    DraggableFab(
+                        onDrag = { dx, dy ->
+                            fabX += dx
+                            fabY += dy
+                        },
+                        onClick = { OverlayState.setMenuOpen(true) }
+                    )
+                }
             }
         }
     }
 
-    // ── Draggable Shortcut Bar ────────────────────────────────────────────
+    // ── SHORTCUT BAR ────────────────────────────────────────────────────
 
     @Composable
-    private fun DraggableShortcutBar(
-        offsetX:       Float,
-        offsetY:       Float,
-        onDrag:        (Float, Float) -> Unit,
-        moduleVersion: Int,
-        modifier:      Modifier = Modifier
-    ) {
-        val shortcutModules = remember(moduleVersion) {
+    private fun ShortcutBar(moduleVersion: Int, onDrag: (Float, Float) -> Unit) {
+        val modules = remember(moduleVersion) {
             (ModuleManager.byCategory(ModuleCategory.COMBAT) +
-             ModuleManager.byCategory(ModuleCategory.MOVEMENT))
-                .take(5)
+             ModuleManager.byCategory(ModuleCategory.MOVEMENT)).take(5)
         }
 
-        var isDragging  by remember { mutableStateOf(false) }
-        var dragDist    by remember { mutableStateOf(0f) }
-        var barExpanded by remember { mutableStateOf(true) }
+        var dragging by remember { mutableStateOf(false) }
+        var dragDist by remember { mutableFloatStateOf(0f) }
+        var expanded by remember { mutableStateOf(true) }
 
         Column(
-            modifier = modifier
+            modifier = Modifier
                 .wrapContentSize()
                 .pointerInput(Unit) {
                     detectDragGestures(
-                        onDragStart = { isDragging = true; dragDist = 0f },
-                        onDragEnd   = { isDragging = false },
-                        onDrag      = { _, d ->
-                            dragDist += d.getDistance()
-                            if (dragDist > 8f) onDrag(d.x / density, d.y / density)
+                        onDragStart = { dragging = true; dragDist = 0f },
+                        onDragEnd = { dragging = false },
+                        onDrag = { change, offset ->
+                            change.consume()
+                            dragDist += kotlin.math.abs(offset.x) + kotlin.math.abs(offset.y)
+                            if (dragDist > 8f && dragging) {
+                                onDrag(offset.x / density, offset.y / density)
+                            }
                         }
                     )
-                },
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                }
         ) {
+            // Başlık
             Box(
                 modifier = Modifier
-                    .size(width = 90.dp, height = 18.dp)
+                    .width(90.dp).height(20.dp)
                     .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
-                    .background(Color(0xAA1A1A2E))
-                    .clickable { barExpanded = !barExpanded },
+                    .background(Color(0xCC1A1A2E))
+                    .clickable { expanded = !expanded },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text       = if (barExpanded) "▲ Shortcuts" else "▼ Shortcuts",
-                    fontSize   = 8.sp,
-                    color      = OxPurpleLight.copy(0.8f),
+                    if (expanded) "▲ Mods" else "▼ Mods",
+                    fontSize = 9.sp,
+                    color = OxPurpleLight,
                     fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.Bold
                 )
             }
 
-            AnimatedVisibility(
-                visible = barExpanded,
-                enter   = fadeIn() + expandVertically(),
-                exit    = fadeOut() + shrinkVertically()
-            ) {
+            // Butonlar
+            AnimatedVisibility(visible = expanded, enter = expandVertically(), exit = shrinkVertically()) {
                 Column(
                     modifier = Modifier
-                        .wrapContentSize()
-                        .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp, topEnd = 8.dp))
-                        .background(Color(0xBB0D0D1A))
-                        .border(
-                            1.dp,
-                            OxPurple.copy(0.3f),
-                            RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp, topEnd = 8.dp)
-                        )
-                        .padding(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                        .width(90.dp)
+                        .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+                        .background(Color(0xDD0D0D1A))
+                        .border(1.dp, OxPurple.copy(0.3f), RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
+                        .padding(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
-                    if (shortcutModules.isEmpty()) {
-                        Text(
-                            "Modül yok",
-                            fontSize   = 9.sp,
-                            color      = OxOnSurface.copy(0.4f),
-                            fontFamily = FontFamily.Monospace,
-                            modifier   = Modifier.padding(4.dp)
-                        )
-                    } else {
-                        shortcutModules.forEach { module ->
-                            ShortcutButton(module = module)
-                        }
+                    modules.forEach { mod ->
+                        ShortcutButton(mod)
+                    }
+                    if (modules.isEmpty()) {
+                        Text("Yok", fontSize = 9.sp, color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace, modifier = Modifier.padding(4.dp))
                     }
                 }
             }
@@ -370,479 +322,177 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     @Composable
     private fun ShortcutButton(module: BaseModule) {
         var enabled by remember { mutableStateOf(module.isEnabled) }
-
-        LaunchedEffect(module) {
-            module.enabledFlow.collect { enabled = it }
-        }
-
-        val bgColor by animateColorAsState(
-            targetValue   = if (enabled) OxPurple.copy(0.85f) else Color(0xFF1A1A2E).copy(0.9f),
-            animationSpec = tween(200),
-            label         = "shortcutBg"
-        )
-        val borderColor by animateColorAsState(
-            targetValue   = if (enabled) OxPurpleLight else OxOutline.copy(0.4f),
-            animationSpec = tween(200),
-            label         = "shortcutBorder"
-        )
-        val scale by animateFloatAsState(
-            targetValue   = if (enabled) 1f else 0.95f,
-            animationSpec = spring(Spring.DampingRatioMediumBouncy),
-            label         = "shortcutScale"
-        )
+        LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
 
         Box(
-            modifier = Modifier
-                .width(84.dp)
-                .height(28.dp)
-                .scale(scale)
-                .clip(RoundedCornerShape(8.dp))
-                .background(bgColor)
-                .border(
-                    width = if (enabled) 1.5.dp else 0.5.dp,
-                    color = borderColor,
-                    shape = RoundedCornerShape(8.dp)
-                )
-                .clickable {
-                    ModuleManager.toggle(module)
-                    enabled = module.isEnabled
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text       = module.name,
-                fontSize   = 10.sp,
-                fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal,
-                color      = if (enabled) Color.White else OxOnSurface.copy(0.7f),
-                fontFamily = FontFamily.Monospace,
-                maxLines   = 1,
-                overflow   = TextOverflow.Ellipsis,
-                modifier   = Modifier.padding(horizontal = 4.dp)
-            )
-        }
-    }
-
-    // ── FAB ───────────────────────────────────────────────────────────────
-
-    @Composable
-    private fun DraggableFab(
-        offsetX:  Float,
-        offsetY:  Float,
-        onDrag:   (Float, Float) -> Unit,
-        onClick:  () -> Unit,
-        modifier: Modifier = Modifier
-    ) {
-        var isDragging by remember { mutableStateOf(false) }
-        var dragDist   by remember { mutableStateOf(0f) }
-
-        val scale by animateFloatAsState(
-            targetValue   = if (isDragging) 0.9f else 1f,
-            animationSpec = spring(Spring.DampingRatioMediumBouncy),
-            label         = "fabScale"
-        )
-
-        Box(
-            modifier = modifier
-                .size(52.dp)
-                .scale(scale)
-                .clip(CircleShape)
-                .background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark)))
-                .border(1.5.dp, OxPurpleLight.copy(alpha = 0.5f), CircleShape)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { isDragging = true; dragDist = 0f },
-                        onDragEnd   = {
-                            isDragging = false
-                            if (dragDist < 10f) onClick()
-                        },
-                        onDrag = { _, dragAmount ->
-                            dragDist += dragAmount.getDistance()
-                            onDrag(dragAmount.x / density, dragAmount.y / density)
-                        }
-                    )
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "Ox",
-                color      = Color.White,
-                fontSize   = 16.sp,
-                fontWeight = FontWeight.ExtraBold,
-                fontFamily = FontFamily.Monospace
-            )
-        }
-    }
-
-    // ── Hile Menüsü ───────────────────────────────────────────────────────
-
-    @Composable
-    private fun HileMenu(
-        onClose: () -> Unit,
-        moduleVersion: Int,
-        modifier: Modifier = Modifier
-    ) {
-        var selectedCat by remember { mutableStateOf(ModuleCategory.COMBAT) }
-        val modules = remember(moduleVersion, selectedCat) {
-            ModuleManager.byCategory(selectedCat)
-        }
-
-        Box(
-            modifier = modifier
-                .fillMaxHeight()
-                .width(280.dp)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0xFF1A1A2E), Color(0xFF16213E))
-                    )
-                )
-                .border(
-                    width = 1.dp,
-                    brush = Brush.verticalGradient(
-                        listOf(OxPurple.copy(0.6f), OxPurpleDark.copy(0.3f))
-                    ),
-                    shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp)
-                )
-                .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-
-                // Header
-                Row(
-                    modifier              = Modifier
-                        .fillMaxWidth()
-                        .background(OxPurpleDark.copy(alpha = 0.5f))
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment     = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "OxClient",
-                        fontSize   = 18.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color      = Color.White,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(OxError.copy(alpha = 0.2f))
-                            .border(1.dp, OxError.copy(0.5f), CircleShape)
-                            .clickable { onClose() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "✕",
-                            color      = OxError,
-                            fontSize   = 12.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-
-                // Kategori seçici
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    ModuleCategory.entries.forEach { cat ->
-                        val sel = cat == selectedCat
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(if (sel) OxPurple else OxSurface)
-                                .border(
-                                    1.dp,
-                                    if (sel) OxPurple else OxOutline,
-                                    RoundedCornerShape(20.dp)
-                                )
-                                .clickable { selectedCat = cat }
-                                .padding(horizontal = 12.dp, vertical = 5.dp)
-                        ) {
-                            Text(
-                                cat.displayName,
-                                fontSize   = 11.sp,
-                                color      = if (sel) Color.White else OxOnSurface,
-                                fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-                }
-
-                HorizontalDivider(color = OxOutline.copy(0.3f))
-
-                // Modül listesi
-                LazyColumn(
-                    modifier            = Modifier.fillMaxWidth().weight(1f),
-                    contentPadding      = PaddingValues(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(modules, key = { it.name }) { module ->
-                        OverlayModuleCard(module)
-                    }
-                    if (modules.isEmpty()) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "Bu kategoride modül yok",
-                                    color      = OxOnSurface.copy(0.4f),
-                                    fontSize   = 12.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    textAlign  = TextAlign.Center
-                                )
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider(color = OxOutline.copy(0.3f))
-                Text(
-                    "2b2tpe.org:19132",
-                    modifier   = Modifier.fillMaxWidth().padding(12.dp),
-                    fontSize   = 10.sp,
-                    color      = OxOnSurface.copy(0.3f),
-                    fontFamily = FontFamily.Monospace,
-                    textAlign  = TextAlign.Center
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun OverlayModuleCard(module: BaseModule) {
-        var enabled  by remember { mutableStateOf(module.isEnabled) }
-        var expanded by remember { mutableStateOf(false) }
-
-        LaunchedEffect(module) {
-            module.enabledFlow.collect { enabled = it }
-        }
-
-        val borderColor by animateColorAsState(
-            targetValue   = if (enabled) OxPurple.copy(0.8f) else OxOutline.copy(0.3f),
-            animationSpec = tween(300),
-            label         = "border"
-        )
-
-        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(OxSurface.copy(alpha = 0.7f))
-                .border(
-                    if (enabled) 1.dp else 0.5.dp,
-                    borderColor,
-                    RoundedCornerShape(10.dp)
-                )
+                .height(26.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (enabled) OxPurple.copy(0.8f) else Color(0xFF1A1A2E))
+                .border(if (enabled) 1.5.dp else 0.5.dp, if (enabled) OxPurpleLight else OxOutline.copy(0.4f), RoundedCornerShape(6.dp))
+                .clickable { ModuleManager.toggle(module); enabled = module.isEnabled },
+            contentAlignment = Alignment.Center
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = module.settings.isNotEmpty()) { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        module.name,
-                        fontSize   = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color      = if (enabled) Color.White else OxOnSurface,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        module.description,
-                        fontSize   = 10.sp,
-                        color      = OxOnSurface.copy(0.5f),
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-                Switch(
-                    checked         = enabled,
-                    onCheckedChange = {
-                        ModuleManager.toggle(module)
-                        enabled = module.isEnabled
-                    },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor   = Color.White,
-                        checkedTrackColor   = OxPurple,
-                        uncheckedThumbColor = OxOnSurface.copy(0.4f),
-                        uncheckedTrackColor = OxOutline
-                    )
-                )
-            }
+            Text(
+                module.name,
+                fontSize = 9.sp,
+                fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal,
+                color = if (enabled) Color.White else OxOnSurface.copy(0.7f),
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+    }
 
-            AnimatedVisibility(visible = expanded && module.settings.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF0D0D1A))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+    // ── FAB ─────────────────────────────────────────────────────────────
+
+    @Composable
+    private fun DraggableFab(onDrag: (Float, Float) -> Unit, onClick: () -> Unit) {
+        var dragging by remember { mutableStateOf(false) }
+        var totalDist by remember { mutableFloatStateOf(0f) }
+
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark)))
+                .border(2.dp, OxPurpleLight.copy(0.6f), CircleShape)
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { dragging = true; totalDist = 0f },
+                        onDragEnd = {
+                            dragging = false
+                            if (totalDist < 15f) onClick()
+                        },
+                        onDrag = { change, offset ->
+                            change.consume()
+                            totalDist += kotlin.math.abs(offset.x) + kotlin.math.abs(offset.y)
+                            onDrag(offset.x / density, offset.y / density)
+                        }
+                    )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Ox", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
+        }
+    }
+
+    // ── MENÜ ────────────────────────────────────────────────────────────
+
+    @Composable
+    private fun HileMenu(onClose: () -> Unit, moduleVersion: Int, modifier: Modifier = Modifier) {
+        var cat by remember { mutableStateOf(ModuleCategory.COMBAT) }
+        val mods = remember(moduleVersion, cat) { ModuleManager.byCategory(cat) }
+
+        Box(
+            modifier = modifier
+                .fillMaxHeight().width(280.dp)
+                .background(Brush.verticalGradient(listOf(Color(0xFF1A1A2E), Color(0xFF16213E))))
+                .border(1.dp, OxPurple.copy(0.5f), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                // Header
+                Row(
+                    Modifier.fillMaxWidth().background(OxPurpleDark.copy(0.5f)).padding(16.dp),
+                    Arrangement.SpaceBetween, Alignment.CenterVertically
                 ) {
-                    module.settings.forEach { setting ->
-                        OverlaySettingRow(setting)
+                    Text("OxClient", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, fontFamily = FontFamily.Monospace)
+                    Box(Modifier.size(28.dp).clip(CircleShape).background(OxError.copy(0.2f)).border(1.dp, OxError.copy(0.5f), CircleShape).clickable { onClose() }, contentAlignment = Alignment.Center) {
+                        Text("✕", color = OxError, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                     }
+                }
+
+                // Kategoriler
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ModuleCategory.entries.forEach { c ->
+                        val sel = c == cat
+                        Box(Modifier.clip(RoundedCornerShape(20.dp)).background(if (sel) OxPurple else OxSurface).border(1.dp, if (sel) OxPurple else OxOutline, RoundedCornerShape(20.dp)).clickable { cat = c }.padding(horizontal = 12.dp, vertical = 5.dp)) {
+                            Text(c.displayName, fontSize = 11.sp, color = if (sel) Color.White else OxOnSurface, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = OxOutline.copy(0.3f))
+
+                // Modüller
+                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(mods, key = { it.name }) { mod -> ModuleCard(mod) }
+                    if (mods.isEmpty()) item { Text("Modül yok", fontSize = 12.sp, color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth().padding(24.dp), textAlign = TextAlign.Center) }
+                }
+
+                HorizontalDivider(color = OxOutline.copy(0.3f))
+                Text("2b2tpe.org:19132", Modifier.fillMaxWidth().padding(12.dp), fontSize = 10.sp, color = OxOnSurface.copy(0.3f), fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center)
+            }
+        }
+    }
+
+    @Composable
+    private fun ModuleCard(module: BaseModule) {
+        var enabled by remember { mutableStateOf(module.isEnabled) }
+        var expanded by remember { mutableStateOf(false) }
+        LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
+
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(OxSurface.copy(0.7f)).border(if (enabled) 1.dp else 0.5.dp, if (enabled) OxPurple.copy(0.8f) else OxOutline.copy(0.3f), RoundedCornerShape(10.dp))) {
+            Row(Modifier.fillMaxWidth().clickable(enabled = module.settings.isNotEmpty()) { expanded = !expanded }.padding(12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(module.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (enabled) Color.White else OxOnSurface, fontFamily = FontFamily.Monospace)
+                    Text(module.description, fontSize = 10.sp, color = OxOnSurface.copy(0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = FontFamily.Monospace)
+                }
+                Switch(enabled, { ModuleManager.toggle(module); enabled = module.isEnabled }, colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = OxPurple, uncheckedThumbColor = OxOnSurface.copy(0.4f), uncheckedTrackColor = OxOutline))
+            }
+            AnimatedVisibility(expanded && module.settings.isNotEmpty()) {
+                Column(Modifier.fillMaxWidth().background(Color(0xFF0D0D1A)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    module.settings.forEach { SettingRow(it) }
                 }
             }
         }
     }
 
     @Composable
-    private fun OverlaySettingRow(s: ModuleSetting<*>) {
+    private fun SettingRow(s: ModuleSetting<*>) {
         when (s) {
-            is FloatSetting -> {
-                var v by remember { mutableStateOf(s.value) }
-                Column {
-                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                        Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                        Text("%.2f".format(v), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
-                    }
-                    Slider(
-                        value         = v,
-                        onValueChange = { v = it; s.value = it },
-                        valueRange    = s.min..s.max,
-                        colors        = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
-                    )
-                }
-            }
-            is IntSetting -> {
-                var v by remember { mutableFloatStateOf(s.value.toFloat()) }
-                Column {
-                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                        Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                        Text(v.toInt().toString(), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
-                    }
-                    Slider(
-                        value         = v,
-                        onValueChange = { v = it; s.value = it.toInt() },
-                        valueRange    = s.min.toFloat()..s.max.toFloat(),
-                        steps         = (s.max - s.min - 1).coerceAtLeast(0),
-                        colors        = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
-                    )
-                }
-            }
-            is BoolSetting -> {
-                var v by remember { mutableStateOf(s.value) }
-                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                    Switch(
-                        checked         = v,
-                        onCheckedChange = { v = it; s.value = it },
-                        colors          = SwitchDefaults.colors(checkedTrackColor = OxPurple)
-                    )
-                }
-            }
-            is EnumSetting<*> -> {
-                var sel by remember { mutableStateOf(s.value) }
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.horizontalScroll(rememberScrollState())
-                    ) {
-                        @Suppress("UNCHECKED_CAST")
-                        (s as EnumSetting<Enum<*>>).values.forEach { opt ->
-                            val isSel = sel == opt
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(if (isSel) OxPurple else OxSurfaceVar)
-                                    .clickable {
-                                        sel = opt
-                                        @Suppress("UNCHECKED_CAST")
-                                        (s as EnumSetting<Enum<*>>).value = opt
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    opt.name.lowercase().replaceFirstChar { it.uppercase() },
-                                    fontSize   = 10.sp,
-                                    color      = if (isSel) Color.White else OxOnSurface,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            is FloatSetting -> { var v by remember { mutableStateOf(s.value) }; Column { Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) { Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace); Text("%.2f".format(v), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace) }; Slider(v, { v = it; s.value = it }, valueRange = s.min..s.max, colors = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)) } }
+            is IntSetting -> { var v by remember { mutableFloatStateOf(s.value.toFloat()) }; Column { Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) { Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace); Text(v.toInt().toString(), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace) }; Slider(v, { v = it; s.value = it.toInt() }, valueRange = s.min.toFloat()..s.max.toFloat(), steps = (s.max - s.min - 1).coerceAtLeast(0), colors = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)) } }
+            is BoolSetting -> { var v by remember { mutableStateOf(s.value) }; Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) { Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace); Switch(v, { v = it; s.value = it }, colors = SwitchDefaults.colors(checkedTrackColor = OxPurple)) } }
+            is EnumSetting<*> -> { var sel by remember { mutableStateOf(s.value) }; Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { Text(s.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace); Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) { @Suppress("UNCHECKED_CAST"); (s as EnumSetting<Enum<*>>).values.forEach { o -> val isSel = sel == o; Box(Modifier.clip(RoundedCornerShape(12.dp)).background(if (isSel) OxPurple else OxSurfaceVar).clickable { sel = o; (s as EnumSetting<Enum<*>>).value = o }.padding(horizontal = 8.dp, vertical = 3.dp)) { Text(o.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 10.sp, color = if (isSel) Color.White else OxOnSurface, fontFamily = FontFamily.Monospace) } } } } }
             else -> {}
         }
     }
 
-    // ── HUD Bileşenleri ───────────────────────────────────────────────────
+    // ── HUD ──────────────────────────────────────────────────────────────
 
     @Composable
-    private fun TotemPill(count: Int, modifier: Modifier = Modifier) {
-        Box(
-            modifier = modifier
-                .background(Color(0xCC000000), RoundedCornerShape(6.dp))
-                .padding(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-            Row(
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Text(OverlayState.TOTEM_SYMBOL, color = Color(0xFFFFD700), fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+    private fun TotemPill(count: Int, modifier: Modifier) {
+        Box(modifier.background(Color(0xCC000000), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("⊕", color = Color(0xFFFFD700), fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 Text(count.toString(), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
             }
         }
     }
 
     @Composable
-    private fun ModuleToastBanner(toast: ModuleToast?, modifier: Modifier = Modifier) {
-        AnimatedVisibility(
-            visible  = toast != null,
-            enter    = fadeIn() + slideInVertically { -it },
-            exit     = fadeOut() + slideOutVertically { -it },
-            modifier = modifier
-        ) {
+    private fun ModuleToastBanner(toast: ModuleToast?, modifier: Modifier) {
+        AnimatedVisibility(visible = toast != null, enter = fadeIn() + slideInVertically { -it }, exit = fadeOut() + slideOutVertically { -it }, modifier = modifier) {
             if (toast == null) return@AnimatedVisibility
-            val bg = if (toast.enabled) Color(0xCC1AFF1A) else Color(0xCCFF3C3C)
-            Box(
-                modifier = Modifier
-                    .wrapContentSize()
-                    .background(bg, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 18.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    toast.displayText,
-                    color      = Color.White,
-                    fontSize   = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    textAlign  = TextAlign.Center
-                )
+            Box(Modifier.wrapContentSize().background(if (toast.enabled) Color(0xCC1AFF1A) else Color(0xCCFF3C3C), RoundedCornerShape(8.dp)).padding(horizontal = 18.dp, vertical = 6.dp)) {
+                Text(toast.displayText, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center)
             }
         }
     }
 
-    // ── Notification ──────────────────────────────────────────────────────
+    // ── NOTIFICATION ────────────────────────────────────────────────────
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel(CHANNEL_ID, "OxClient Overlay", NotificationManager.IMPORTANCE_MIN)
-                .also { getSystemService(NotificationManager::class.java).createNotificationChannel(it) }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "OxClient Overlay", NotificationManager.IMPORTANCE_MIN))
         }
     }
 
-    private fun buildNotif(): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_ox_logo)
-            .setContentTitle("OxClient Overlay")
-            .setContentText("Oyun üzerinde aktif — 2b2tpe.org")
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .build()
+    private fun buildNotif(): Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setSmallIcon(R.drawable.ic_ox_logo).setContentTitle("OxClient Overlay").setContentText("Oyun içi HUD aktif").setOngoing(true).setPriority(NotificationCompat.PRIORITY_MIN).build()
 }
