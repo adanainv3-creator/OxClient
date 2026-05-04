@@ -128,8 +128,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // ÖNEMLİ: FLAG_NOT_TOUCHABLE KALDIRILDI — butonlara dokunabilmek için
-        // Menü kapalıyken sadece buton alanları touch alır, arka plan değil
+        // DÜZELTME: FLAG_NOT_TOUCHABLE eklendi - boş alanlar oyuna geçer, butonlar çalışır
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -137,7 +136,8 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,  // ← BU SATIR EKLENDİ
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
 
@@ -199,13 +199,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         val killAura = remember { ModuleManager.byName("KillAura") }
         val tpAura   = remember { ModuleManager.byName("TPAura") }
 
-        // Menü kapalıyken dıştaki Box touch'ları YUTMAsin — pass-through
-        Box(modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                // Hiçbir gesture tanımlamıyoruz → touch'lar alt katmana (oyuna) geçer
-            }
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
 
             // Menü açıkken arka plan — tüm ekranı kaplayan yarı saydam overlay
             AnimatedVisibility(
@@ -436,7 +430,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         Box(
             modifier = modifier
                 .fillMaxHeight()
-                .width(280.dp)
+                .width(300.dp)  // ← 280'den 300'e çıkarıldı (daha geniş)
                 .background(
                     Brush.verticalGradient(
                         listOf(Color(0xFF1A1A2E), Color(0xFF16213E))
@@ -617,14 +611,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
             }
 
-            // Settings
+            // Settings - TPAura ayarları dahil, min/max değerlerle
             AnimatedVisibility(visible = expanded && settings.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Color(0x22000000))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)  // ← boşluk artırıldı
                 ) {
                     settings.forEach { s -> SettingRow(s) }
                 }
@@ -637,7 +631,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         when (s) {
             is FloatSetting -> {
                 var v by remember { mutableFloatStateOf(s.value) }
-                Column {
+                Column(modifier = Modifier.padding(vertical = 3.dp)) {  // ← padding eklendi
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -649,14 +643,37 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         value = v,
                         onValueChange = { v = it; s.value = it },
                         valueRange = s.min..s.max,
-                        colors = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
+                        modifier = Modifier.height(24.dp),  // ← yükseklik eklendi
+                        colors = SliderDefaults.colors(
+                            thumbColor = OxPurple, 
+                            activeTrackColor = OxPurple,
+                            inactiveTrackColor = OxPurple.copy(alpha = 0.3f)  // ← eklendi
+                        )
                     )
+                    // Min/Max değerleri göster
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "%.2f".format(s.min),
+                            fontSize = 8.sp,
+                            color = OxOnSurface.copy(alpha = 0.4f),
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "%.2f".format(s.max),
+                            fontSize = 8.sp,
+                            color = OxOnSurface.copy(alpha = 0.4f),
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
             }
 
             is IntSetting -> {
                 var v by remember { mutableFloatStateOf(s.value.toFloat()) }
-                Column {
+                Column(modifier = Modifier.padding(vertical = 3.dp)) {  // ← padding eklendi
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -669,6 +686,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         onValueChange = { v = it; s.value = it.toInt() },
                         valueRange = s.min.toFloat()..s.max.toFloat(),
                         steps = (s.max - s.min - 1).coerceAtLeast(0),
+                        modifier = Modifier.height(24.dp),  // ← yükseklik eklendi
                         colors = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple)
                     )
                 }
@@ -677,7 +695,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             is BoolSetting -> {
                 var v by remember { mutableStateOf(s.value) }
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),  // ← padding eklendi
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -692,7 +712,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
             is EnumSetting<*> -> {
                 var sel by remember { mutableStateOf(s.value) }
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.padding(vertical = 3.dp),  // ← padding eklendi
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
                         text = s.name,
                         fontSize = 11.sp,
@@ -711,6 +734,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(if (isSel) OxPurple else OxSurfaceVar)
+                                    .border(  // ← border eklendi
+                                        1.dp,
+                                        if (isSel) OxPurple.copy(alpha = 0.5f) else OxOutline.copy(alpha = 0.3f),
+                                        RoundedCornerShape(12.dp)
+                                    )
                                     .clickable {
                                         sel = opt
                                         enumSetting.value = opt
