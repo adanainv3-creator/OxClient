@@ -339,6 +339,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
                 .border(2.dp, OxPurpleLight.copy(alpha = 0.7f), CircleShape)
                 .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            if (!isDragging) {
+                                onClick()
+                            }
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = {
                             isDragging = true
@@ -378,6 +387,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     ) {
         var enabled by remember { mutableStateOf(module.isEnabled) }
         var totalDragDist by remember { mutableFloatStateOf(0f) }
+        var isDragging by remember { mutableStateOf(false) }
 
         LaunchedEffect(module) {
             module.enabledFlow.collect { enabled = it }
@@ -399,11 +409,23 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     shape = RoundedCornerShape(10.dp)
                 )
                 .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            if (!isDragging) {
+                                ModuleManager.toggle(module)
+                                enabled = module.isEnabled
+                            }
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = {
+                            isDragging = true
                             totalDragDist = 0f
                         },
                         onDragEnd = {
+                            isDragging = false
                             if (totalDragDist < 12f) {
                                 ModuleManager.toggle(module)
                                 enabled = module.isEnabled
