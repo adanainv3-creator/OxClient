@@ -13,24 +13,17 @@ import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 
-import com.oxclient.BuildConfig;
 import com.oxclient.R;
 import com.oxclient.ui.dashboard.DashboardActivity;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.nio.ByteBuffer;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * OxVpnService — BASİT TEST VERSİYONU
- * Sadece VPN tunnel kurar, proxy YOK.
- * Amaç: VPN'in crash olmadan başladığını doğrulamak.
+ * OxVpnService — MİNİMAL TEST
+ * Sadece TUN açar ve hiçbir şey yapmaz.
  */
 public class OxVpnService extends VpnService {
     private static final String TAG          = "OxVpnService";
@@ -39,41 +32,34 @@ public class OxVpnService extends VpnService {
     public  static final String ACTION_START = "com.oxclient.START_VPN";
     public  static final String ACTION_STOP  = "com.oxclient.STOP_VPN";
 
-    private static final int TUN_MTU = 1500;
-
-    private static final String DNS_PRIMARY   = "1.1.1.1";
-    private static final String DNS_SECONDARY = "8.8.8.8";
-
     private ParcelFileDescriptor tunFd;
-    private ExecutorService      io;
-    private Future<?>            tunnelTask;
-    private final AtomicBoolean  running = new AtomicBoolean(false);
+    private Thread tunnelThread;
+    private volatile boolean running = false;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        io = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "OxClient-IO");
-            t.setDaemon(true);
-            return t;
-        });
         createChannel();
-        Log.i(TAG, "OxVpnService onCreate (TEST MODU - Proxy YOK)");
+        Log.i(TAG, "onCreate - MİNİMAL TEST");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null) {
-            Log.w(TAG, "onStartCommand: intent null");
-            return START_NOT_STICKY;
-        }
+        if (intent == null) return START_NOT_STICKY;
 
         String action = intent.getAction();
-        Log.d(TAG, "onStartCommand: action=" + action);
+        Log.d(TAG, "action=" + action);
 
         if (ACTION_START.equals(action)) {
-            startForeground(NOTIF_ID, buildNotif("OxClient VPN (test modu)"));
-            startVpn();
+            startForeground(NOTIF_ID, buildNotif("OxClient Test"));
+            
+            // ANA THREAD'DE DENE - crash noktasını görelim
+            try {
+                startSimpleVpn();
+            } catch (Exception e) {
+                Log.e(TAG, "CRASH: " + e.getMessage(), e);
+                stopSelf();
+            }
         } else if (ACTION_STOP.equals(action)) {
             stopVpn();
             stopSelf();
@@ -82,147 +68,87 @@ public class OxVpnService extends VpnService {
         return START_STICKY;
     }
 
-    @Override
-    public void onDestroy() {
-        Log.i(TAG, "onDestroy");
-        stopVpn();
-        if (io != null) {
-            io.shutdownNow();
+    private void startSimpleVpn() throws Exception {
+        Log.i(TAG, "TUN oluşturuluyor...");
+        
+        Builder builder = new Builder();
+        builder.setSession("OxClient Minimal");
+        builder.setMtu(1500);
+        builder.addAddress("10.0.0.2", 32);
+        builder.addRoute("0.0.0.0", 0);
+        builder.addDnsServer("8.8.8.8");
+        builder.allowFamily(OsConstants.AF_INET);
+        
+        // Minecraft'i scoplama - HER ŞEYİ geçir
+        // builder.addAllowedApplication("com.mojang.minecraftpe"); // BUNU DA KALDIR
+        
+        Log.i(TAG, "establish() çağrılıyor...");
+        tunFd = builder.establish();
+        
+        if (tunFd == null) {
+            Log.e(TAG, "establish() NULL döndü!");
+            throw new Exception("establish null");
         }
-        super.onDestroy();
-    }
-
-    // ── BASİT VPN BAŞLATMA (PROXY YOK) ──────────────────────────────────
-
-    private void startVpn() {
-        if (running.getAndSet(true)) {
-            Log.w(TAG, "VPN zaten çalışıyor");
-            return;
-        }
-
-        try {
-            Log.i(TAG, "═══ VPN BAŞLATILIYOR (PROXY YOK) ═══");
-            
-            // Sadece TUN oluştur
-            tunFd = buildTun();
-            Log.i(TAG, "✅ TUN oluşturuldu, fd=" + tunFd.getFd());
-            
-            // Sadece tunnel loop başlat (paketleri olduğu gibi geri yaz)
-            tunnelTask = io.submit(this::simpleTunnelLoop);
-            Log.i(TAG, "✅ Tunnel loop başladı");
-            Log.i(TAG, "═══ VPN AKTİF (PROXY YOK) ═══");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "❌ VPN başlatılamadı: " + e.getMessage(), e);
-            
-            // Temizlik
-            if (tunFd != null) {
-                try { tunFd.close(); } catch (IOException ex) {}
-                tunFd = null;
+        
+        Log.i(TAG, "TUN başarılı! fd=" + tunFd.getFd());
+        running = true;
+        
+        // Minimal tunnel - sadece oku ve yaz
+        tunnelThread = new Thread(() -> {
+            Log.i(TAG, "Tunnel thread başladı");
+            ByteBuffer buf = ByteBuffer.allocate(1500);
+            try {
+                FileInputStream in = new FileInputStream(tunFd.getFileDescriptor());
+                FileOutputStream out = new FileOutputStream(tunFd.getFileDescriptor());
+                
+                while (running) {
+                    buf.clear();
+                    int len = in.read(buf.array());
+                    if (len > 0) {
+                        out.write(buf.array(), 0, len);
+                    }
+                }
+                
+                in.close();
+                out.close();
+            } catch (IOException e) {
+                Log.e(TAG, "Tunnel hata: " + e.getMessage());
             }
-            running.set(false);
-            stopSelf();
-        }
+            Log.i(TAG, "Tunnel thread bitti");
+        }, "OxTunnel");
+        tunnelThread.setDaemon(true);
+        tunnelThread.start();
+        
+        Log.i(TAG, "VPN AKTİF!");
     }
 
     private void stopVpn() {
-        if (!running.getAndSet(false)) {
-            return;
+        running = false;
+        
+        if (tunnelThread != null) {
+            tunnelThread.interrupt();
+            try { tunnelThread.join(1000); } catch (InterruptedException e) {}
+            tunnelThread = null;
         }
-
-        Log.i(TAG, "VPN durduruluyor...");
-
-        if (tunnelTask != null) {
-            tunnelTask.cancel(true);
-            tunnelTask = null;
-        }
-
+        
         if (tunFd != null) {
             try { tunFd.close(); } catch (IOException e) {}
             tunFd = null;
         }
-
-        Log.i(TAG, "VPN durduruldu");
+        
+        Log.i(TAG, "VPN durdu");
     }
 
-    // ── TUN OLUŞTURMA (BASİT) ──────────────────────────────────────────
-
-    private ParcelFileDescriptor buildTun() throws Exception {
-        Builder b = new Builder();
-        b.setSession("OxClient Test");
-        b.setMtu(TUN_MTU);
-        b.addAddress("10.0.0.2", 32);
-
-        // Hedef sunucu IP'sini çözümle
-        try {
-            InetAddress serverAddr = InetAddress.getByName(BuildConfig.SERVER_HOST);
-            String serverIp = serverAddr.getHostAddress();
-            Log.i(TAG, "Hedef IP: " + serverIp);
-            b.addRoute(serverIp, 32);
-        } catch (Exception e) {
-            Log.w(TAG, "DNS başarısız, fallback route");
-            b.addRoute("0.0.0.0", 0);
-        }
-
-        b.addRoute(DNS_PRIMARY, 32);
-        b.addRoute(DNS_SECONDARY, 32);
-        b.addDnsServer(DNS_PRIMARY);
-        b.addDnsServer(DNS_SECONDARY);
-        b.allowFamily(OsConstants.AF_INET);
-
-        // Minecraft'a scople
-        try {
-            b.addAllowedApplication("com.mojang.minecraftpe");
-        } catch (Exception e) {
-            Log.w(TAG, "Minecraft bulunamadı");
-        }
-
-        // Tek denemede establish et
-        ParcelFileDescriptor pfd = b.establish();
-        if (pfd == null) {
-            // Bir daha dene
-            Thread.sleep(500);
-            pfd = b.establish();
-        }
-        if (pfd == null) {
-            throw new Exception("TUN establish() null döndü - başka VPN aktif olabilir");
-        }
-        return pfd;
+    @Override
+    public void onDestroy() {
+        stopVpn();
+        super.onDestroy();
     }
-
-    // ── BASİT TUNNEL LOOP (PAKETLERİ GERİ YAZ) ─────────────────────────
-
-    private void simpleTunnelLoop() {
-        Log.i(TAG, "Simple tunnel loop başladı");
-        ByteBuffer pkt = ByteBuffer.allocate(TUN_MTU * 2);
-
-        try (FileInputStream in   = new FileInputStream(tunFd.getFileDescriptor());
-             FileOutputStream out = new FileOutputStream(tunFd.getFileDescriptor())) {
-
-            while (running.get() && !Thread.currentThread().isInterrupted()) {
-                pkt.clear();
-                int len = in.read(pkt.array());
-                if (len > 0) {
-                    // Geleni direkt geri yaz (bypass)
-                    out.write(pkt.array(), 0, len);
-                }
-            }
-        } catch (IOException e) {
-            if (running.get()) {
-                Log.e(TAG, "Tunnel I/O hatası: " + e.getMessage());
-            }
-        }
-        Log.i(TAG, "Simple tunnel loop bitti");
-    }
-
-    // ── NOTIFICATION ───────────────────────────────────────────────────
 
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                CHANNEL_ID,
-                "OxClient VPN",
-                NotificationManager.IMPORTANCE_LOW
+                CHANNEL_ID, "OxClient", NotificationManager.IMPORTANCE_LOW
             );
             getSystemService(NotificationManager.class).createNotificationChannel(ch);
         }
@@ -234,7 +160,6 @@ public class OxVpnService extends VpnService {
             new Intent(this, DashboardActivity.class),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
-
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_ox_logo)
             .setContentTitle("OxClient")
