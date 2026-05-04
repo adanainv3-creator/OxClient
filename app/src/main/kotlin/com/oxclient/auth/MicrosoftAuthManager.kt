@@ -19,15 +19,13 @@ import java.util.concurrent.TimeUnit
 object MicrosoftAuthManager {
 
     private const val TAG = "MicrosoftAuth"
-
     private const val CLIENT_ID = "0000000048183522"
     private const val SCOPE     = "service::user.auth.xboxlive.com::MBI_SSL"
 
     private const val DEVICE_CODE_URL = "https://login.live.com/oauth20_connect.srf"
     private const val TOKEN_URL       = "https://login.live.com/oauth20_token.srf"
     private const val XBL_URL         = "https://user.auth.xboxlive.com/user/authenticate"
-    private const val XSTS_MC_URL     = "https://xsts.auth.xboxlive.com/xsts/authorize"
-    private const val XSTS_XBX_URL    = "https://xsts.auth.xboxlive.com/xsts/authorize"
+    private const val XSTS_URL        = "https://xsts.auth.xboxlive.com/xsts/authorize"
     private const val MC_BEDROCK_URL  = "https://multiplayer.minecraft.net/authentication"
     private const val PROFILE_URL     = "https://profile.xboxlive.com/users/me/profile/settings?settings=Gamertag"
 
@@ -47,8 +45,6 @@ object MicrosoftAuthManager {
     private var activeJob: Job? = null
     private var initialized = false
 
-    // ── Init ──────────────────────────────────────────────────────────────
-
     fun init(context: Context) {
         if (initialized) return
         initialized = true
@@ -59,12 +55,9 @@ object MicrosoftAuthManager {
         }
     }
 
-    // ── Public API ────────────────────────────────────────────────────────
-
     fun startSignIn() {
         if (_authState.value is AuthState.Loading ||
             _authState.value is AuthState.WaitingForUser) return
-
         _authState.value = AuthState.Loading
         activeJob = coroutineScope.launch {
             runCatching { doSignInFlow() }
@@ -91,10 +84,7 @@ object MicrosoftAuthManager {
         _authState.value = AuthState.Idle
     }
 
-    // ── Auth Flow ─────────────────────────────────────────────────────────
-
     private suspend fun doSignInFlow() {
-
         // 1. Device code
         val deviceResp = postForm(DEVICE_CODE_URL, mapOf(
             "client_id"     to CLIENT_ID,
@@ -106,32 +96,28 @@ object MicrosoftAuthManager {
         val verificationUri = deviceResp.str("verification_uri")
         val intervalMs      = ((deviceResp["interval"] as? Double)?.toLong() ?: 5L) * 1000L
 
-        // 2. UI'ya bildir
+        // 2. UI bildir
         _authState.value = AuthState.WaitingForUser(userCode, verificationUri)
 
-        // 3. Token poll
+        // 3. Poll token
         val tokenResp    = pollForToken(deviceCode, intervalMs)
         val accessToken  = tokenResp.str("access_token")
         val refreshToken = tokenResp["refresh_token"] as? String ?: ""
         currentCoroutineContext().ensureActive()
 
-        // 4. Xbox Live token
-        val xblResp = fetchXblToken(accessToken)
-        val xblToken    = xblResp.first
-        val xblGamertag = xblResp.second   // boş olabilir
+        // 4. XBL
+        val (xblToken, xblGamertag) = fetchXblToken(accessToken)
         currentCoroutineContext().ensureActive()
 
-        // 5. XSTS — Minecraft için
-        val xstsMcResp = fetchXsts(xblToken, "https://multiplayer.minecraft.net/")
-        val xstsMcToken  = xstsMcResp.first
-        val xstsMcUhs    = xstsMcResp.second
+        // 5. XSTS Minecraft
+        val (xstsMcToken, xstsMcUhs) = fetchXsts(xblToken, "https://multiplayer.minecraft.net/")
         currentCoroutineContext().ensureActive()
 
-        // 6. Minecraft Bedrock token (EC key pair ile)
+        // 6. Minecraft Bedrock token
         val mcToken = fetchMinecraftToken(xstsMcToken, xstsMcUhs)
         currentCoroutineContext().ensureActive()
 
-        // 7. Gamertag — 3 kaynaktan sırayla dene
+        // 7. Gamertag
         val gamertag = resolveGamertag(xblToken, xblGamertag, accessToken)
 
         // 8. Kaydet
@@ -149,23 +135,16 @@ object MicrosoftAuthManager {
         }
     }
 
-    // ── Gamertag çözümleme ────────────────────────────────────────────────
-
     private fun resolveGamertag(xblToken: String, xblGamertag: String, accessToken: String): String {
-
-        // Kaynak 1: XBL DisplayClaims → gtg
+        // Kaynak 1: XBL gtg
         if (xblGamertag.isNotBlank()) {
-            Log.d(TAG, "Gamertag kaynağı: XBL gtg = $xblGamertag")
+            Log.d(TAG, "Gamertag <- XBL gtg: $xblGamertag")
             return xblGamertag
         }
 
-        // Kaynak 2: Xbox XSTS (http://xboxlive.com) DisplayClaims → gtg
+        // Kaynak 2: Xbox Profile API (xboxlive.com XSTS ile)
         try {
-            val xboxXsts = fetchXsts(xblToken, "http://xboxlive.com")
-            val xboxToken = xboxXsts.first
-            val xboxUhs   = xboxXsts.second
-
-            // Profile API
+            val (xboxToken, xboxUhs) = fetchXsts(xblToken, "http://xboxlive.com")
             val profileReq = Request.Builder()
                 .url(PROFILE_URL)
                 .header("Authorization",          "XBL3.0 x=$xboxUhs;$xboxToken")
@@ -173,11 +152,10 @@ object MicrosoftAuthManager {
                 .header("Accept",                 "application/json")
                 .build()
             val profileText = http.newCall(profileReq).execute().body?.string() ?: ""
-            Log.d(TAG, "Profile API yanıtı: $profileText")
+            Log.d(TAG, "Profile API: $profileText")
 
             if (profileText.isNotBlank()) {
                 val root = JSONObject(profileText)
-                // profileUsers.users[0].settings[id=Gamertag].value
                 val usersArr = when {
                     root.has("profileUsers") ->
                         root.getJSONObject("profileUsers").getJSONArray("users")
@@ -190,47 +168,51 @@ object MicrosoftAuthManager {
                         val s = settings.getJSONObject(i)
                         if (s.optString("id") == "Gamertag") {
                             val gt = s.getString("value")
-                            Log.d(TAG, "Gamertag kaynağı: Profile API = $gt")
+                            Log.d(TAG, "Gamertag <- Profile API: $gt")
+                            return gt
+                        }
+                    }
+                    // id yoksa ilk value'yu al
+                    if (settings.length() > 0) {
+                        val gt = settings.getJSONObject(0).optString("value")
+                        if (gt.isNotBlank()) {
+                            Log.d(TAG, "Gamertag <- Profile API (ilk value): $gt")
                             return gt
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Xbox Profile API başarısız: ${e.message}")
+            Log.w(TAG, "Profile API hatası: ${e.message}")
         }
 
-        // Kaynak 3: Microsoft access token JWT payload → unique_name
+        // Kaynak 3: JWT payload
         try {
             val parts = accessToken.split(".")
             if (parts.size >= 2) {
-                val padded = parts[1].let {
-                    it + "=".repeat((4 - it.length % 4) % 4)
-                }
+                val padded = parts[1] + "=".repeat((4 - parts[1].length % 4) % 4)
                 val payload = String(
                     Base64.decode(padded.replace('-', '+').replace('_', '/'), Base64.DEFAULT),
                     Charsets.UTF_8
                 )
                 Log.d(TAG, "JWT payload: $payload")
                 val obj = JSONObject(payload)
-                val raw = listOf("unique_name", "preferred_username", "email", "name")
-                    .mapNotNull { obj.optString(it).takeIf { v -> v.isNotBlank() } }
-                    .firstOrNull()
-                if (raw != null) {
-                    val gt = raw.substringBefore("@")
-                    Log.d(TAG, "Gamertag kaynağı: JWT = $gt")
-                    return gt
+                for (field in listOf("unique_name", "preferred_username", "email", "name")) {
+                    val raw = obj.optString(field)
+                    if (raw.isNotBlank()) {
+                        val gt = raw.substringBefore("@")
+                        Log.d(TAG, "Gamertag <- JWT $field: $gt")
+                        return gt
+                    }
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "JWT parse hatası: ${e.message}")
         }
 
-        Log.w(TAG, "Gamertag bulunamadı, fallback: Oyuncu")
+        Log.w(TAG, "Gamertag bulunamadı, fallback kullanılıyor")
         return "Oyuncu"
     }
-
-    // ── Poll ──────────────────────────────────────────────────────────────
 
     private suspend fun pollForToken(deviceCode: String, intervalMs: Long): Map<String, Any?> {
         val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS
@@ -239,7 +221,7 @@ object MicrosoftAuthManager {
             delay(intervalMs.coerceAtLeast(MIN_INTERVAL_MS))
             currentCoroutineContext().ensureActive()
 
-            val resp  = postForm(TOKEN_URL, mapOf(
+            val resp = postForm(TOKEN_URL, mapOf(
                 "client_id"   to CLIENT_ID,
                 "grant_type"  to "urn:ietf:params:oauth:grant-type:device_code",
                 "device_code" to deviceCode
@@ -251,75 +233,49 @@ object MicrosoftAuthManager {
                 else -> error("Token hatası: $error — ${resp["error_description"]}")
             }
         }
-        error("Giriş zaman aşımı — lütfen tekrar deneyin")
+        error("Giriş zaman aşımı")
     }
-
-    // ── Xbox / XSTS ───────────────────────────────────────────────────────
 
     /** Returns Pair(xblToken, gamertag_or_empty) */
     private fun fetchXblToken(msAccessToken: String): Pair<String, String> {
-        val body = """
-            {
-              "Properties": {
-                "AuthMethod": "RPS",
-                "SiteName"  : "user.auth.xboxlive.com",
-                "RpsTicket" : "$msAccessToken"
-              },
-              "RelyingParty": "http://auth.xboxlive.com",
-              "TokenType"   : "JWT"
-            }
-        """.trimIndent()
+        // "d=" prefix zorunlu — bu olmadan XBL gtg (gamertag) claim'ini döndürmüyor
+        val body = """{"Properties":{"AuthMethod":"RPS","SiteName":"user.auth.xboxlive.com","RpsTicket":"d=$msAccessToken"},"RelyingParty":"http://auth.xboxlive.com","TokenType":"JWT"}"""
         val resp = postJson(XBL_URL, body)
         val token = resp.str("Token")
-
         @Suppress("UNCHECKED_CAST")
-        val xui = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<Map<String, Any?>>)
-            ?.firstOrNull()
+        val xui = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<Map<String, Any?>>)?.firstOrNull()
         val gamertag = xui?.get("gtg") as? String ?: ""
-        Log.d(TAG, "XBL xui=$xui  gamertag='$gamertag'")
+        Log.d(TAG, "XBL xui=$xui gamertag='$gamertag'")
         return token to gamertag
     }
 
-    /** Generic XSTS fetcher — returns Pair(token, uhs) */
+    /** Returns Pair(xstsToken, uhs) */
     private fun fetchXsts(xblToken: String, relyingParty: String): Pair<String, String> {
-        val body = """
-            {
-              "Properties": {
-                "SandboxId" : "RETAIL",
-                "UserTokens": ["$xblToken"]
-              },
-              "RelyingParty": "$relyingParty",
-              "TokenType"   : "JWT"
-            }
-        """.trimIndent()
-        val resp = postJson(XSTS_MC_URL, body)
+        val body = """{"Properties":{"SandboxId":"RETAIL","UserTokens":["$xblToken"]},"RelyingParty":"$relyingParty","TokenType":"JWT"}"""
+        val resp = postJson(XSTS_URL, body)
 
         if (resp.containsKey("XErr")) {
             val xerr = (resp["XErr"] as? Double)?.toLong()
-            val msg = when (xerr) {
+            error(when (xerr) {
                 2148916233L -> "Xbox hesabı yok. Xbox.com'dan oluşturun."
                 2148916238L -> "Çocuk hesabı — ebeveyn onayı gerekli."
                 else        -> "XSTS hatası: $xerr"
-            }
-            error(msg)
+            })
         }
 
         val token = resp.str("Token")
         @Suppress("UNCHECKED_CAST")
-        val xui   = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<Map<String, Any?>>)
+        val xui = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<Map<String, Any?>>)
             ?.firstOrNull() ?: error("XSTS xui yok")
-        val uhs   = xui["uhs"] as? String ?: error("XSTS uhs yok")
+        val uhs = xui["uhs"] as? String ?: error("XSTS uhs yok")
         return token to uhs
     }
 
-    // ── Minecraft token ───────────────────────────────────────────────────
-
     private fun fetchMinecraftToken(xstsToken: String, userHash: String): String {
-        // EC P-256 key pair oluştur — Bedrock auth zorunlu kılıyor
-        val keyPairGen = KeyPairGenerator.getInstance("EC")
-        keyPairGen.initialize(ECGenParameterSpec("secp256r1"))
-        val keyPair = keyPairGen.generateKeyPair()
-        val publicKeyB64 = Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP)
+        // EC P-256 key pair — Bedrock auth zorunlu kılıyor
+        val kpg = KeyPairGenerator.getInstance("EC")
+        kpg.initialize(ECGenParameterSpec("secp256r1"))
+        val publicKeyB64 = Base64.encodeToString(kpg.generateKeyPair().public.encoded, Base64.NO_WRAP)
 
         val bodyStr = """{"identityPublicKey":"$publicKeyB64"}"""
         val req = Request.Builder()
@@ -333,18 +289,15 @@ object MicrosoftAuthManager {
             .build()
 
         val text = http.newCall(req).execute().body?.string() ?: error("MC token yanıtı boş")
-        Log.d(TAG, "MC Bedrock yanıtı: ${text.take(200)}")
+        Log.d(TAG, "MC Bedrock yanıtı: ${text.take(300)}")
         val json = parseJson(text)
 
-        // Bedrock → {"chain": ["jwt1", "jwt2"]}
         @Suppress("UNCHECKED_CAST")
         val chain = json["chain"] as? List<*>
         if (!chain.isNullOrEmpty()) return gson.toJson(chain)
 
         return json["token"] as? String ?: error("MC token alınamadı: $text")
     }
-
-    // ── HTTP yardımcıları ─────────────────────────────────────────────────
 
     private fun postForm(url: String, params: Map<String, String>): Map<String, Any?> {
         val body = FormBody.Builder().apply { params.forEach { (k, v) -> add(k, v) } }.build()
@@ -354,8 +307,8 @@ object MicrosoftAuthManager {
     }
 
     private fun postJson(url: String, json: String): Map<String, Any?> {
-        val body = json.toRequestBody("application/json".toMediaType())
-        val req  = Request.Builder().url(url).post(body)
+        val req = Request.Builder().url(url)
+            .post(json.toRequestBody("application/json".toMediaType()))
             .header("Content-Type", "application/json")
             .header("Accept",       "application/json")
             .build()
