@@ -575,7 +575,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private fun ModuleCard(module: BaseModule) {
         var enabled by remember { mutableStateOf(module.isEnabled) }
         var expanded by remember { mutableStateOf(false) }
-        val settings = remember { module.settings }
+        val settings = module.settings
 
         LaunchedEffect(module) {
             module.enabledFlow.collect { enabled = it }
@@ -632,10 +632,12 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     if (settings.isNotEmpty()) {
                         Text(
                             text = if (expanded) "▲" else "▼",
-                            fontSize = 10.sp,
+                            fontSize = 12.sp,
                             color = OxPurpleLight,
                             fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.clickable { expanded = !expanded }
+                            modifier = Modifier
+                                .clickable { expanded = !expanded }
+                                .padding(4.dp)
                         )
                     }
                     Switch(
