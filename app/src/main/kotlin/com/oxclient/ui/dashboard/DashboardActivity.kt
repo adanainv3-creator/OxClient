@@ -251,24 +251,9 @@ fun DashboardScreen(
                         onDisconnect()
                         proxyRunning = false
                     } else {
-                        try {
-                            // VPN ön hazırlığını kontrol et
-                            val pi = VpnService.prepare(this@DashboardActivity)
-                            if (pi != null) {
-                                // Kullanıcıdan izin iste
-                                pendingPackage = selectedApp.first
-                                vpnLauncher.launch(pi)
-                            } else {
-                                // İzin zaten verilmiş, direkt başlat
-                                pendingPackage = selectedApp.first
-                                launchProxy(pendingPackage)
-                                proxyRunning = true
-                            }
-                        } catch (e: Exception) {
-                            Log.e("Dashboard", "VPN başlatma hatası", e)
-                            // Kullanıcıya hata göster
-                            // Toast.makeText(this, "VPN başlatılamadı: ${e.message}", Toast.LENGTH_LONG).show()
-                        }
+                        // VPN mantığı Activity'de (onConnect), burada sadece callback tetiklenir
+                        onConnect(selectedApp.first)
+                        proxyRunning = true
                     }
                 }
             )
