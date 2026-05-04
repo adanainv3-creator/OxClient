@@ -130,12 +130,18 @@ object MicrosoftAuthManager {
         val xstsGamertag = xstsMcResp.third
         currentCoroutineContext().ensureActive()
 
-        // 6. Minecraft Bedrock token (EC key pair ile)
-        val mcToken = fetchMinecraftToken(xstsMcToken, xstsMcUhs)
+        // 6. Minecraft Bedrock token (EC key pair ile) — gamertag chain içinden gelir
+        val (mcToken, chainGamertag) = fetchMinecraftToken(xstsMcToken, xstsMcUhs)
         currentCoroutineContext().ensureActive()
 
-        // 7. Gamertag — tüm kaynaklardan dene
-        val gamertag = resolveGamertag(xblToken, xblGamertag, xstsGamertag, accessToken)
+        // 7. Gamertag — önce chain'den, sonra diğer kaynaklar
+        val gamertag = when {
+            chainGamertag.isNotBlank() -> {
+                Log.d(TAG, "✓ Gamertag kaynağı: MC chain = $chainGamertag")
+                chainGamertag
+            }
+            else -> resolveGamertag(xblToken, xblGamertag, xstsGamertag, accessToken)
+        }
 
         Log.d(TAG, "SON GAMERTAG: $gamertag")
 
@@ -398,7 +404,8 @@ object MicrosoftAuthManager {
 
     // ── Minecraft token ───────────────────────────────────────────────────
 
-    private fun fetchMinecraftToken(xstsToken: String, userHash: String): String {
+    // Returns Pair(mcToken, gamertag_or_empty)
+    private fun fetchMinecraftToken(xstsToken: String, userHash: String): Pair<String, String> {
         val keyPairGen = KeyPairGenerator.getInstance("EC")
         keyPairGen.initialize(ECGenParameterSpec("secp256r1"))
         val keyPair = keyPairGen.generateKeyPair()
@@ -416,14 +423,53 @@ object MicrosoftAuthManager {
             .build()
 
         val text = http.newCall(req).execute().body?.string() ?: error("MC token yanıtı boş")
-        Log.d(TAG, "MC Bedrock yanıtı: ${text.take(200)}")
         val json = parseJson(text)
 
         @Suppress("UNCHECKED_CAST")
         val chain = json["chain"] as? List<*>
-        if (!chain.isNullOrEmpty()) return gson.toJson(chain)
+        if (!chain.isNullOrEmpty()) {
+            val mcToken = gson.toJson(chain)
+            // chain[1] genellikle Mojang'ın imzaladığı JWT — extraData.displayName içerir
+            val gamertag = extractGamertagFromChain(chain)
+            Log.d(TAG, "MC chain gamertag: '$gamertag'")
+            return mcToken to gamertag
+        }
 
-        return json["token"] as? String ?: error("MC token alınamadı: $text")
+        val token = json["token"] as? String ?: error("MC token alınamadı: $text")
+        return token to ""
+    }
+
+    private fun extractGamertagFromChain(chain: List<*>): String {
+        // Her JWT'yi dene — hangisinde extraData.displayName varsa al
+        for (jwt in chain) {
+            try {
+                val parts = (jwt as? String)?.split(".") ?: continue
+                if (parts.size < 2) continue
+                val padded = parts[1] + "=".repeat((4 - parts[1].length % 4) % 4)
+                val payload = String(
+                    Base64.decode(padded.replace('-', '+').replace('_', '/'), Base64.DEFAULT),
+                    Charsets.UTF_8
+                )
+                Log.d(TAG, "Chain JWT payload: $payload")
+                val obj = JSONObject(payload)
+
+                // Mojang JWT: extraData.displayName
+                if (obj.has("extraData")) {
+                    val displayName = obj.getJSONObject("extraData").optString("displayName")
+                    if (displayName.isNotBlank()) return displayName
+                }
+
+                // Alternatif alanlar
+                val direct = obj.optString("displayName").takeIf { it.isNotBlank() }
+                    ?: obj.optString("username").takeIf { it.isNotBlank() }
+                    ?: obj.optString("name").takeIf { it.isNotBlank() }
+                if (direct != null) return direct
+
+            } catch (e: Exception) {
+                Log.w(TAG, "Chain JWT parse hatası: ${e.message}")
+            }
+        }
+        return ""
     }
 
     // ── HTTP yardımcıları ─────────────────────────────────────────────────
