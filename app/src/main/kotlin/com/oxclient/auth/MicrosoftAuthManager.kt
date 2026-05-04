@@ -118,21 +118,26 @@ object MicrosoftAuthManager {
         // 4. Xbox Live token
         val xblResp = fetchXblToken(accessToken)
         val xblToken    = xblResp.first
-        val xblGamertag = xblResp.second   // boş olabilir
+        val xblGamertag = xblResp.second
         currentCoroutineContext().ensureActive()
 
         // 5. XSTS — Minecraft için
         val xstsMcResp = fetchXsts(xblToken, "https://multiplayer.minecraft.net/")
         val xstsMcToken  = xstsMcResp.first
         val xstsMcUhs    = xstsMcResp.second
+        
+        // XSTS'den gelen gamertag'i de al
+        val xstsGamertag = xstsMcResp.third
         currentCoroutineContext().ensureActive()
 
         // 6. Minecraft Bedrock token (EC key pair ile)
         val mcToken = fetchMinecraftToken(xstsMcToken, xstsMcUhs)
         currentCoroutineContext().ensureActive()
 
-        // 7. Gamertag — 3 kaynaktan sırayla dene
-        val gamertag = resolveGamertag(xblToken, xblGamertag, accessToken)
+        // 7. Gamertag — tüm kaynaklardan dene
+        val gamertag = resolveGamertag(xblToken, xblGamertag, xstsGamertag, accessToken)
+
+        Log.d(TAG, "SON GAMERTAG: $gamertag")
 
         // 8. Kaydet
         val account = SavedAccount(
@@ -151,15 +156,29 @@ object MicrosoftAuthManager {
 
     // ── Gamertag çözümleme ────────────────────────────────────────────────
 
-    private fun resolveGamertag(xblToken: String, xblGamertag: String, accessToken: String): String {
+    private fun resolveGamertag(
+        xblToken: String, 
+        xblGamertag: String, 
+        xstsGamertag: String,
+        accessToken: String
+    ): String {
+        Log.d(TAG, "=== GAMERTAG ÇÖZÜMLEME BAŞLADI ===")
+        Log.d(TAG, "xblGamertag: '$xblGamertag'")
+        Log.d(TAG, "xstsGamertag: '$xstsGamertag'")
 
-        // Kaynak 1: XBL DisplayClaims → gtg
+        // Kaynak 1: XSTS'den gelen gamertag (en güvenilir)
+        if (xstsGamertag.isNotBlank()) {
+            Log.d(TAG, "✓ Gamertag kaynağı: XSTS = $xstsGamertag")
+            return xstsGamertag
+        }
+
+        // Kaynak 2: XBL DisplayClaims → gtg
         if (xblGamertag.isNotBlank()) {
-            Log.d(TAG, "Gamertag kaynağı: XBL gtg = $xblGamertag")
+            Log.d(TAG, "✓ Gamertag kaynağı: XBL gtg = $xblGamertag")
             return xblGamertag
         }
 
-        // Kaynak 2: Xbox XSTS (http://xboxlive.com) DisplayClaims → gtg
+        // Kaynak 3: Xbox Profile API
         try {
             val xboxXsts = fetchXsts(xblToken, "http://xboxlive.com")
             val xboxToken = xboxXsts.first
@@ -173,11 +192,10 @@ object MicrosoftAuthManager {
                 .header("Accept",                 "application/json")
                 .build()
             val profileText = http.newCall(profileReq).execute().body?.string() ?: ""
-            Log.d(TAG, "Profile API yanıtı: $profileText")
+            Log.d(TAG, "Profile API yanıtı: ${profileText.take(500)}")
 
             if (profileText.isNotBlank()) {
                 val root = JSONObject(profileText)
-                // profileUsers.users[0].settings[id=Gamertag].value
                 val usersArr = when {
                     root.has("profileUsers") ->
                         root.getJSONObject("profileUsers").getJSONArray("users")
@@ -190,7 +208,7 @@ object MicrosoftAuthManager {
                         val s = settings.getJSONObject(i)
                         if (s.optString("id") == "Gamertag") {
                             val gt = s.getString("value")
-                            Log.d(TAG, "Gamertag kaynağı: Profile API = $gt")
+                            Log.d(TAG, "✓ Gamertag kaynağı: Profile API = $gt")
                             return gt
                         }
                     }
@@ -200,7 +218,7 @@ object MicrosoftAuthManager {
             Log.w(TAG, "Xbox Profile API başarısız: ${e.message}")
         }
 
-        // Kaynak 3: Microsoft access token JWT payload → unique_name
+        // Kaynak 4: Microsoft access token JWT payload
         try {
             val parts = accessToken.split(".")
             if (parts.size >= 2) {
@@ -211,23 +229,64 @@ object MicrosoftAuthManager {
                     Base64.decode(padded.replace('-', '+').replace('_', '/'), Base64.DEFAULT),
                     Charsets.UTF_8
                 )
-                Log.d(TAG, "JWT payload: $payload")
+                Log.d(TAG, "JWT payload: ${payload.take(500)}")
                 val obj = JSONObject(payload)
-                val raw = listOf("unique_name", "preferred_username", "email", "name")
-                    .mapNotNull { obj.optString(it).takeIf { v -> v.isNotBlank() } }
-                    .firstOrNull()
+                
+                // Tüm olası isim alanlarını dene
+                val raw = listOf(
+                    "unique_name", 
+                    "preferred_username", 
+                    "email", 
+                    "name",
+                    "upn",
+                    "given_name"
+                ).mapNotNull { 
+                    val value = obj.optString(it, "")
+                    if (value.isNotBlank()) {
+                        Log.d(TAG, "JWT alanı '$it': $value")
+                        value
+                    } else null
+                }.firstOrNull()
+                
                 if (raw != null) {
-                    val gt = raw.substringBefore("@")
-                    Log.d(TAG, "Gamertag kaynağı: JWT = $gt")
-                    return gt
+                    val gt = raw.substringBefore("@").trim()
+                    if (gt.isNotBlank() && gt.length >= 3) {
+                        Log.d(TAG, "✓ Gamertag kaynağı: JWT = $gt")
+                        return gt
+                    }
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "JWT parse hatası: ${e.message}")
         }
 
-        Log.w(TAG, "Gamertag bulunamadı, fallback: Oyuncu")
-        return "Oyuncu"
+        // Kaynak 5: Son çare - email'den kullanıcı adı çıkar
+        try {
+            val parts = accessToken.split(".")
+            if (parts.size >= 2) {
+                val padded = parts[1].let {
+                    it + "=".repeat((4 - it.length % 4) % 4)
+                }
+                val payload = String(
+                    Base64.decode(padded.replace('-', '+').replace('_', '/'), Base64.DEFAULT),
+                    Charsets.UTF_8
+                )
+                val obj = JSONObject(payload)
+                val email = obj.optString("email", "")
+                if (email.isNotBlank() && email.contains("@")) {
+                    val username = email.substringBefore("@").trim()
+                    if (username.length >= 3) {
+                        Log.d(TAG, "✓ Gamertag kaynağı: Email kullanıcı adı = $username")
+                        return username
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Email çıkarma hatası: ${e.message}")
+        }
+
+        Log.w(TAG, "✗ Hiçbir kaynaktan gamertag alınamadı!")
+        return "Oyuncu${(1000..9999).random()}" // En azından rastgele bir isim ver
     }
 
     // ── Poll ──────────────────────────────────────────────────────────────
@@ -273,15 +332,26 @@ object MicrosoftAuthManager {
         val token = resp.str("Token")
 
         @Suppress("UNCHECKED_CAST")
-        val xui = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<Map<String, Any?>>)
-            ?.firstOrNull()
-        val gamertag = xui?.get("gtg") as? String ?: ""
-        Log.d(TAG, "XBL xui=$xui  gamertag='$gamertag'")
+        val displayClaims = resp["DisplayClaims"] as? Map<*, *>
+        val xui = (displayClaims?.get("xui") as? List<Map<String, Any?>>)?.firstOrNull()
+        
+        Log.d(TAG, "XBL XUI tüm anahtarlar: ${xui?.keys}")
+        Log.d(TAG, "XBL XUI tüm değerler: $xui")
+        
+        // Tüm olası gamertag anahtarlarını dene
+        val gamertag = (xui?.get("gtg") as? String) 
+            ?: (xui?.get("Gamertag") as? String)
+            ?: (xui?.get("gamertag") as? String)
+            ?: (xui?.get("agg") as? String)
+            ?: (xui?.get("uhs") as? String)
+            ?: ""
+            
+        Log.d(TAG, "XBL gamertag: '$gamertag'")
         return token to gamertag
     }
 
-    /** Generic XSTS fetcher — returns Pair(token, uhs) */
-    private fun fetchXsts(xblToken: String, relyingParty: String): Pair<String, String> {
+    /** Generic XSTS fetcher — returns Triple(token, uhs, gamertag) */
+    private fun fetchXsts(xblToken: String, relyingParty: String): Triple<String, String, String> {
         val body = """
             {
               "Properties": {
@@ -305,17 +375,30 @@ object MicrosoftAuthManager {
         }
 
         val token = resp.str("Token")
+        
         @Suppress("UNCHECKED_CAST")
-        val xui   = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<Map<String, Any?>>)
-            ?.firstOrNull() ?: error("XSTS xui yok")
-        val uhs   = xui["uhs"] as? String ?: error("XSTS uhs yok")
-        return token to uhs
+        val displayClaims = resp["DisplayClaims"] as? Map<*, *>
+        val xui = (displayClaims?.get("xui") as? List<Map<String, Any?>>)?.firstOrNull() 
+            ?: error("XSTS xui yok")
+        
+        val uhs = xui["uhs"] as? String ?: error("XSTS uhs yok")
+        
+        // XSTS'den gamertag almayı dene
+        val gamertag = (xui["gtg"] as? String) 
+            ?: (xui["Gamertag"] as? String)
+            ?: (xui["gamertag"] as? String)
+            ?: ""
+            
+        Log.d(TAG, "XSTS XUI anahtarlar: ${xui.keys}")
+        Log.d(TAG, "XSTS XUI değerler: $xui")
+        Log.d(TAG, "XSTS gamertag: '$gamertag'")
+        
+        return Triple(token, uhs, gamertag)
     }
 
     // ── Minecraft token ───────────────────────────────────────────────────
 
     private fun fetchMinecraftToken(xstsToken: String, userHash: String): String {
-        // EC P-256 key pair oluştur — Bedrock auth zorunlu kılıyor
         val keyPairGen = KeyPairGenerator.getInstance("EC")
         keyPairGen.initialize(ECGenParameterSpec("secp256r1"))
         val keyPair = keyPairGen.generateKeyPair()
@@ -336,7 +419,6 @@ object MicrosoftAuthManager {
         Log.d(TAG, "MC Bedrock yanıtı: ${text.take(200)}")
         val json = parseJson(text)
 
-        // Bedrock → {"chain": ["jwt1", "jwt2"]}
         @Suppress("UNCHECKED_CAST")
         val chain = json["chain"] as? List<*>
         if (!chain.isNullOrEmpty()) return gson.toJson(chain)
