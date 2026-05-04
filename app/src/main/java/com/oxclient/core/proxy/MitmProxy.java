@@ -142,26 +142,36 @@ public class MitmProxy {
     }
 
     /**
-     * FIX 1: VPN routing loop koruması.
+     * VPN routing loop koruması.
      *
-     * Önceki kod reflection ile javaChannel() çağırıyordu.
-     * NioDatagramChannel.javaChannel() protected olduğundan NoSuchMethodException
-     * fırlatıyordu; catch bloğu sessizce geçiyor, clientChannel korunmadan
-     * kalıyordu. Korunmayan socket TUN'a düşünce döngü oluşuyor ve
-     * sunucuya hiç paket ulaşmıyordu.
+     * javaChannel() Netty'de protected — doğrudan çağrılamaz, basit reflection da
+     * çalışmaz (declared method arama gerekir). Çözüm: AbstractNioChannel'ın
+     * private "ch" field'ına reflection ile erişip SelectableChannel → DatagramSocket
+     * üzerinden VpnService.protect() çağırmak.
      *
-     * Düzeltme: NioDatagramChannel'a doğrudan cast → javaChannel() çağrısı.
+     * Bu olmadan clientChannel'ın soketi VPN tünelinden geçer → routing loop →
+     * sunucuya hiç paket ulaşmaz → "internet yok" görünür.
      */
     private void protectFromVpn() {
         if (vpnService == null || clientChannel == null) return;
         try {
-            NioDatagramChannel ndc = (NioDatagramChannel) clientChannel;
-            java.nio.channels.DatagramChannel javaCh = ndc.javaChannel();
+            // AbstractNioChannel.ch field'ı (SelectableChannel) — tüm Netty sürümlerinde var
+            java.lang.reflect.Field chField =
+                io.netty.channel.nio.AbstractNioChannel.class.getDeclaredField("ch");
+            chField.setAccessible(true);
+            java.nio.channels.SelectableChannel selectableCh =
+                (java.nio.channels.SelectableChannel) chField.get(clientChannel);
+
+            java.nio.channels.DatagramChannel javaCh =
+                (java.nio.channels.DatagramChannel) selectableCh;
+
             boolean ok = vpnService.protect(javaCh.socket());
             Log.i(TAG, "VPN protect: " + (ok ? "✅ başarılı" : "❌ başarısız — routing loop riski!"));
             if (!ok) {
-                Log.e(TAG, "VPN protect başarısız! clientChannel korunmasız. Bağlantı çalışmayabilir.");
+                Log.e(TAG, "VPN protect başarısız! Bağlantı çalışmayabilir.");
             }
+        } catch (NoSuchFieldException e) {
+            Log.e(TAG, "VPN protect: 'ch' field bulunamadı — " + e.getMessage());
         } catch (Exception e) {
             Log.e(TAG, "VPN protect exception: " + e.getMessage(), e);
         }
