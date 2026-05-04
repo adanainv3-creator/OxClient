@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -558,11 +559,14 @@ private fun TopBar(
     authState     : AuthState,
     onAvatarClick : () -> Unit
 ) {
+    val isLoggedIn = authState is AuthState.Success
+
     Row(
         modifier              = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment     = Alignment.CenterVertically
     ) {
+        // Sol: uygulama adı
         Text(
             "OxClient",
             fontSize   = 22.sp,
@@ -570,24 +574,44 @@ private fun TopBar(
             color      = OxOnBackground,
             fontFamily = FontFamily.Monospace
         )
-        val isLoggedIn = authState is AuthState.Success
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(if (isLoggedIn) OxPurple.copy(0.3f) else OxSurface)
-                .border(1.dp, if (isLoggedIn) OxPurple else OxOutline, CircleShape)
-                .clickable { onAvatarClick() },
-            contentAlignment = Alignment.Center
+
+        // Sağ: gamertag + avatar dairesi
+        Row(
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                if (isLoggedIn) (authState as AuthState.Success)
-                    .gamertag.firstOrNull()?.uppercase() ?: "?" else "?",
-                fontSize   = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color      = if (isLoggedIn) OxPurpleLight else OxOnSurface.copy(0.5f),
-                fontFamily = FontFamily.Monospace
-            )
+            // Gamertag — sadece giriş yapıldığında göster
+            if (isLoggedIn) {
+                Text(
+                    text     = (authState as AuthState.Success).gamertag,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color    = OxPurpleLight,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // Avatar dairesi
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(if (isLoggedIn) OxPurple.copy(0.3f) else OxSurface)
+                    .border(1.dp, if (isLoggedIn) OxPurple else OxOutline, CircleShape)
+                    .clickable { onAvatarClick() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (isLoggedIn) (authState as AuthState.Success)
+                        .gamertag.firstOrNull()?.uppercase() ?: "?" else "?",
+                    fontSize   = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color      = if (isLoggedIn) OxPurpleLight else OxOnSurface.copy(0.5f),
+                    fontFamily = FontFamily.Monospace
+                )
+            }
         }
     }
 }
