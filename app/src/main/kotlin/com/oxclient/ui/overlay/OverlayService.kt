@@ -135,6 +135,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
@@ -380,10 +381,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
                 .border(2.dp, OxPurpleLight.copy(alpha = 0.7f), CircleShape)
                 .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onClick() }
+                    )
+                }
+                .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { totalDist = 0f },
                         onDragEnd = {
-                            // Çok az hareket = tıklama → menüyü aç
                             if (totalDist < 15f) {
                                 onClick()
                             }
@@ -391,7 +396,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                         onDrag = { change, offset ->
                             change.consume()
                             totalDist += abs(offset.x) + abs(offset.y)
-                            // Sürükleme eşiği aşılınca taşı (px cinsinden)
                             if (totalDist > 15f) {
                                 onDrag(offset.x, offset.y)
                             }
