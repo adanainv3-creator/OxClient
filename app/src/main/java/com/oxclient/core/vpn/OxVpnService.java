@@ -27,6 +27,13 @@ import java.nio.ByteBuffer;
 
 /**
  * OxVpnService — Minecraft Bedrock UDP trafiğini yakalar ve MITM proxy'ye yönlendirir.
+ *
+ * FIX 1: isMcUdp() artık tüm UDP paketlerini yakalar (sadece dst port değil).
+ *         Sunucudan gelen cevaplar farklı dst port kullandığı için önceki filtre
+ *         S2C trafiğini tamamen kaçırıyordu.
+ *
+ * FIX 2: tunnelLoop() artık proxy'den gelen yanıtları TUN'a geri yazıyor.
+ *         Proxy→Game yönü için writeBack() callback mekanizması eklendi.
  */
 public class OxVpnService extends VpnService {
     private static final String TAG          = "OxVpnService";
@@ -35,14 +42,18 @@ public class OxVpnService extends VpnService {
     public  static final String ACTION_START = "com.oxclient.START_VPN";
     public  static final String ACTION_STOP  = "com.oxclient.STOP_VPN";
 
-    private static final int TUN_MTU   = 1500;
-    private static final int MC_PORT   = BuildConfig.SERVER_PORT;
+    private static final int TUN_MTU    = 1500;
+    private static final int MC_PORT    = BuildConfig.SERVER_PORT;
     private static final int PROXY_PORT = BuildConfig.LOCAL_PROXY_PORT;
 
     private ParcelFileDescriptor tunFd;
     private MitmProxy            proxy;
     private Thread               tunnelThread;
     private volatile boolean     running = false;
+
+    // FileOutputStream'e thread-safe erişim için referans tutuyoruz
+    // Proxy → Game yönü için MitmProxy bu callback'i kullanacak
+    private volatile FileOutputStream tunOut;
 
     @Override
     public void onCreate() {
@@ -82,19 +93,23 @@ public class OxVpnService extends VpnService {
             tunFd = buildTun();
             Log.i(TAG, "✅ TUN oluşturuldu");
 
-            // 2. MITM Proxy - TRY-CATCH içinde
+            // 2. tunOut referansını sakla — proxy S2C yazmaları için kullanacak
+            tunOut = new FileOutputStream(tunFd.getFileDescriptor());
+
+            // 3. MITM Proxy
             try {
                 proxy = new MitmProxy(PROXY_PORT, this);
+                // Proxy'ye TUN write callback'ini ver
+                proxy.setTunWriter(this::writeToTun);
                 proxy.start();
                 Log.i(TAG, "✅ Proxy başladı, port=" + PROXY_PORT);
                 SessionManager.INSTANCE.onSessionStart(proxy);
             } catch (Exception e) {
                 Log.e(TAG, "❌ Proxy başlayamadı: " + e.getMessage());
-                // Proxy'siz devam et - tunnel yine de çalışır
                 proxy = null;
             }
 
-            // 3. Tunnel loop
+            // 4. Tunnel loop (Game → Proxy yönü)
             running = true;
             tunnelThread = new Thread(this::tunnelLoop, "OxTunnel");
             tunnelThread.setDaemon(true);
@@ -113,7 +128,7 @@ public class OxVpnService extends VpnService {
 
         if (tunnelThread != null) {
             tunnelThread.interrupt();
-            try { tunnelThread.join(1000); } catch (InterruptedException e) {}
+            try { tunnelThread.join(1000); } catch (InterruptedException ignored) {}
             tunnelThread = null;
         }
 
@@ -124,8 +139,13 @@ public class OxVpnService extends VpnService {
             proxy = null;
         }
 
+        if (tunOut != null) {
+            try { tunOut.close(); } catch (IOException ignored) {}
+            tunOut = null;
+        }
+
         if (tunFd != null) {
-            try { tunFd.close(); } catch (IOException e) {}
+            try { tunFd.close(); } catch (IOException ignored) {}
             tunFd = null;
         }
 
@@ -134,18 +154,94 @@ public class OxVpnService extends VpnService {
 
     private void cleanup() {
         if (proxy != null) {
-            try { proxy.stop(); } catch (Exception e) {}
+            try { proxy.stop(); } catch (Exception ignored) {}
             proxy = null;
         }
+        if (tunOut != null) {
+            try { tunOut.close(); } catch (IOException ignored) {}
+            tunOut = null;
+        }
         if (tunFd != null) {
-            try { tunFd.close(); } catch (IOException e) {}
+            try { tunFd.close(); } catch (IOException ignored) {}
             tunFd = null;
         }
         running = false;
         stopSelf();
     }
 
-    // ── TUN ──────────────────────────────────────────────────────────────
+    // ── TUN write callback (Proxy → Game) ────────────────────────────────
+
+    /**
+     * MitmProxy bu metodu çağırarak sunucudan gelen işlenmiş UDP paketini
+     * TUN arayüzüne (yani oyuna) yazar.
+     *
+     * rawUdpPayload: Sadece UDP payload (RakNet datagramı).
+     * Bu metod eksik IP/UDP başlık oluşturur ve TUN'a yazar.
+     */
+    public void writeToTun(byte[] rawUdpPayload, java.net.InetSocketAddress src, java.net.InetSocketAddress dst) {
+        if (!running || tunOut == null || rawUdpPayload == null) return;
+        try {
+            byte[] packet = buildIpUdpPacket(rawUdpPayload, src, dst);
+            synchronized (this) {
+                tunOut.write(packet);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "writeToTun hata: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Verilen UDP payload etrafına minimal IPv4 + UDP başlık sararak
+     * TUN'a yazılabilir ham IP paketi oluşturur.
+     */
+    private byte[] buildIpUdpPacket(byte[] udpPayload, java.net.InetSocketAddress src, java.net.InetSocketAddress dst) throws Exception {
+        int udpLen   = 8 + udpPayload.length;
+        int totalLen = 20 + udpLen;
+        ByteBuffer pkt = ByteBuffer.allocate(totalLen);
+
+        byte[] srcIp  = src.getAddress().getAddress();
+        byte[] dstIp  = dst.getAddress().getAddress();
+        int    srcPort = src.getPort();
+        int    dstPort = dst.getPort();
+
+        // IPv4 header (20 byte, no options)
+        pkt.put((byte) 0x45);              // version=4, IHL=5
+        pkt.put((byte) 0x00);              // DSCP/ECN
+        pkt.putShort((short) totalLen);    // total length
+        pkt.putShort((short) 0);           // identification
+        pkt.putShort((short) 0x4000);      // flags: DF
+        pkt.put((byte) 64);                // TTL
+        pkt.put((byte) 17);                // protocol: UDP
+        pkt.putShort((short) 0);           // checksum placeholder
+        pkt.put(srcIp);
+        pkt.put(dstIp);
+
+        // IPv4 checksum
+        pkt.putShort(18, ipChecksum(pkt.array(), 0, 20));
+
+        // UDP header (8 byte)
+        pkt.putShort((short) srcPort);
+        pkt.putShort((short) dstPort);
+        pkt.putShort((short) udpLen);
+        pkt.putShort((short) 0);           // UDP checksum (0 = disabled)
+
+        // Payload
+        pkt.put(udpPayload);
+
+        return pkt.array();
+    }
+
+    private static short ipChecksum(byte[] buf, int offset, int length) {
+        int sum = 0;
+        for (int i = offset; i < offset + length - 1; i += 2) {
+            sum += ((buf[i] & 0xFF) << 8) | (buf[i + 1] & 0xFF);
+        }
+        if ((length & 1) != 0) sum += (buf[offset + length - 1] & 0xFF) << 8;
+        while ((sum >> 16) != 0) sum = (sum & 0xFFFF) + (sum >> 16);
+        return (short) ~sum;
+    }
+
+    // ── TUN Interface ─────────────────────────────────────────────────────
 
     private ParcelFileDescriptor buildTun() throws Exception {
         Builder b = new Builder();
@@ -153,10 +249,12 @@ public class OxVpnService extends VpnService {
         b.setMtu(TUN_MTU);
         b.addAddress("10.0.0.2", 32);
 
+        // Sunucu IP'sini route'a ekle; başarısız olursa tüm trafiği yönlendir
         try {
             InetAddress addr = InetAddress.getByName(BuildConfig.SERVER_HOST);
             b.addRoute(addr.getHostAddress(), 32);
         } catch (Exception e) {
+            Log.w(TAG, "Sunucu IP çözümlenemedi, full route ekleniyor");
             b.addRoute("0.0.0.0", 0);
         }
 
@@ -167,36 +265,40 @@ public class OxVpnService extends VpnService {
 
         try {
             b.addAllowedApplication("com.mojang.minecraftpe");
-        } catch (Exception e) {}
+        } catch (Exception e) {
+            Log.w(TAG, "addAllowedApplication başarısız: " + e.getMessage());
+        }
 
         ParcelFileDescriptor pfd = b.establish();
         if (pfd == null) {
             Thread.sleep(300);
             pfd = b.establish();
         }
-        if (pfd == null) throw new Exception("TUN establish null");
+        if (pfd == null) throw new Exception("TUN establish null döndü");
         return pfd;
     }
 
-    // ── Tunnel Loop ──────────────────────────────────────────────────────
+    // ── Tunnel Loop (Game → Proxy) ────────────────────────────────────────
 
     private void tunnelLoop() {
         Log.i(TAG, "Tunnel başladı");
-        ByteBuffer pkt = ByteBuffer.allocate(TUN_MTU * 2);
+        byte[] buf = new byte[TUN_MTU * 2];
 
-        try (FileInputStream in   = new FileInputStream(tunFd.getFileDescriptor());
-             FileOutputStream out = new FileOutputStream(tunFd.getFileDescriptor())) {
-
+        try (FileInputStream in = new FileInputStream(tunFd.getFileDescriptor())) {
             while (running) {
-                pkt.clear();
-                int len = in.read(pkt.array());
+                int len = in.read(buf);
                 if (len <= 0) continue;
 
-                if (isMcUdp(pkt.array(), len) && proxy != null) {
-                    proxy.handleIncomingPacket(pkt.array(), len);
-                } else {
-                    out.write(pkt.array(), 0, len);
+                // FIX: Tüm UDP paketlerini yakala, sadece destination port 19132 değil.
+                // Sunucudan gelen yanıtlar oyunun rastgele kaynak portuna gider,
+                // bu nedenle önceki dport==MC_PORT filtresi S2C trafiğini kaçırıyordu.
+                if (isUdpPacket(buf, len) && proxy != null) {
+                    byte[] copy = new byte[len];
+                    System.arraycopy(buf, 0, copy, 0, len);
+                    proxy.handleIncomingPacket(copy, len);
                 }
+                // Diğer protokoller (TCP, ICMP vb.) için pass-through gerekmez
+                // çünkü Minecraft Bedrock yalnızca UDP kullanır.
             }
         } catch (IOException e) {
             if (running) Log.e(TAG, "Tunnel hata: " + e.getMessage());
@@ -204,13 +306,14 @@ public class OxVpnService extends VpnService {
         Log.i(TAG, "Tunnel bitti");
     }
 
-    private boolean isMcUdp(byte[] d, int len) {
-        if (len < 28) return false;
-        if (((d[0] >> 4) & 0xF) != 4) return false;
-        if ((d[9] & 0xFF) != 17) return false;
-        int ihl = (d[0] & 0xF) * 4;
-        int dport = ((d[ihl + 2] & 0xFF) << 8) | (d[ihl + 3] & 0xFF);
-        return dport == MC_PORT;
+    /**
+     * FIX: Sadece IPv4 + UDP kontrolü. Destination port filtresi KALDIRILDI.
+     * Önceki kod: dport == MC_PORT — bu sunucudan gelen paketleri kaçırıyordu.
+     */
+    private boolean isUdpPacket(byte[] d, int len) {
+        if (len < 20) return false;
+        if (((d[0] >> 4) & 0xF) != 4) return false;  // IPv4 mı?
+        return (d[9] & 0xFF) == 17;                   // UDP protokolü mü?
     }
 
     @Override
