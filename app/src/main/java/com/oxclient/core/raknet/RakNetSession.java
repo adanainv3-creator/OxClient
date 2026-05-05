@@ -11,17 +11,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Lightweight RakNet reliability framing decoder for one connection.
+ * RakNetSession — Lightweight RakNet reliability framing decoder.
  *
- * FIX: decodeAll() eklendi.
+ * DÜZELTME: decodeAll() eklendi.
+ *   Önceki decode() bir datagramdan sadece ilk frame'i döndürüyordu.
+ *   RakNet datagramları birden fazla frame içerebilir (özellikle handshake).
+ *   Kalan frame'ler sessizce atılıyordu → bağlantı tamamlanamıyordu.
  *
- * Önceki decode() metodu bir datagramdan yalnızca ilk geçerli frame'i döndürüp
- * duruyordu. RakNet datagramları birden fazla frame içerebilir (özellikle
- * handshake sırasında). Kalan frame'ler sessizce atılıyordu; bu yüzden
- * bağlantı handshake'i tamamlanamıyor ve sunucuya girilmiyordu.
- *
- * Çözüm: decodeAll() tüm frame'leri bir List<byte[]> olarak döndürür.
- * decode() geriye dönük uyumluluk için korundu (ilk frame'i döndürür).
+ *   Çözüm: decodeAll() tüm frame'leri List<byte[]> olarak döndürür.
  */
 public class RakNetSession {
     private static final String TAG = "RakNetSession";
@@ -51,14 +48,12 @@ public class RakNetSession {
     // ── Public API ────────────────────────────────────────────────────────
 
     /**
-     * FIX: Bir RakNet datagramındaki TÜM frame'leri decode eder.
+     * Bir RakNet datagramındaki TÜM frame'leri decode eder.
      *
      * Boş liste döner:
-     *   - ACK / NAK paketi ise (sadece ilet, işleme)
-     *   - FLAG_VALID set değilse
-     *   - Hiç decode edilebilir frame yoksa
-     *
-     * MitmProxy InboundHandler ve OutboundHandler bu metodu kullanmalı.
+     *   - ACK / NAK (sadece ilet, işleme)
+     *   - FLAG_VALID set değil
+     *   - Decode edilebilir frame yok
      */
     public List<byte[]> decodeAll(ByteBuf raw) {
         List<byte[]> results = new ArrayList<>();
@@ -68,22 +63,15 @@ public class RakNetSession {
         try {
             byte flags = raw.readByte();
 
-            // ACK veya NAK — payload yoktur, olduğu gibi ilet
             if ((flags & FLAG_ACK) != 0 || (flags & FLAG_NAK) != 0) return results;
-
-            // FLAG_VALID set değilse muhtemelen offline mesaj (unconnected ping vs.)
             if ((flags & FLAG_VALID) == 0) return results;
 
-            // Sequence number
             int seq = readInt24LE(raw);
             if (seq > recvSeq) recvSeq = seq;
 
-            // Datagram içindeki TÜM frame'leri oku
             while (raw.isReadable()) {
                 byte[] payload = decodeFrame(raw);
-                if (payload != null) {
-                    results.add(payload);
-                }
+                if (payload != null) results.add(payload);
             }
         } catch (Exception e) {
             Log.v(TAG, "[" + dir + "] decodeAll error: " + e.getMessage());
@@ -92,12 +80,7 @@ public class RakNetSession {
         return results;
     }
 
-    /**
-     * Geriye dönük uyumluluk: ilk frame'i döndürür.
-     * Yeni kod decodeAll() kullanmalı.
-     *
-     * @deprecated decodeAll() kullan
-     */
+    /** @deprecated decodeAll() kullan */
     @Deprecated
     public byte[] decode(ByteBuf raw) {
         List<byte[]> all = decodeAll(raw);
@@ -107,23 +90,20 @@ public class RakNetSession {
     // ── Frame decoder ─────────────────────────────────────────────────────
 
     private byte[] decodeFrame(ByteBuf b) {
-        if (!b.isReadable(3)) return null; // en az flags + bitLen
+        if (!b.isReadable(3)) return null;
 
-        byte ff     = b.readByte();
-        int  rel    = (ff & 0xE0) >> 5;
+        byte ff      = b.readByte();
+        int  rel     = (ff & 0xE0) >> 5;
         boolean split = (ff & 0x10) != 0;
 
         int bitLen  = b.readShort() & 0xFFFF;
         int byteLen = (bitLen + 7) / 8;
-
         if (byteLen == 0) return null;
 
-        // Reliability header alanlarını atla
-        if (isReliable(rel))   readInt24LE(b);               // reliable index
-        if (isSequenced(rel))  readInt24LE(b);               // sequencing index
-        if (isOrdered(rel))    { readInt24LE(b); b.readByte(); } // order index + channel
+        if (isReliable(rel))  readInt24LE(b);
+        if (isSequenced(rel)) readInt24LE(b);
+        if (isOrdered(rel))   { readInt24LE(b); b.readByte(); }
 
-        // Split header
         int splitCount = 0, splitId = 0, splitIndex = 0;
         if (split) {
             splitCount = b.readInt();
@@ -131,17 +111,15 @@ public class RakNetSession {
             splitIndex = b.readInt();
         }
 
-        if (!b.isReadable(byteLen)) return null; // truncated datagram
+        if (!b.isReadable(byteLen)) return null;
         byte[] payload = new byte[byteLen];
         b.readBytes(payload);
 
-        if (split) {
-            return handleSplit(splitId, splitCount, splitIndex, payload);
-        }
+        if (split) return handleSplit(splitId, splitCount, splitIndex, payload);
         return payload;
     }
 
-    // ── Split packet reassembly ───────────────────────────────────────────
+    // ── Split reassembly ─────────────────────────────────────────────────
 
     private byte[] handleSplit(int id, int count, int idx, byte[] data) {
         if (count <= 0 || idx < 0 || idx >= count) return null;
@@ -151,24 +129,21 @@ public class RakNetSession {
             sb.parts[idx] = data;
             sb.received++;
         }
-
         if (sb.received < count) return null;
 
-        // Tüm parçalar geldi — birleştir
         splits.remove(id);
         int total = 0;
         for (byte[] p : sb.parts) if (p != null) total += p.length;
 
         ByteBuf asm = Unpooled.buffer(total);
         for (byte[] p : sb.parts) if (p != null) asm.writeBytes(p);
-
         byte[] r = new byte[asm.readableBytes()];
         asm.readBytes(r);
         asm.release();
         return r;
     }
 
-    // ── Reliability type helpers ──────────────────────────────────────────
+    // ── Reliability helpers ───────────────────────────────────────────────
 
     private boolean isReliable(int r)  { return r == 2 || r == 3 || r == 4 || r == 6 || r == 7; }
     private boolean isSequenced(int r) { return r == 1 || r == 4; }
@@ -184,8 +159,6 @@ public class RakNetSession {
 
     public InetSocketAddress getAddr() { return addr; }
     public Direction         getDir()  { return dir; }
-
-    // ── Inner types ───────────────────────────────────────────────────────
 
     private static class SplitBuf {
         final byte[][] parts;

@@ -5,8 +5,8 @@ import android.util.Log;
 
 import com.oxclient.BuildConfig;
 import com.oxclient.core.raknet.RakNetSession;
-import com.oxclient.events.PacketEvent;
 import com.oxclient.events.PacketEventBus;
+import com.oxclient.session.SessionManager;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
@@ -23,32 +23,31 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * MitmProxy — Netty NIO UDP MITM proxy.
  *
- * Packet flow:
- *   Game → TUN → handleIncomingPacket()
+ * Paket akışı:
+ *   Oyun → TUN → handleIncomingPacket()
  *       → InboundHandler → RakNetSession.decodeAll()
  *       → PacketProcessor.processC2S()
- *       → clientChannel → 2b2tpe.org:19132
+ *       → clientChannel → 2b2tpe.org
  *
  *   2b2tpe.org → clientChannel → OutboundHandler
  *       → RakNetSession.decodeAll()
  *       → PacketProcessor.processS2C()
- *       → tunWriter.write() → TUN → Game
+ *       → tunWriter.write() → TUN → Oyun
  *
- * FIXES:
- *   1. protectFromVpn() artık reflection yerine doğrudan NioDatagramChannel cast kullanıyor.
- *      Önceki reflection kodu NoSuchMethodException atıp sessizce geçiyordu;
- *      clientChannel korunmadan kalınca routing loop oluşuyor ve bağlantı kesiliyordu.
+ * DÜZELTMELER:
+ *   1. protectFromVpn(): reflection ile AbstractNioChannel.ch field'ına erişir.
+ *      javaChannel() protected olduğundan doğrudan çağrılamaz.
+ *      Korunmasız socket routing loop oluşturur → sunucuya paket ulaşmaz.
  *
- *   2. OutboundHandler artık serverChannel'a yazmak yerine tunWriter callback'ini kullanıyor.
- *      Bu sayede sunucudan gelen paketler doğru IP/UDP başlıkları ile TUN'a iletilir.
+ *   2. TunWriter callback: S2C paketler tunWriter üzerinden TUN'a yazılır.
+ *      Önceki kod serverChannel'a yazıyordu → oyun paketi almıyordu.
  *
- *   3. decode() yerine decodeAll() kullanılarak bir RakNet datagramındaki tüm
- *      frame'ler işleniyor (handshake paket kaybı giderildi).
+ *   3. decodeAll(): Bir RakNet datagramındaki tüm frame'ler işlenir.
+ *      Önceki decode() sadece ilk frame'i alıyordu → handshake paket kaybı.
  */
 public class MitmProxy {
     private static final String TAG = "MitmProxy";
 
-    /** Proxy → Game TUN yazma callback interface */
     public interface TunWriter {
         void write(byte[] udpPayload, InetSocketAddress src, InetSocketAddress dst);
     }
@@ -66,8 +65,8 @@ public class MitmProxy {
     private volatile InetSocketAddress gameClientAddress;
     private volatile TunWriter         tunWriter;
 
-    private final ConcurrentHashMap<Long, RakNetSession> sessions = new ConcurrentHashMap<>();
-    private final PacketProcessor processor = new PacketProcessor();
+    private final ConcurrentHashMap<Long, RakNetSession> sessions   = new ConcurrentHashMap<>();
+    private final PacketProcessor                        processor  = new PacketProcessor();
 
     private volatile boolean running = false;
 
@@ -76,20 +75,12 @@ public class MitmProxy {
         this.vpnService = vpnService;
     }
 
-    /** OxVpnService tarafından start() öncesinde set edilmeli. */
-    public void setTunWriter(TunWriter writer) {
-        this.tunWriter = writer;
-    }
+    public void setTunWriter(TunWriter writer) { this.tunWriter = writer; }
 
     // ── Start / Stop ──────────────────────────────────────────────────────
 
     public void start() throws Exception {
-        if (running) {
-            Log.w(TAG, "MitmProxy zaten çalışıyor");
-            return;
-        }
-
-        Log.i(TAG, "MitmProxy başlatılıyor...");
+        if (running) { Log.w(TAG, "Zaten çalışıyor"); return; }
 
         bossGroup = new NioEventLoopGroup(2, r -> {
             Thread t = new Thread(r, "OxNetty");
@@ -97,108 +88,84 @@ public class MitmProxy {
             return t;
         });
 
-        // Inbound: game → proxy (localhost dinler, TUN'dan paket alır)
+        // Inbound: oyun → proxy
         serverChannel = new Bootstrap()
             .group(bossGroup)
             .channel(NioDatagramChannel.class)
             .option(ChannelOption.SO_RCVBUF, 2 << 20)
             .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
             .handler(new ChannelInitializer<NioDatagramChannel>() {
-                @Override
-                protected void initChannel(NioDatagramChannel ch) {
+                @Override protected void initChannel(NioDatagramChannel ch) {
                     ch.pipeline().addLast(new InboundHandler());
                 }
             })
             .bind(new InetSocketAddress("127.0.0.1", localPort))
-            .sync()
-            .channel();
+            .sync().channel();
 
-        Log.i(TAG, "Server channel bağlandı: 127.0.0.1:" + localPort);
+        Log.i(TAG, "Server channel: 127.0.0.1:" + localPort);
 
-        // Outbound: proxy → 2b2t.pe
+        // Outbound: proxy → sunucu
         clientChannel = new Bootstrap()
             .group(bossGroup)
             .channel(NioDatagramChannel.class)
             .option(ChannelOption.SO_SNDBUF, 2 << 20)
             .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
             .handler(new ChannelInitializer<NioDatagramChannel>() {
-                @Override
-                protected void initChannel(NioDatagramChannel ch) {
+                @Override protected void initChannel(NioDatagramChannel ch) {
                     ch.pipeline().addLast(new OutboundHandler());
                 }
             })
-            .bind(0)
-            .sync()
-            .channel();
+            .bind(0).sync().channel();
 
-        int clientPort = ((InetSocketAddress) clientChannel.localAddress()).getPort();
-        Log.i(TAG, "Client channel bağlandı, port: " + clientPort);
+        Log.i(TAG, "Client channel port: " +
+            ((InetSocketAddress) clientChannel.localAddress()).getPort());
 
-        // FIX 1: VPN koruması — doğrudan cast, reflection yok
+        // FIX 1: VPN protect — reflection ile AbstractNioChannel.ch field'ına eriş
         protectFromVpn();
 
         running = true;
-        Log.i(TAG, "MitmProxy hazır — local:127.0.0.1:" + localPort + " → " + realServer);
+        Log.i(TAG, "MitmProxy hazır → " + realServer);
     }
 
     /**
-     * VPN routing loop koruması.
+     * FIX 1: VPN routing loop koruması.
      *
-     * javaChannel() Netty'de protected — doğrudan çağrılamaz, basit reflection da
-     * çalışmaz (declared method arama gerekir). Çözüm: AbstractNioChannel'ın
-     * private "ch" field'ına reflection ile erişip SelectableChannel → DatagramSocket
-     * üzerinden VpnService.protect() çağırmak.
+     * javaChannel() NioDatagramChannel'da protected — doğrudan çağrılamaz.
+     * AbstractNioChannel'ın private "ch" field'ına reflection ile erişiyoruz.
+     * Bu field tüm Netty 4.x versiyonlarında stabil.
      *
-     * Bu olmadan clientChannel'ın soketi VPN tünelinden geçer → routing loop →
-     * sunucuya hiç paket ulaşmaz → "internet yok" görünür.
+     * Bu olmadan clientChannel soketi VPN tünelinden geçer →
+     * 2b2tpe.org'a giden paket tekrar proxy'ye döner → sonsuz döngü →
+     * sunucuya hiç paket ulaşmaz.
      */
     private void protectFromVpn() {
         if (vpnService == null || clientChannel == null) return;
         try {
-            // AbstractNioChannel.ch field'ı (SelectableChannel) — tüm Netty sürümlerinde var
             java.lang.reflect.Field chField =
                 io.netty.channel.nio.AbstractNioChannel.class.getDeclaredField("ch");
             chField.setAccessible(true);
-            java.nio.channels.SelectableChannel selectableCh =
-                (java.nio.channels.SelectableChannel) chField.get(clientChannel);
-
             java.nio.channels.DatagramChannel javaCh =
-                (java.nio.channels.DatagramChannel) selectableCh;
-
+                (java.nio.channels.DatagramChannel) chField.get(clientChannel);
             boolean ok = vpnService.protect(javaCh.socket());
-            Log.i(TAG, "VPN protect: " + (ok ? "✅ başarılı" : "❌ başarısız — routing loop riski!"));
-            if (!ok) {
-                Log.e(TAG, "VPN protect başarısız! Bağlantı çalışmayabilir.");
-            }
+            Log.i(TAG, "VPN protect: " + (ok ? "✅" : "❌ — routing loop riski!"));
         } catch (NoSuchFieldException e) {
-            Log.e(TAG, "VPN protect: 'ch' field bulunamadı — " + e.getMessage());
+            Log.e(TAG, "VPN protect: 'ch' field yok — " + e.getMessage());
         } catch (Exception e) {
-            Log.e(TAG, "VPN protect exception: " + e.getMessage(), e);
+            Log.e(TAG, "VPN protect hata: " + e.getMessage(), e);
         }
     }
 
     public void stop() {
         if (!running) return;
-
-        Log.i(TAG, "MitmProxy durduruluyor");
         running = false;
         sessions.clear();
-
-        closeChannel(serverChannel);
-        serverChannel = null;
-
-        closeChannel(clientChannel);
-        clientChannel = null;
-
+        closeChannel(serverChannel); serverChannel = null;
+        closeChannel(clientChannel); clientChannel = null;
         if (bossGroup != null) {
-            try {
-                bossGroup.shutdownGracefully().sync();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+            try { bossGroup.shutdownGracefully().sync(); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             bossGroup = null;
         }
-
         Log.i(TAG, "MitmProxy durduruldu");
     }
 
@@ -211,43 +178,35 @@ public class MitmProxy {
 
     // ── Raw IP entry from TUN ─────────────────────────────────────────────
 
-    /**
-     * OxVpnService tunnelLoop'tan çağrılır.
-     * Ham IPv4 paketi parse edip UDP payload'ını serverChannel'a iletir.
-     */
     public void handleIncomingPacket(byte[] rawIp, int len) {
         if (!running || serverChannel == null) return;
-
         try {
-            int ihl        = (rawIp[0] & 0xF) * 4;
-            int srcPort    = ((rawIp[ihl]     & 0xFF) << 8) | (rawIp[ihl + 1] & 0xFF);
-            int dstPort    = ((rawIp[ihl + 2] & 0xFF) << 8) | (rawIp[ihl + 3] & 0xFF);
-            int payloadOff = ihl + 8;
-            int payloadLen = len - payloadOff;
-            if (payloadLen <= 0) return;
-
-            // Sadece MC portuna giden paketleri proxy'ye yönlendir
+            int ihl     = (rawIp[0] & 0xF) * 4;
+            int srcPort = ((rawIp[ihl]     & 0xFF) << 8) | (rawIp[ihl + 1] & 0xFF);
+            int dstPort = ((rawIp[ihl + 2] & 0xFF) << 8) | (rawIp[ihl + 3] & 0xFF);
+            int payOff  = ihl + 8;
+            int payLen  = len - payOff;
+            if (payLen <= 0) return;
             if (dstPort != BuildConfig.SERVER_PORT) return;
 
-            ByteBuf buf = PooledByteBufAllocator.DEFAULT.buffer(payloadLen);
-            buf.writeBytes(rawIp, payloadOff, payloadLen);
+            ByteBuf buf = PooledByteBufAllocator.DEFAULT.buffer(payLen);
+            buf.writeBytes(rawIp, payOff, payLen);
 
             byte[] srcIpB = { rawIp[12], rawIp[13], rawIp[14], rawIp[15] };
             InetSocketAddress src = new InetSocketAddress(
                 java.net.InetAddress.getByAddress(srcIpB), srcPort);
             gameClientAddress = src;
 
-            // serverChannel pipeline'ına enjekte et
             DatagramPacket dp = new DatagramPacket(buf,
                 new InetSocketAddress("127.0.0.1", localPort), src);
             serverChannel.pipeline().fireChannelRead(dp);
 
         } catch (Exception e) {
-            Log.e(TAG, "handleIncomingPacket error: " + e.getMessage());
+            Log.e(TAG, "handleIncomingPacket: " + e.getMessage());
         }
     }
 
-    // ── Packet injection (used by modules) ────────────────────────────────
+    // ── Module injection ──────────────────────────────────────────────────
 
     public void injectC2S(byte[] payload) {
         if (clientChannel == null || payload == null || !running) return;
@@ -259,13 +218,12 @@ public class MitmProxy {
 
     public void injectS2C(byte[] payload) {
         if (tunWriter == null || gameClientAddress == null || payload == null || !running) return;
-        InetSocketAddress serverAddr = realServer;
-        tunWriter.write(payload, serverAddr, gameClientAddress);
+        tunWriter.write(payload, realServer, gameClientAddress);
     }
 
     // ── Handlers ─────────────────────────────────────────────────────────
 
-    /** Game → 2b2t.pe */
+    /** Oyun → 2b2tpe.org */
     private class InboundHandler extends ChannelDuplexHandler {
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
@@ -278,23 +236,21 @@ public class MitmProxy {
                 k -> new RakNetSession(clientAddr, RakNetSession.Direction.C2S));
 
             try {
-                // FIX 3: decodeAll() — bir datagramdaki tüm frame'leri işle
+                // FIX 3: decodeAll — tüm frame'leri işle
                 List<byte[]> payloads = session.decodeAll(dgram.content());
 
                 if (payloads.isEmpty()) {
-                    // ACK/NAK veya decode edilemeyen paket — olduğu gibi ilet
+                    // ACK/NAK → olduğu gibi ilet
                     forwardRaw(dgram, clientChannel, realServer);
                     return;
                 }
 
                 for (byte[] payload : payloads) {
-                    byte[] processed = processor.processC2S(payload, clientAddr);
-                    if (processed != null) {
-                        sendTo(clientChannel, processed, realServer);
-                    }
+                    byte[] out = processor.processC2S(payload, clientAddr);
+                    if (out != null) sendTo(clientChannel, out, realServer);
                 }
             } catch (Exception e) {
-                Log.e(TAG, "InboundHandler error: " + e.getMessage());
+                Log.e(TAG, "InboundHandler: " + e.getMessage());
             } finally {
                 dgram.content().release();
             }
@@ -302,11 +258,11 @@ public class MitmProxy {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            Log.e(TAG, "InboundHandler exception: " + cause.getMessage());
+            Log.e(TAG, "InboundHandler exc: " + cause.getMessage());
         }
     }
 
-    /** 2b2t.pe → Game (TUN aracılığıyla) */
+    /** 2b2tpe.org → Oyun (TUN aracılığıyla) */
     private class OutboundHandler extends ChannelDuplexHandler {
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
@@ -324,28 +280,24 @@ public class MitmProxy {
                 k -> new RakNetSession(firstClient, RakNetSession.Direction.S2C));
 
             try {
-                // FIX 3: decodeAll() — tüm frame'leri işle
+                // FIX 3: decodeAll
                 List<byte[]> payloads = session.decodeAll(dgram.content());
 
                 if (payloads.isEmpty()) {
-                    // ACK/NAK — raw olarak TUN'a yaz
+                    // ACK/NAK → TUN'a raw yaz
                     writeRawToTun(dgram);
                     return;
                 }
 
                 for (byte[] payload : payloads) {
-                    byte[] processed = processor.processS2C(payload, firstClient);
-                    if (processed != null) {
-                        // FIX 2: serverChannel yerine tunWriter kullan
-                        // Önceki kod serverChannel'a yazıyordu; bu TUN'a doğru
-                        // IP başlığı olmadan yazıyordu, oyun paketi tanımıyordu.
-                        if (tunWriter != null) {
-                            tunWriter.write(processed, realServer, gameClientAddress);
-                        }
+                    byte[] out = processor.processS2C(payload, firstClient);
+                    if (out != null && tunWriter != null) {
+                        // FIX 2: tunWriter kullan — serverChannel değil
+                        tunWriter.write(out, realServer, gameClientAddress);
                     }
                 }
             } catch (Exception e) {
-                Log.e(TAG, "OutboundHandler error: " + e.getMessage());
+                Log.e(TAG, "OutboundHandler: " + e.getMessage());
             } finally {
                 dgram.content().release();
             }
@@ -359,33 +311,33 @@ public class MitmProxy {
                 dgram.content().readBytes(raw);
                 tunWriter.write(raw, realServer, gameClientAddress);
             } catch (Exception e) {
-                Log.e(TAG, "writeRawToTun error: " + e.getMessage());
+                Log.e(TAG, "writeRawToTun: " + e.getMessage());
             }
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            Log.e(TAG, "OutboundHandler exception: " + cause.getMessage());
+            Log.e(TAG, "OutboundHandler exc: " + cause.getMessage());
         }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private void sendTo(Channel ch, byte[] data, InetSocketAddress dest) {
-        if (ch == null || data == null || dest == null) return;
+        if (ch == null || data == null) return;
         ByteBuf buf = ch.alloc().buffer(data.length);
         buf.writeBytes(data);
         ch.writeAndFlush(new DatagramPacket(buf, dest));
     }
 
-    private void forwardRaw(DatagramPacket dgram, Channel targetCh, InetSocketAddress dest) {
-        if (targetCh == null || dest == null) return;
+    private void forwardRaw(DatagramPacket dgram, Channel ch, InetSocketAddress dest) {
+        if (ch == null) return;
         dgram.content().resetReaderIndex();
-        ByteBuf fwd = targetCh.alloc().buffer(dgram.content().readableBytes());
+        ByteBuf fwd = ch.alloc().buffer(dgram.content().readableBytes());
         fwd.writeBytes(dgram.content());
-        targetCh.writeAndFlush(new DatagramPacket(fwd, dest));
+        ch.writeAndFlush(new DatagramPacket(fwd, dest));
     }
 
-    public InetSocketAddress getRealServer()      { return realServer; }
-    public InetSocketAddress getGameClientAddr()  { return gameClientAddress; }
+    public InetSocketAddress getRealServer()     { return realServer; }
+    public InetSocketAddress getGameClientAddr() { return gameClientAddress; }
 }
