@@ -6,9 +6,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- VPN -->
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
-
     <!-- Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -16,9 +13,6 @@
 
     <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
-    <!-- Wake Lock (isteğe bağlı - packet processing için) -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Android 11+ Package Visibility -->
     <queries>
@@ -50,25 +44,11 @@
             </intent-filter>
         </activity>
 
-        <!-- Microsoft Auth WebView -->
+        <!-- Microsoft Auth -->
         <activity
             android:name=".auth.DeviceCodeLoginActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
-
-        <!-- ✅ VPN Servisi - DÜZELTİLDİ -->
-        <service
-            android:name=".core.vpn.OxVpnService"
-            android:exported="false"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:foregroundServiceType="specialUse">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="VPN_tunnel_for_Minecraft_Bedrock_proxy" />
-        </service>
 
         <!-- Oyun içi overlay -->
         <service

@@ -6,7 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Posts module toast events with auto-dismiss timer. */
+/** Modül toggle olduğunda kısa süreli toast bildirimi gönderir. */
 object OverlayNotifier {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

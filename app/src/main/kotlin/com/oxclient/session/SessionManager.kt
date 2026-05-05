@@ -1,27 +1,33 @@
 package com.oxclient.session
 
-import com.oxclient.core.entity.EntityTracker
-import com.oxclient.core.proxy.MitmProxy
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import timber.log.Timber
 
+/**
+ * Aktif bağlantı oturumunu yönetir.
+ *
+ * VPN/proxy katmanı kaldırıldığından bu sınıf artık yalnızca
+ * bağlantı durumunu (aktif/değil) ve hedef sunucu bilgisini tutar.
+ * Gerçek inject katmanı entegre edildiğinde buraya hook noktaları eklenir.
+ */
 object SessionManager {
-    @Volatile
-    var proxy: MitmProxy? = null
-        private set
 
-    val entityTracker = EntityTracker()
+    private val _isActive = MutableStateFlow(false)
+    val isActiveFlow: StateFlow<Boolean> = _isActive.asStateFlow()
 
-    fun onSessionStart(p: MitmProxy) {
-        proxy = p
-        entityTracker.clear()
-        Timber.i("Session başladı")
+    val isActive: Boolean get() = _isActive.value
+
+    // Bağlantı kurulduğunda çağrılır
+    fun onSessionStart() {
+        _isActive.value = true
+        Timber.i("Session başladı → ${ServerConfig.host.value}:${ServerConfig.port.value}")
     }
 
+    // Bağlantı kesildiğinde çağrılır
     fun onSessionStop() {
-        proxy = null
-        entityTracker.clear()
+        _isActive.value = false
         Timber.i("Session sona erdi")
     }
-
-    val isActive: Boolean get() = proxy != null
 }

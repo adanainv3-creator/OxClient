@@ -4,34 +4,40 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Reactive state for the in-game HUD overlay. */
+data class ModuleToast(val moduleName: String, val enabled: Boolean)
+
+/**
+ * Overlay katmanının global UI durumu.
+ * OverlayService, OverlayNotifier ve DashboardActivity bu state'i okur/yazar.
+ */
 object OverlayState {
-    const val TOTEM_SYMBOL      = "⊕"
-    const val TOAST_DURATION_MS = 2500L
 
-    // Totem counter (top-left)
-    private val _totemCount = MutableStateFlow(0)
-    val totemCount: StateFlow<Int> = _totemCount.asStateFlow()
-    fun updateTotemCount(n: Int) { _totemCount.value = n }
+    const val TOAST_DURATION_MS = 1500L
 
-    // Module toast (top-center animated banner)
-    private val _toast = MutableStateFlow<ModuleToast?>(null)
-    val moduleToast: StateFlow<ModuleToast?> = _toast.asStateFlow()
-    fun postModuleToast(t: ModuleToast) { _toast.value = t }
-    fun clearModuleToast(t: ModuleToast) { if (_toast.value == t) _toast.value = null }
+    // ── Overlay görünürlüğü ───────────────────────────────────────────────────
 
-    // Overlay visibility
-    private val _visible = MutableStateFlow(false)
-    val overlayVisible: StateFlow<Boolean> = _visible.asStateFlow()
-    fun setOverlayVisible(v: Boolean) { _visible.value = v }
+    private val _overlayVisible = MutableStateFlow(false)
+    val overlayVisible: StateFlow<Boolean> = _overlayVisible.asStateFlow()
 
-    // Hile menüsü açık/kapalı
+    fun setOverlayVisible(visible: Boolean) { _overlayVisible.value = visible }
+
+    // ── Menü açık/kapalı ─────────────────────────────────────────────────────
+
     private val _menuOpen = MutableStateFlow(false)
     val menuOpen: StateFlow<Boolean> = _menuOpen.asStateFlow()
-    fun setMenuOpen(open: Boolean) { _menuOpen.value = open }
-}
 
-data class ModuleToast(val moduleName: String, val enabled: Boolean) {
-    val displayText: String
-        get() = "OxClient | $moduleName ${if (enabled) "Activated" else "Deactivated"}"
+    fun setMenuOpen(open: Boolean) { _menuOpen.value = open }
+
+    // ── Modül toast bildirimleri ──────────────────────────────────────────────
+
+    private val _activeToasts = MutableStateFlow<List<ModuleToast>>(emptyList())
+    val activeToasts: StateFlow<List<ModuleToast>> = _activeToasts.asStateFlow()
+
+    fun postModuleToast(toast: ModuleToast) {
+        _activeToasts.value = _activeToasts.value + toast
+    }
+
+    fun clearModuleToast(toast: ModuleToast) {
+        _activeToasts.value = _activeToasts.value - toast
+    }
 }

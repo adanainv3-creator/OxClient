@@ -5,10 +5,6 @@ import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
-import com.oxclient.module.combat.AutoTotem
-import com.oxclient.module.combat.Criticals
-import com.oxclient.module.combat.KillAura
-import com.oxclient.module.movement.TPAura
 import com.oxclient.ui.overlay.OverlayNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,9 +19,9 @@ private val Context.moduleDataStore by preferencesDataStore("ox_modules")
 object ModuleManager {
     private const val TAG = "ModuleManager"
 
-    private val scope    = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val registry = mutableListOf<BaseModule>()
-    private var ctx: Context? = null
+    private val scope      = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val registry   = mutableListOf<BaseModule>()
+    private var ctx        : Context? = null
     private var initialised = false
 
     private val _version = MutableStateFlow(0)
@@ -33,23 +29,24 @@ object ModuleManager {
 
     fun init(context: Context) {
         if (initialised) return
-        ctx = context.applicationContext
+        ctx         = context.applicationContext
         initialised = true
         registerAll()
         restoreState()
-        Log.i(TAG, "ModuleManager init — ${registry.size} modules")
+        Log.i(TAG, "ModuleManager hazır — ${registry.size} modül")
     }
 
+    /**
+     * Inject modülleri buraya eklenecek.
+     * Örnek: register(KillAura())
+     */
     private fun registerAll() {
-        register(AutoTotem())
-        register(KillAura())
-        register(Criticals())
-        register(TPAura())
+        // TODO: inject modülleri burada kayıt edilecek
     }
 
-    private fun register(m: BaseModule) {
+    fun register(m: BaseModule) {
         registry.add(m)
-        Log.d(TAG, "Registered: ${m.name} [${m.category.displayName}]")
+        Log.d(TAG, "Kayıt: ${m.name} [${m.category.displayName}]")
     }
 
     private fun restoreState() {
@@ -58,8 +55,8 @@ object ModuleManager {
             c.moduleDataStore.data.collect { prefs ->
                 registry.forEach { m ->
                     val enabled = prefs[booleanPreferencesKey(m.name)] ?: false
-                    if (enabled && !m.isEnabled)       m.enable()
-                    else if (!enabled && m.isEnabled)  m.disable()
+                    if (enabled && !m.isEnabled)      m.enable()
+                    else if (!enabled && m.isEnabled) m.disable()
                 }
             }
         }
@@ -92,8 +89,8 @@ object ModuleManager {
 
     fun disableAll() { registry.filter { it.isEnabled }.forEach { disable(it) } }
 
-    val modules: List<BaseModule> get() = registry.toList()
-    fun byCategory(cat: ModuleCategory) = registry.filter { it.category == cat }
-    fun byName(name: String) = registry.firstOrNull { it.name.equals(name, true) }
-    val enabled: List<BaseModule> get() = registry.filter { it.isEnabled }
+    val modules: List<BaseModule>                       get() = registry.toList()
+    fun byCategory(cat: ModuleCategory)                       = registry.filter { it.category == cat }
+    fun byName(name: String)                                  = registry.firstOrNull { it.name.equals(name, true) }
+    val enabled: List<BaseModule>                       get() = registry.filter { it.isEnabled }
 }
