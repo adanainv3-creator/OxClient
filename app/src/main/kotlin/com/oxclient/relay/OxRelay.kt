@@ -14,7 +14,6 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
 import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRateLimiter
 import org.cloudburstmc.protocol.bedrock.BedrockPeer
 import org.cloudburstmc.protocol.bedrock.BedrockPong
-import org.cloudburstmc.protocol.bedrock.PacketDirection
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
 import timber.log.Timber
@@ -81,10 +80,7 @@ class OxRelay {
 
                     override fun initSession(session: OxRelaySession.ServerSide) {}
 
-                    override fun preInitChannel(channel: Channel) {
-                        channel.attr(PacketDirection.ATTRIBUTE).set(PacketDirection.CLIENT_BOUND)
-                        super.preInitChannel(channel)
-                    }
+                    // PacketDirection 3.0.0.Beta1'de kaldırıldı — preInitChannel override gerekmiyor
                 })
                 .localAddress(localAddress.toInetSocketAddress())
                 .bind()

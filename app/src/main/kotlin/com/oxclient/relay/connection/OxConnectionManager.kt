@@ -11,7 +11,6 @@ import kotlinx.coroutines.withContext
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
 import org.cloudburstmc.protocol.bedrock.BedrockPeer
-import org.cloudburstmc.protocol.bedrock.PacketDirection
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
 import timber.log.Timber
 import kotlin.random.Random
@@ -48,10 +47,7 @@ class OxConnectionManager(private val session: OxRelaySession) {
 
                     override fun initSession(s: OxRelaySession.ClientSide) {}
 
-                    override fun preInitChannel(ch: Channel) {
-                        ch.attr(PacketDirection.ATTRIBUTE).set(PacketDirection.SERVER_BOUND)
-                        super.preInitChannel(ch)
-                    }
+                    // PacketDirection 3.0.0.Beta1'de kaldırıldı — preInitChannel override gerekmiyor
                 })
                 .connect(address.toInetSocketAddress())
                 .awaitUninterruptibly()

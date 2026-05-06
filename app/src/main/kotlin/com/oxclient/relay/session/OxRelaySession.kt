@@ -76,13 +76,12 @@ class OxRelaySession internal constructor(
     private fun syncAndFlush(cs: ClientSide) {
         runCatching {
             cs.codec = serverSide.codec
-            val sh   = serverSide.peer.codecHelper
-            val ch   = cs.peer.codecHelper
+            val sh = serverSide.peer.codecHelper
+            val ch = cs.peer.codecHelper
             ch.blockDefinitions        = sh.blockDefinitions
             ch.itemDefinitions         = sh.itemDefinitions
             ch.cameraPresetDefinitions = sh.cameraPresetDefinitions
-            // encodingSettings — sadece API'de varsa set et
-            try { ch.encodingSettings = sh.encodingSettings } catch (_: Throwable) {}
+            tryTransferEncodingSettings(sh, ch)
         }.onFailure { Timber.e(it, "syncDefinitions hata") }
 
         var n = 0
@@ -93,21 +92,43 @@ class OxRelaySession internal constructor(
         if (n > 0) Timber.d("$n kuyruk paketi gönderildi")
     }
 
+    /**
+     * encodingSettings bedrock-connection 3.0.0.Beta1'de API'de farklı adlandırılmış veya
+     * hiç olmayabilir. Reflection ile güvenli şekilde kopyalarız.
+     */
+    private fun tryTransferEncodingSettings(src: Any, dst: Any) {
+        try {
+            val getter = src.javaClass.getMethod("getEncodingSettings")
+            val value  = getter.invoke(src) ?: return
+            val setter = dst.javaClass.getMethod("setEncodingSettings", value.javaClass)
+            setter.invoke(dst, value)
+        } catch (_: Throwable) {
+            // Bu API versiyonunda encodingSettings yok — sessizce geç
+        }
+    }
+
     // ── İç session'lar ────────────────────────────────────────────────────────
 
+    /**
+     * ServerSide — MC uygulamasından (istemciden) gelen bağlantı.
+     *
+     * bedrock-connection 3.0.0.Beta1'de BedrockPacketHandler.onDisconnect(CharSequence)
+     * interface'den kaldırıldı. Disconnect'i BedrockSession.disconnect(String?) override
+     * ederek yakalıyoruz.
+     */
     inner class ServerSide(peer: BedrockPeer, subClientId: Int) :
         BedrockServerSession(peer, subClientId) {
 
         init {
-            // BedrockPacketHandler'da onDisconnect override — WClient'taki gibi
-            packetHandler = object : BedrockPacketHandler {
-                override fun onDisconnect(reason: CharSequence) {
-                    Timber.i("[Session] MC uygulama kesildi: $reason")
-                    runCatching { clientSide?.disconnect("İstemci kesildi") }
-                    listeners.forEach { runCatching { it.onDisconnect(reason.toString()) } }
-                    relay.stop()
-                }
-            }
+            packetHandler = object : BedrockPacketHandler {}
+        }
+
+        override fun disconnect(reason: String?) {
+            Timber.i("[Session] MC uygulama kesildi: $reason")
+            runCatching { clientSide?.disconnect("İstemci kesildi") }
+            listeners.forEach { runCatching { it.onDisconnect(reason ?: "unknown") } }
+            super.disconnect(reason)
+            relay.stop()
         }
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
@@ -129,18 +150,22 @@ class OxRelaySession internal constructor(
         }
     }
 
+    /**
+     * ClientSide — uzak Bedrock sunucusuna olan bağlantı.
+     */
     inner class ClientSide(peer: BedrockPeer, subClientId: Int) :
         BedrockClientSession(peer, subClientId) {
 
         init {
-            packetHandler = object : BedrockPacketHandler {
-                override fun onDisconnect(reason: CharSequence) {
-                    Timber.i("[Session] Sunucu kesildi: $reason")
-                    runCatching { serverSide.disconnect(reason.toString()) }
-                    listeners.forEach { runCatching { it.onDisconnect(reason.toString()) } }
-                    relay.stop()
-                }
-            }
+            packetHandler = object : BedrockPacketHandler {}
+        }
+
+        override fun disconnect(reason: String?) {
+            Timber.i("[Session] Sunucu kesildi: $reason")
+            runCatching { serverSide.disconnect(reason ?: "unknown") }
+            listeners.forEach { runCatching { it.onDisconnect(reason ?: "unknown") } }
+            super.disconnect(reason)
+            relay.stop()
         }
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
