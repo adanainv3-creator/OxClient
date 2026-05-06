@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+
+    <!-- Foreground Services -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Overlay -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- WakeLock — relay servis arka planda çalışırken CPU uyanık kalsın -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Android 11+ Package Visibility -->
+    <queries>
+        <package android:name="com.mojang.minecraftpe" />
+        <package android:name="com.netease.mc" />
+        <package android:name="com.mojang.minecrafttrialpe" />
+    </queries>
+
+    <application
+        android:name=".OxClientApp"
+        android:allowBackup="false"
+        android:icon="@drawable/ic_ox_logo"
+        android:label="OxClient"
+        android:roundIcon="@drawable/ic_ox_logo"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.OxClient"
+        android:usesCleartextTraffic="true"
+        tools:targetApi="35">
+
+        <!-- Ana Dashboard -->
+        <activity
+            android:name=".ui.dashboard.DashboardActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Microsoft Auth WebView -->
+        <activity
+            android:name=".auth.DeviceCodeLoginActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Oyun içi overlay -->
+        <service
+            android:name=".ui.overlay.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="In-game_HUD_overlay_for_module_control" />
+        </service>
+
+        <!-- MITM Relay Servisi -->
+        <service
+            android:name=".relay.service.OxRelayService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync">
+        </service>
+
+    </application>
+</manifest>

@@ -1,0 +1,57 @@
+name: Android CI Build (OxClient)
+
+on:
+push:
+branches: [""]   # tüm branch'lerde çalışır
+pull_request:
+branches: [""]
+workflow_dispatch:
+
+jobs:
+build:
+runs-on: ubuntu-latest
+
+steps:
+  - name: 📥 Repo'yu çek
+    uses: actions/checkout@v4
+
+  - name: ☕ Java 17 kur
+    uses: actions/setup-java@v4
+    with:
+      distribution: 'temurin'
+      java-version: '17'
+      cache: 'gradle'
+
+  - name: 🔧 Gradle wrapper izin ver
+    run: chmod +x gradlew
+
+  - name: ⚡ Gradle cache
+    uses: actions/cache@v4
+    with:
+      path: |
+        ~/.gradle/caches
+        ~/.gradle/wrapper
+      key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      restore-keys: |
+        gradle-${{ runner.os }}
+
+  - name: 🧹 Clean
+    run: ./gradlew clean
+
+  - name: 🛠️ Debug APK build
+    run: ./gradlew assembleDebug
+
+  - name: 🚀 Release APK build
+    run: ./gradlew assembleRelease
+
+  - name: 📦 Debug APK upload
+    uses: actions/upload-artifact@v4
+    with:
+      name: debug-apk
+      path: app/build/outputs/apk/debug/*.apk
+
+  - name: 📦 Release APK upload
+    uses: actions/upload-artifact@v4
+    with:
+      name: release-apk
+      path: app/build/outputs/apk/release/*.apk
