@@ -3,206 +3,162 @@ package com.oxclient.modules.combat
 import com.oxclient.events.PacketEvent
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
-import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryActionData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventorySource
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.packet.InventoryContentPacket
+import org.cloudburstmc.protocol.bedrock.packet.InventorySlotPacket
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
-import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
-import org.cloudburstmc.protocol.bedrock.packet.PlayerHurtPacket
 import timber.log.Timber
 
 /**
- * AutoTotem — Otomatik Totem of Undying yöneticisi.
+ * AutoTotem — Offhand totemi biter bitmez envanterden yenisini takı.
  *
- * ● Sunucudan gelen HasHealth / EntityEventPacket üzerinden ölüm tespiti.
- * ● Envanterdeki totemi offhand slotuna anında taşır (InventoryTransaction).
- * ● Re-equip delay ayarı → sunucu anti-cheat için gerçekçi gecikme.
- * ● Her tick'te offhand boşsa ve envanterde totem varsa otomatik ekler.
- * ● Düşük HP uyarı eşiği → ayarlanabilir.
- *
- * Paket ID'leri (Bedrock 1.21.x):
- *   0x27 = InventoryTransaction
- *   0x13 = PlayerHurt (sunucudan)
- *   0x28 = PlayerAuthInput (istemciden, her frame)
+ * Paket akışı:
+ *   InventoryContentPacket / InventorySlotPacket → OxInventoryTracker'ı besle
+ *   InventoryTransactionPacket (sunucudan)       → offhand durumunu güncelle
+ *   Her tick (50ms)                              → offhand boşsa equip planla
  */
 class AutoTotem : BaseModule(
     name        = "AutoTotem",
-    description = "Totem bitince otomatik yeniden takı",
+    description = "Totem bitince otomatik yenisini takı",
     category    = ModuleCategory.COMBAT
 ) {
     // ── Ayarlar ───────────────────────────────────────────────────────────────
+    val delay   = intSetting("Delay (ms)", min = 0, max = 300, default = 60)
+    val logging = boolSetting("Logging", default = false)
 
-    /** Re-equip gecikmesi ms — 0 = anlık, 50–150 = gerçekçi */
-    val delay     = intSetting("Delay (ms)", min = 0, max = 300, default = 60)
+    // ── Runtime durum ─────────────────────────────────────────────────────────
+    @Volatile private var pendingEquip    = false
+    @Volatile private var lastEquipMs     = 0L
+    @Volatile private var offhandHasTotem = false
+    @Volatile private var totemSlot       = -1
 
-    /** Açık slot'a bakarken hangi container'ı tara */
-    val deepScan  = boolSetting("Deep Scan", default = true)
-
-    /** Konsol log */
-    val logging   = boolSetting("Logging", default = false)
-
-    // ── Durum ─────────────────────────────────────────────────────────────────
-
-    @Volatile private var lastEquipMs       = 0L
-    @Volatile private var pendingEquip      = false
-    @Volatile private var totemSlot         = -1   // envanterdeki slot indeksi
-    @Volatile private var offhandHasTotem   = false
-
-    // Totem item ID — Bedrock 1.21
-    private val TOTEM_ITEM_ID = 732  // minecraft:totem_of_undying
-
-    // Offhand slot numarası (Bedrock inventory layout)
-    private val OFFHAND_SLOT  = 54
-    private val HOTBAR_START  = 0
-    private val HOTBAR_END    = 8
-    private val INV_START     = 9
-    private val INV_END       = 35
+    // Bedrock runtime item ID — bedrock-connection SNAPSHOT sürümünde
+    // item runtime ID'leri dinamik. Onun yerine isim bazlı arama yapalım.
+    private val TOTEM_ITEM_NAME = "minecraft:totem_of_undying"
+    private val OFFHAND_WINDOW  = 119
+    private val OFFHAND_SLOT    = 0
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onEnable() {
-        log("AutoTotem aktif")
         pendingEquip    = false
         offhandHasTotem = false
         totemSlot       = -1
         lastEquipMs     = 0L
+        log("AutoTotem aktif")
     }
 
     override fun onDisable() {
-        log("AutoTotem pasif")
         pendingEquip = false
+        log("AutoTotem pasif")
     }
 
-    // ── Her 50ms tick ─────────────────────────────────────────────────────────
+    // ── Tick ─────────────────────────────────────────────────────────────────
 
     override suspend fun onTick() {
         if (!pendingEquip) return
         val now = System.currentTimeMillis()
         if (now - lastEquipMs < delay.value) return
-        if (totemSlot < 0) return
+        val slot = totemSlot
+        if (slot < 0) return
 
         pendingEquip = false
         lastEquipMs  = now
-        sendEquipTransaction(totemSlot)
+        equipTotem(slot)
     }
 
     // ── Paket dinleyici ───────────────────────────────────────────────────────
 
-    /**
-     * Sunucudan gelen paketleri dinle.
-     * PlayerHurtPacket → hasar aldık, totem gerekebilir.
-     * InventoryTransactionPacket → offhand güncellendi mi kontrol et.
-     */
     override fun onPacketReceive(event: PacketEvent) {
         val pkt = event.packet ?: return
         when (pkt) {
-            is PlayerHurtPacket -> {
-                // Hasar aldık → offhand'i kontrol et
-                scheduleEquipIfNeeded()
+            is InventoryContentPacket -> {
+                OxInventoryTracker.onInventoryContent(pkt)
+                if (pkt.containerId == OFFHAND_WINDOW) {
+                    val item = pkt.contents.firstOrNull()
+                    offhandHasTotem = isTotem(item)
+                    if (!offhandHasTotem) scheduleEquip()
+                }
+            }
+            is InventorySlotPacket -> {
+                OxInventoryTracker.onInventorySlot(pkt)
+                if (pkt.containerId == OFFHAND_WINDOW && pkt.slot == OFFHAND_SLOT) {
+                    offhandHasTotem = isTotem(pkt.item)
+                    if (!offhandHasTotem) scheduleEquip()
+                }
             }
             is InventoryTransactionPacket -> {
-                // Offhand slotu güncellendi mi?
                 checkOffhandUpdate(pkt)
             }
             else -> {}
         }
     }
 
-    /**
-     * İstemciden gelen paketleri dinle.
-     * PlayerAuthInputPacket her frame gelir — offhand boş ise anında equip iste.
-     */
     override fun onPacketSend(event: PacketEvent) {
-        val pkt = event.packet ?: return
-        if (pkt is PlayerAuthInputPacket) {
-            if (!offhandHasTotem) scheduleEquipIfNeeded()
-        }
+        // PlayerAuthInput her frame gelir — offhand boşsa equip planla
+        if (!offhandHasTotem && !pendingEquip) scheduleEquip()
     }
 
-    // ── Yardımcı fonksiyonlar ─────────────────────────────────────────────────
+    // ── Yardımcılar ───────────────────────────────────────────────────────────
 
-    private fun scheduleEquipIfNeeded() {
-        if (offhandHasTotem) return        // zaten var
-        if (pendingEquip)    return        // zaten bekliyor
-
-        val slot = findTotemSlot()
-        if (slot < 0) return              // envanterde totem yok
-
+    private fun scheduleEquip() {
+        if (offhandHasTotem || pendingEquip) return
+        val slot = OxInventoryTracker.findItemByName(TOTEM_ITEM_NAME)
+        if (slot < 0) return
         totemSlot    = slot
         pendingEquip = true
-        log("Totem slot $slot bulundu, equip planlandı (delay=${delay.value}ms)")
-    }
-
-    /**
-     * Envanterde totem arar.
-     * deepScan=true → tüm envanter + hotbar
-     * deepScan=false → sadece hotbar
-     */
-    private fun findTotemSlot(): Int {
-        // Bu metod gerçek envanter verisi olmadan çalışamaz —
-        // OxRelaySession üzerinden gelen SetPlayerInventoryPacket /
-        // InventoryContentPacket ile envanter takip edilmeli.
-        // Şimdilik placeholder implementasyon döner:
-        return OxInventoryTracker.findItem(TOTEM_ITEM_ID,
-            deepScan = deepScan.value,
-            hotbarOnly = !deepScan.value)
+        log("Slot $slot'ta totem bulundu, equip planlandı (delay=${delay.value}ms)")
     }
 
     private fun checkOffhandUpdate(pkt: InventoryTransactionPacket) {
-        // Offhand slot hareketi kontrol
-        val hasTotemInOffhand = pkt.actions.any { action ->
-            action.toSlot == OFFHAND_SLOT &&
-            action.toItem.definition?.runtimeId == TOTEM_ITEM_ID
-        }
-        if (hasTotemInOffhand) {
-            offhandHasTotem = true
-            pendingEquip    = false
-            log("Offhand totemi takıldı ✓")
-        }
-
-        val removedFromOffhand = pkt.actions.any { action ->
-            action.fromSlot == OFFHAND_SLOT &&
-            action.fromItem.definition?.runtimeId == TOTEM_ITEM_ID
-        }
-        if (removedFromOffhand) {
-            offhandHasTotem = false
-            log("Offhand totemi çıkarıldı — yeniden equip gerekebilir")
-            scheduleEquipIfNeeded()
+        // InventoryActionData API: source, fromSlot, fromItem, toSlot, toItem
+        // Gerçek field adları: slot -> source+slot kombinasyonu
+        pkt.actions.forEach { action ->
+            val src = action.source
+            if (src?.containerId == OFFHAND_WINDOW) {
+                // Offhand'e bir şey geldi
+                offhandHasTotem = isTotem(action.toItem)
+                if (offhandHasTotem) {
+                    pendingEquip = false
+                    log("Offhand totemi takıldı ✓")
+                }
+            }
         }
     }
 
-    /**
-     * Gerçek InventoryTransaction paketi üretir ve istemciye gönderir.
-     * Relay katmanı bu paketi sunucuya iletecek.
-     */
-    private fun sendEquipTransaction(fromSlot: Int) {
+    private fun equipTotem(fromSlot: Int) {
+        if (!OxRelayBridge.isActive) return
         try {
+            val totemItem = OxInventoryTracker.getItem(fromSlot)
+            if (!isTotem(totemItem)) { totemSlot = -1; return }
+
             val txPacket = InventoryTransactionPacket().apply {
                 transactionType = InventoryTransactionType.NORMAL
-                actions.add(
-                    InventoryActionData(
-                        InventorySource.fromContainerWindowId(0),  // inventory
-                        fromSlot,
-                        OxInventoryTracker.getItem(fromSlot),     // totemItem
-                        OxInventoryTracker.emptyItem()            // empty
-                    )
-                )
-                actions.add(
-                    InventoryActionData(
-                        InventorySource.fromContainerWindowId(119), // offhand window
-                        0,                                          // offhand slot 0
-                        OxInventoryTracker.emptyItem(),
-                        OxInventoryTracker.getItem(fromSlot)
-                    )
-                )
+                // Envanterden offhand'e taşı
+                actions.add(InventoryActionData(
+                    InventorySource.fromContainerWindowId(0),          // oyuncu envanteri
+                    fromSlot, totemItem, ItemData.AIR
+                ))
+                actions.add(InventoryActionData(
+                    InventorySource.fromContainerWindowId(OFFHAND_WINDOW), // offhand
+                    OFFHAND_SLOT, ItemData.AIR, totemItem
+                ))
             }
             OxRelayBridge.sendToServer(txPacket)
             offhandHasTotem = true
             log("InventoryTransaction gönderildi: slot $fromSlot → offhand")
         } catch (e: Exception) {
-            Timber.e(e, "AutoTotem sendEquipTransaction hata")
+            Timber.e(e, "[AutoTotem] equipTotem hata")
         }
+    }
+
+    private fun isTotem(item: ItemData?): Boolean {
+        if (item == null || item == ItemData.AIR) return false
+        val name = item.definition?.identifier ?: return false
+        return name.equals(TOTEM_ITEM_NAME, ignoreCase = true)
     }
 
     private fun log(msg: String) {

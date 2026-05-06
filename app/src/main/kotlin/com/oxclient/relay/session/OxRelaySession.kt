@@ -17,9 +17,6 @@ import org.cloudburstmc.protocol.bedrock.packet.UnknownPacket
 import timber.log.Timber
 import java.util.*
 
-/**
- * OxRelaySession — MC istemcisi (serverSide) ↔ Gerçek sunucu (clientSide) köprüsü.
- */
 class OxRelaySession internal constructor(
     peer       : BedrockPeer,
     subClientId: Int,
@@ -33,10 +30,8 @@ class OxRelaySession internal constructor(
         }
 
     val listeners: MutableList<OxPacketListener> = ArrayList()
-
-    private val packetQueue: Queue<Pair<BedrockPacket, Boolean>> =
-        PlatformDependent.newMpscQueue()
-    private val MAX_QUEUE = 512
+    private val packetQueue: Queue<Pair<BedrockPacket, Boolean>> = PlatformDependent.newMpscQueue()
+    private val MAX_QUEUE = 1000
 
     // ── Gönderme API ─────────────────────────────────────────────────────────
 
@@ -53,37 +48,30 @@ class OxRelaySession internal constructor(
     fun serverBound(packet: BedrockPacket) {
         val c = clientSide
         if (c != null) {
-            runCatching { c.sendPacket(packet) }
-                .onFailure { Timber.e(it, "serverBound hata") }
+            runCatching { c.sendPacket(packet) }.onFailure { Timber.e(it, "serverBound hata") }
         } else {
             if (packetQueue.size < MAX_QUEUE) packetQueue.add(packet to false)
-            else Timber.w("serverBound kuyruk dolu, paket düşürüldü")
         }
     }
 
     fun serverBoundImmediate(packet: BedrockPacket) {
         val c = clientSide
         if (c != null) {
-            runCatching { c.sendPacketImmediately(packet) }
-                .onFailure { Timber.e(it, "serverBoundImmediate hata") }
+            runCatching { c.sendPacketImmediately(packet) }.onFailure { Timber.e(it, "serverBoundImmediate hata") }
         } else {
             if (packetQueue.size < MAX_QUEUE) packetQueue.add(packet to true)
         }
     }
 
-    // ── Listener zinciri kurulumu ─────────────────────────────────────────────
+    // ── Listener kurulumu ─────────────────────────────────────────────────────
 
-    internal fun addDefaultListeners(
-        remoteAddress: OxAddress,
-        mcToken      : String,
-        gamertag     : String
-    ) {
+    internal fun addDefaultListeners(remoteAddress: OxAddress, mcToken: String, gamertag: String) {
         listeners.add(OxAutoCodecListener(this))
         listeners.add(OxLoginListener(this, remoteAddress, mcToken, gamertag))
         listeners.add(OxGameListener(this))
     }
 
-    // ── Definition senkronu + kuyruk flush ───────────────────────────────────
+    // ── Senkronizasyon + kuyruk flush ─────────────────────────────────────────
 
     private fun syncAndFlush(cs: ClientSide) {
         runCatching {
@@ -93,26 +81,25 @@ class OxRelaySession internal constructor(
             ch.blockDefinitions        = sh.blockDefinitions
             ch.itemDefinitions         = sh.itemDefinitions
             ch.cameraPresetDefinitions = sh.cameraPresetDefinitions
-            ch.encodingSettings        = sh.encodingSettings
+            // encodingSettings — sadece API'de varsa set et
+            try { ch.encodingSettings = sh.encodingSettings } catch (_: Throwable) {}
         }.onFailure { Timber.e(it, "syncDefinitions hata") }
 
         var n = 0
         while (true) {
-            val (pkt, immediate) = packetQueue.poll() ?: break
-            runCatching {
-                if (immediate) cs.sendPacketImmediately(pkt) else cs.sendPacket(pkt)
-                n++
-            }
+            val (pkt, imm) = packetQueue.poll() ?: break
+            runCatching { if (imm) cs.sendPacketImmediately(pkt) else cs.sendPacket(pkt); n++ }
         }
-        if (n > 0) Timber.d("$n kuyruk paketi flush edildi")
+        if (n > 0) Timber.d("$n kuyruk paketi gönderildi")
     }
 
-    // ── İç session sınıfları ─────────────────────────────────────────────────
+    // ── İç session'lar ────────────────────────────────────────────────────────
 
     inner class ServerSide(peer: BedrockPeer, subClientId: Int) :
         BedrockServerSession(peer, subClientId) {
 
         init {
+            // BedrockPacketHandler'da onDisconnect override — WClient'taki gibi
             packetHandler = object : BedrockPacketHandler {
                 override fun onDisconnect(reason: CharSequence) {
                     Timber.i("[Session] MC uygulama kesildi: $reason")
@@ -124,11 +111,21 @@ class OxRelaySession internal constructor(
         }
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
-            route(wrapper,
-                beforeFn  = { l, p -> l.beforeClientBound(p) },
-                afterFn   = { l, p -> l.afterClientBound(p) },
-                forwardFn = { raw -> serverBound(raw) }
-            )
+            try {
+                for (listener in listeners) {
+                    try { if (listener.beforeClientBound(wrapper.packet)) return }
+                    catch (e: Throwable) { Timber.e(e, "beforeClientBound hata") }
+                }
+                val raw = UnknownPacket().apply {
+                    payload  = wrapper.packetBuffer.retainedSlice().skipBytes(wrapper.headerLength)
+                    packetId = wrapper.packetId
+                }
+                serverBound(raw)
+                for (listener in listeners) {
+                    try { listener.afterClientBound(wrapper.packet) }
+                    catch (e: Throwable) { Timber.e(e, "afterClientBound hata") }
+                }
+            } catch (e: Exception) { Timber.e(e, "ServerSide.onPacket hata") }
         }
     }
 
@@ -147,39 +144,21 @@ class OxRelaySession internal constructor(
         }
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
-            route(wrapper,
-                beforeFn  = { l, p -> l.beforeServerBound(p) },
-                afterFn   = { l, p -> l.afterServerBound(p) },
-                forwardFn = { raw -> clientBound(raw) }
-            )
-        }
-    }
-
-    // ── Ortak paket yönlendirme ───────────────────────────────────────────────
-
-    private fun route(
-        wrapper  : BedrockPacketWrapper,
-        beforeFn : (OxPacketListener, BedrockPacket) -> Boolean,
-        afterFn  : (OxPacketListener, BedrockPacket) -> Unit,
-        forwardFn: (BedrockPacket) -> Unit
-    ) {
-        val decoded = wrapper.packet
-
-        for (listener in listeners) {
-            try { if (beforeFn(listener, decoded)) return }
-            catch (e: Throwable) { Timber.e(e, "beforeFn hata: ${listener.javaClass.simpleName}") }
-        }
-
-        val buffer = wrapper.packetBuffer.retainedSlice().skipBytes(wrapper.headerLength)
-        val raw    = UnknownPacket().apply {
-            payload  = buffer
-            packetId = wrapper.packetId
-        }
-        forwardFn(raw)
-
-        for (listener in listeners) {
-            try { afterFn(listener, decoded) }
-            catch (e: Throwable) { Timber.e(e, "afterFn hata: ${listener.javaClass.simpleName}") }
+            try {
+                for (listener in listeners) {
+                    try { if (listener.beforeServerBound(wrapper.packet)) return }
+                    catch (e: Throwable) { Timber.e(e, "beforeServerBound hata") }
+                }
+                val raw = UnknownPacket().apply {
+                    payload  = wrapper.packetBuffer.retainedSlice().skipBytes(wrapper.headerLength)
+                    packetId = wrapper.packetId
+                }
+                clientBound(raw)
+                for (listener in listeners) {
+                    try { listener.afterServerBound(wrapper.packet) }
+                    catch (e: Throwable) { Timber.e(e, "afterServerBound hata") }
+                }
+            } catch (e: Exception) { Timber.e(e, "ClientSide.onPacket hata") }
         }
     }
 }

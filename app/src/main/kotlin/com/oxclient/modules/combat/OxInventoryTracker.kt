@@ -8,72 +8,54 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * OxInventoryTracker — Bedrock envanter durumunu takip eder.
- *
- * InventoryContentPacket ve InventorySlotPacket relay dinleyicisi tarafından
- * buraya beslenir. Modüller (AutoTotem, vb.) bu singleton üzerinden envanter sorgular.
+ * Relay listener tarafından beslenir, modüller tarafından sorgulanır.
  */
 object OxInventoryTracker {
 
     // windowId → (slot → ItemData)
     private val windows = ConcurrentHashMap<Int, ConcurrentHashMap<Int, ItemData>>()
 
-    private const val PLAYER_INVENTORY_WINDOW = 0
-    private const val OFFHAND_WINDOW          = 119
-    private const val OFFHAND_SLOT            = 0
+    private const val PLAYER_INV_WINDOW = 0
 
-    // ── Relay feed ────────────────────────────────────────────────────────────
+    // ── Feed (OxGameListener tarafından çağrılır) ─────────────────────────────
 
     fun onInventoryContent(pkt: InventoryContentPacket) {
         val win = windows.getOrPut(pkt.containerId) { ConcurrentHashMap() }
-        pkt.contents.forEachIndexed { slot, item ->
-            win[slot] = item
-        }
-        Timber.d("[Tracker] InventoryContent windowId=${pkt.containerId} items=${pkt.contents.size}")
+        pkt.contents.forEachIndexed { slot, item -> win[slot] = item }
+        Timber.d("[Tracker] Content w=${pkt.containerId} items=${pkt.contents.size}")
     }
 
     fun onInventorySlot(pkt: InventorySlotPacket) {
         val win = windows.getOrPut(pkt.containerId) { ConcurrentHashMap() }
         win[pkt.slot] = pkt.item
-        Timber.d("[Tracker] InventorySlot windowId=${pkt.containerId} slot=${pkt.slot}")
+        Timber.d("[Tracker] Slot w=${pkt.containerId} s=${pkt.slot}")
     }
 
-    // ── Query API ─────────────────────────────────────────────────────────────
+    // ── Sorgu API ─────────────────────────────────────────────────────────────
 
-    fun getItem(slot: Int, windowId: Int = PLAYER_INVENTORY_WINDOW): ItemData {
-        return windows[windowId]?.get(slot) ?: ItemData.AIR
-    }
-
-    fun offhandItem(): ItemData = getItem(OFFHAND_SLOT, OFFHAND_WINDOW)
-
-    fun offhandHasItem(runtimeId: Int): Boolean =
-        offhandItem().definition?.runtimeId == runtimeId
+    fun getItem(slot: Int, windowId: Int = PLAYER_INV_WINDOW): ItemData =
+        windows[windowId]?.get(slot) ?: ItemData.AIR
 
     /**
-     * Belirli item'ı envanterden arar, slot index döner (-1 = bulunamadı).
-     * [hotbarOnly] = true → sadece 0-8 arası hotbar slotları.
-     * [deepScan]   = true → tüm envanter 0-35.
+     * Item tanımlayıcı adına göre envanterde ara.
+     * Örn: "minecraft:totem_of_undying"
+     * Döner: slot indeksi veya -1.
      */
-    fun findItem(
-        runtimeId : Int,
-        deepScan  : Boolean = true,
-        hotbarOnly: Boolean = false
+    fun findItemByName(
+        identifier: String,
+        windowId  : Int = PLAYER_INV_WINDOW,
+        slotRange : IntRange = 0..35
     ): Int {
-        val inv = windows[PLAYER_INVENTORY_WINDOW] ?: return -1
-        val range = when {
-            hotbarOnly -> 0..8
-            deepScan   -> 0..35
-            else       -> 0..35
-        }
-        for (slot in range) {
+        val inv = windows[windowId] ?: return -1
+        for (slot in slotRange) {
             val item = inv[slot] ?: continue
-            if (item.definition?.runtimeId == runtimeId && item.count > 0) return slot
+            if (item == ItemData.AIR) continue
+            val id = item.definition?.identifier ?: continue
+            if (id.equals(identifier, ignoreCase = true) && item.count > 0) return slot
         }
         return -1
     }
 
-    /** Tüm envanteri temizle (disconnect vb.) */
+    /** Tüm envanteri temizle (disconnect) */
     fun clear() { windows.clear() }
-
-    /** Boş ItemData yardımcısı */
-    fun emptyItem(): ItemData = ItemData.AIR
 }

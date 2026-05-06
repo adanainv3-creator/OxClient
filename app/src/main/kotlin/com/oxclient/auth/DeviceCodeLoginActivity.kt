@@ -49,14 +49,19 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
     }
 
     Column(modifier = Modifier.fillMaxSize().background(OxBackground)) {
+        // Top bar
         Row(
-            modifier = Modifier.fillMaxWidth().background(OxSurface)
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(OxSurface)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Hesap Ekle", fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                color = Color.White, fontFamily = FontFamily.Monospace)
+            Text(
+                "Hesap Ekle", fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                color = Color.White, fontFamily = FontFamily.Monospace
+            )
             IconButton(onClick = { MicrosoftAuthManager.cancelSignIn(); onClose() }) {
                 Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color.White)
             }
@@ -68,54 +73,92 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(color = OxPurple)
                         Spacer(Modifier.height(16.dp))
-                        Text("Microsoft bağlantısı kuruluyor…", fontSize = 14.sp,
-                            color = OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace)
+                        Text(
+                            "Microsoft bağlantısı kuruluyor…",
+                            fontSize = 14.sp, color = OxOnSurface.copy(0.7f),
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
             }
+
             is AuthState.WaitingForUser -> {
-                Card(modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = OxSurface)) {
-                    Column(Modifier.fillMaxWidth().padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Microsoft giriş kodu", fontSize = 12.sp,
-                            color = OxOnSurface.copy(0.55f), fontFamily = FontFamily.Monospace)
+                // Kod kartı
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    shape    = RoundedCornerShape(16.dp),
+                    colors   = CardDefaults.cardColors(containerColor = OxSurface)
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "Microsoft giriş kodu", fontSize = 12.sp,
+                            color = OxOnSurface.copy(0.55f), fontFamily = FontFamily.Monospace
+                        )
                         Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(state.userCode, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold,
-                                color = OxPurpleLight, fontFamily = FontFamily.Monospace, letterSpacing = 4.sp)
-                            IconButton(onClick = { clipboard.setText(AnnotatedString(state.userCode)) },
-                                modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.ContentCopy, "Kopyala",
-                                    tint = OxOnSurface.copy(0.6f), modifier = Modifier.size(18.dp))
+                        Row(
+                            verticalAlignment     = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                state.userCode, fontSize = 30.sp,
+                                fontWeight = FontWeight.ExtraBold, color = OxPurpleLight,
+                                fontFamily = FontFamily.Monospace, letterSpacing = 4.sp
+                            )
+                            IconButton(
+                                onClick   = { clipboard.setText(AnnotatedString(state.userCode)) },
+                                modifier  = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.ContentCopy, "Kopyala",
+                                    tint = OxOnSurface.copy(0.6f),
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                         Spacer(Modifier.height(6.dp))
-                        Text("Aşağıdaki sayfada bu kodu girin", fontSize = 11.sp,
-                            color = OxOnSurface.copy(0.45f), fontFamily = FontFamily.Monospace)
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth(),
-                            color = OxPurple, trackColor = OxPurple.copy(0.15f))
+                        Text(
+                            "Aşağıdaki sayfada bu kodu girin",
+                            fontSize = 11.sp, color = OxOnSurface.copy(0.45f),
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            modifier   = Modifier.fillMaxWidth(),
+                            color      = OxPurple,
+                            trackColor = OxPurple.copy(0.15f)
+                        )
                     }
                 }
+
+                // WebView
                 Box(modifier = Modifier.weight(1f)) {
-                    AndroidView(Modifier.fillMaxSize(), factory = { ctx ->
-                        WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled  = true
-                            settings.userAgentString    =
-                                "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
-                                "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(v: WebView?, r: WebResourceRequest?) = false
+                    val verificationUri = state.verificationUri
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory  = { ctx ->
+                            WebView(ctx).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled  = true
+                                settings.userAgentString    =
+                                    "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                                    "Chrome/124.0.0.0 Mobile Safari/537.36"
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        request: WebResourceRequest?
+                                    ): Boolean = false
+                                }
+                                loadUrl(verificationUri)
                             }
-                            loadUrl(state.verificationUri)
                         }
-                    })
+                    )
                 }
             }
+
             else -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = OxPurple)

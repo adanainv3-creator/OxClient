@@ -1,7 +1,6 @@
 package com.oxclient.relay.connection
 
 import com.oxclient.relay.OxAddress
-import com.oxclient.relay.OxRelay
 import com.oxclient.relay.session.OxRelaySession
 import io.netty.bootstrap.Bootstrap
 import io.netty.channel.Channel
@@ -17,12 +16,8 @@ import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitial
 import timber.log.Timber
 import kotlin.random.Random
 
-/**
- * OxConnectionManager — OxRelaySession için gerçek MC sunucusuna çıkan bağlantıyı kurar.
- */
-class OxConnectionManager(
-    private val session: OxRelaySession
-) {
+class OxConnectionManager(private val session: OxRelaySession) {
+
     private var group  : NioEventLoopGroup? = null
     private var channel: Channel?           = null
 
@@ -33,10 +28,9 @@ class OxConnectionManager(
         try {
             val g = NioEventLoopGroup(1)
             group = g
+            var connected: OxRelaySession.ClientSide? = null
 
-            var connectedSide: OxRelaySession.ClientSide? = null
-
-            val bootstrap = Bootstrap()
+            val future = Bootstrap()
                 .group(g)
                 .channelFactory(RakChannelFactory.client(NioDatagramChannel::class.java))
                 .option(RakChannelOption.RAK_PROTOCOL_VERSION, 11)
@@ -44,26 +38,25 @@ class OxConnectionManager(
                 .option(RakChannelOption.RAK_GUID, Random.nextLong())
                 .handler(object : BedrockChannelInitializer<OxRelaySession.ClientSide>() {
 
-                    override fun createSession0(peer: BedrockPeer, subClientId: Int): OxRelaySession.ClientSide {
-                        val clientSide = session.ClientSide(peer, subClientId)
-                        session.clientSide = clientSide
-                        connectedSide      = clientSide
-                        clientSide.onConnected()
-                        return clientSide
+                    override fun createSession0(peer: BedrockPeer, sub: Int): OxRelaySession.ClientSide {
+                        val cs = session.ClientSide(peer, sub)
+                        session.clientSide = cs
+                        connected = cs
+                        cs.onConnected()
+                        return cs
                     }
 
-                    override fun initSession(session: OxRelaySession.ClientSide) {}
+                    override fun initSession(s: OxRelaySession.ClientSide) {}
 
                     override fun preInitChannel(ch: Channel) {
                         ch.attr(PacketDirection.ATTRIBUTE).set(PacketDirection.SERVER_BOUND)
                         super.preInitChannel(ch)
                     }
                 })
+                .connect(address.toInetSocketAddress())
+                .awaitUninterruptibly()
 
-            Timber.i("[ConnManager] Sunucuya bağlanılıyor: $address")
-
-            val future = bootstrap.connect(address.toInetSocketAddress()).awaitUninterruptibly()
-            channel    = future.channel()
+            channel = future.channel()
 
             if (!future.isSuccess) {
                 cleanup()
@@ -72,14 +65,13 @@ class OxConnectionManager(
                 )
             }
 
-            val cs = connectedSide
+            val cs = connected
             if (cs != null) {
                 Timber.i("[ConnManager] ✓ Bağlandı: $address")
                 Result.success(cs)
             } else {
                 Result.failure(RuntimeException("ClientSide oluşturulamadı"))
             }
-
         } catch (e: Exception) {
             Timber.e(e, "[ConnManager] Bağlantı hatası")
             cleanup()

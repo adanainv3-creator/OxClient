@@ -1,5 +1,6 @@
 package com.oxclient.relay
 
+import com.oxclient.relay.codec.OxCodecRegistry
 import com.oxclient.relay.connection.OxConnectionManager
 import com.oxclient.relay.session.OxRelaySession
 import io.netty.bootstrap.ServerBootstrap
@@ -15,20 +16,14 @@ import org.cloudburstmc.protocol.bedrock.BedrockPeer
 import org.cloudburstmc.protocol.bedrock.BedrockPong
 import org.cloudburstmc.protocol.bedrock.PacketDirection
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
-import org.cloudburstmc.protocol.bedrock.codec.v766.Bedrock_v766
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
 import timber.log.Timber
 import kotlin.random.Random
 
-/**
- * OxRelay — Minecraft Bedrock MITM relay çekirdeği.
- *
- * OxRelayService tarafından yönetilir.
- */
 class OxRelay {
 
     companion object {
-        val DEFAULT_CODEC: BedrockCodec = Bedrock_v766.CODEC
+        val DEFAULT_CODEC: BedrockCodec get() = OxCodecRegistry.latestCodec
         const val LOCAL_PORT = 19132
     }
 
@@ -42,8 +37,6 @@ class OxRelay {
 
     val isRunning: Boolean get() = channelFuture != null
 
-    // ── Start ─────────────────────────────────────────────────────────────────
-
     fun start(
         remoteAddress : OxAddress,
         mcToken       : String,
@@ -52,14 +45,28 @@ class OxRelay {
     ) {
         if (isRunning) { Timber.w("[OxRelay] Zaten çalışıyor"); return }
 
+        val codec = DEFAULT_CODEC
         bossGroup = NioEventLoopGroup(2)
-        Timber.i("[OxRelay] Başlatılıyor → local=$localAddress  remote=$remoteAddress")
+        Timber.i("[OxRelay] Başlatılıyor → local=$localAddress  remote=$remoteAddress  codec=${codec.minecraftVersion}")
 
         try {
+            val pong = BedrockPong()
+                .edition("MCPE")
+                .gameType("Survival")
+                .version(codec.minecraftVersion)
+                .protocolVersion(codec.protocolVersion)
+                .motd("§aOxClient §7Relay")
+                .playerCount(0)
+                .maximumPlayerCount(1)
+                .subMotd("§7v2.1.0")
+                .nintendoLimited(false)
+                .ipv4Port(LOCAL_PORT)
+                .ipv6Port(LOCAL_PORT)
+
             ServerBootstrap()
                 .group(bossGroup!!)
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel::class.java))
-                .option(RakChannelOption.RAK_ADVERTISEMENT, buildPong().toByteBuf())
+                .option(RakChannelOption.RAK_ADVERTISEMENT, pong.toByteBuf())
                 .option(RakChannelOption.RAK_GUID, Random.nextLong())
                 .childHandler(object : BedrockChannelInitializer<OxRelaySession.ServerSide>() {
 
@@ -97,8 +104,6 @@ class OxRelay {
         }
     }
 
-    // ── Stop ──────────────────────────────────────────────────────────────────
-
     fun stop() {
         Timber.i("[OxRelay] Durduruluyor…")
         runCatching { activeSession?.serverSide?.disconnect("OxClient durduruldu") }
@@ -114,15 +119,9 @@ class OxRelay {
         bossGroup         = null
         activeSession     = null
         connectionManager = null
-        Timber.i("[OxRelay] Temizlendi")
     }
 
-    // ── Sunucuya bağlan (Listener tarafından çağrılır) ────────────────────────
-
-    internal fun connectToServer(
-        address    : OxAddress,
-        onConnected: OxRelaySession.ClientSide.() -> Unit
-    ) {
+    internal fun connectToServer(address: OxAddress, onConnected: OxRelaySession.ClientSide.() -> Unit) {
         val manager = connectionManager ?: return
         CoroutineScope(Dispatchers.IO).launch {
             manager.connect(address, onConnected).onFailure { e ->
@@ -131,19 +130,4 @@ class OxRelay {
             }
         }
     }
-
-    // ── Advertisement ─────────────────────────────────────────────────────────
-
-    private fun buildPong(): BedrockPong = BedrockPong()
-        .edition("MCPE")
-        .gameType("Survival")
-        .version(DEFAULT_CODEC.minecraftVersion)
-        .protocolVersion(DEFAULT_CODEC.protocolVersion)
-        .motd("§aOxClient §7Relay")
-        .playerCount(0)
-        .maximumPlayerCount(1)
-        .subMotd("§7v2.1.0")
-        .nintendoLimited(false)
-        .ipv4Port(LOCAL_PORT)
-        .ipv6Port(LOCAL_PORT)
 }

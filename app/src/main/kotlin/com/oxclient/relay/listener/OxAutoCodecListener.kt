@@ -1,71 +1,94 @@
 package com.oxclient.relay.listener
 
+import com.oxclient.relay.codec.OxCodecRegistry
 import com.oxclient.relay.session.OxRelaySession
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
-import org.cloudburstmc.protocol.bedrock.codec.v766.Bedrock_v766
+import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventoryContentSerializer_v729
+import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventorySlotSerializer_v729
+import org.cloudburstmc.protocol.bedrock.data.EncodingSettings
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
-import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
-import org.cloudburstmc.protocol.bedrock.packet.LoginPacket
-import org.cloudburstmc.protocol.bedrock.packet.NetworkSettingsPacket
-import org.cloudburstmc.protocol.bedrock.packet.RequestNetworkSettingsPacket
+import org.cloudburstmc.protocol.bedrock.packet.*
 import timber.log.Timber
 
 /**
- * OxAutoCodecListener — İstemcinin protokol versiyonunu tespit eder ve codec'i ayarlar.
+ * OxAutoCodecListener — WClient AutoCodecPacketListener'ın OxClient karşılığı.
  *
- * Adım 1: MC uygulaması RequestNetworkSettings gönderir (protokol versiyonu içerir).
- * Adım 2: Biz uygun codec'i seçip serverSide'a ayarlarız.
- * Adım 3: Sunucu NetworkSettings gönderdikten sonra compression başlar.
+ * 1. RequestNetworkSettingsPacket → codec seç, istemciye NetworkSettings gönder, compression aç.
+ * 2. Sunucu NetworkSettings gönderirse → server tarafında compression aç.
  */
 class OxAutoCodecListener(
-    private val session: OxRelaySession
+    private val session   : OxRelaySession,
+    private val patchCodec: Boolean = true
 ) : OxPacketListener {
 
-    private var codecSet = false
+    // ── İstemciden gelen paketler ─────────────────────────────────────────────
 
-    // Desteklenen codec'ler (genişletilebilir)
-    private val supportedCodecs: List<BedrockCodec> = listOf(
-        Bedrock_v766.CODEC   // 1.21.50
-    )
-
-    /** İstemciden gelen RequestNetworkSettings paketini yakala */
     override fun beforeClientBound(packet: BedrockPacket): Boolean {
-        if (codecSet || packet !is RequestNetworkSettingsPacket) return false
+        if (packet !is RequestNetworkSettingsPacket) return false
 
-        val proto    = packet.protocolVersion
-        val codec    = findBestCodec(proto)
+        try {
+            val proto    = packet.protocolVersion
+            val codec    = patchIfNeeded(OxCodecRegistry.getClosestCodec(proto))
 
-        Timber.i("[AutoCodec] Client protokol: $proto → ${codec.minecraftVersion}")
+            Timber.i("[AutoCodec] Client proto=$proto → codec=${codec.minecraftVersion}")
 
-        // serverSide codec'i ayarla
-        session.serverSide.codec = codec
-        codecSet = true
+            session.serverSide.codec = codec
+            session.serverSide.peer.codecHelper.apply {
+                try {
+                    encodingSettings = EncodingSettings.builder()
+                        .maxListSize(Int.MAX_VALUE)
+                        .maxByteArraySize(Int.MAX_VALUE)
+                        .maxNetworkNBTSize(Int.MAX_VALUE)
+                        .maxItemNBTSize(Int.MAX_VALUE)
+                        .maxStringLength(Int.MAX_VALUE)
+                        .build()
+                } catch (_: Throwable) {
+                    // Eski API — encodingSettings yoksa sessizce geç
+                }
+            }
 
-        return false  // paketi bloklamıyoruz
+            // İstemciye NetworkSettings gönder (compression başlatır)
+            val nsPacket = NetworkSettingsPacket().apply {
+                compressionThreshold = 1
+                compressionAlgorithm = PacketCompressionAlgorithm.ZLIB
+            }
+            session.clientBoundImmediate(nsPacket)
+            session.serverSide.setCompression(PacketCompressionAlgorithm.ZLIB)
+            Timber.i("[AutoCodec] ✓ Compression ZLIB aktif (client)")
+
+        } catch (e: Exception) {
+            Timber.e(e, "[AutoCodec] RequestNetworkSettings işleme hatası")
+            session.serverSide.disconnect("Network settings hatası: ${e.message}")
+        }
+
+        return true  // İstemciye bu paketi iletme, biz yanıtladık
     }
 
-    /** Sunucudan gelen NetworkSettings paketinde compression aç */
+    // ── Sunucudan gelen paketler ──────────────────────────────────────────────
+
     override fun beforeServerBound(packet: BedrockPacket): Boolean {
         if (packet !is NetworkSettingsPacket) return false
 
-        val algo = when (packet.compressionAlgorithm) {
-            PacketCompressionAlgorithm.ZLIB  -> PacketCompressionAlgorithm.ZLIB
-            PacketCompressionAlgorithm.SNAPPY -> PacketCompressionAlgorithm.SNAPPY
-            else -> PacketCompressionAlgorithm.ZLIB
-        }
+        val algo = packet.compressionAlgorithm ?: PacketCompressionAlgorithm.ZLIB
+        Timber.i("[AutoCodec] Sunucu NetworkSettings: algo=$algo threshold=${packet.compressionThreshold}")
 
-        Timber.i("[AutoCodec] Compression: $algo threshold=${packet.compressionThreshold}")
-
-        // Her iki tarafta da compression'ı etkinleştir
-        session.serverSide.setCompression(algo)
-        session.clientSide?.setCompression(algo)
-
-        return false
+        runCatching { session.clientSide?.setCompression(algo) }
+        return false  // İstemciye ilet
     }
 
-    private fun findBestCodec(protocolVersion: Int): BedrockCodec {
-        return supportedCodecs.firstOrNull { it.protocolVersion == protocolVersion }
-            ?: supportedCodecs.maxByOrNull { it.protocolVersion }
-            ?: Bedrock_v766.CODEC
+    // ── Yardımcı ─────────────────────────────────────────────────────────────
+
+    private fun patchIfNeeded(codec: BedrockCodec): BedrockCodec {
+        return if (patchCodec && codec.protocolVersion > 729) {
+            try {
+                codec.toBuilder()
+                    .updateSerializer(InventoryContentPacket::class.java, InventoryContentSerializer_v729.INSTANCE)
+                    .updateSerializer(InventorySlotPacket::class.java, InventorySlotSerializer_v729.INSTANCE)
+                    .build()
+            } catch (e: Exception) {
+                Timber.w("[AutoCodec] Codec patch başarısız: ${e.message}")
+                codec
+            }
+        } else codec
     }
 }
