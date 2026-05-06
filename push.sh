@@ -3,7 +3,7 @@
 # Değişkenler (Token burada yok!)
 USERNAME="adanainv3-creator"
 REPO="github.com/adanainv3-creator/OxClient.git"
-BRANCH="Proje"
+BRANCH="main"
 
 # Kontrol: Eğer değişken boşsa kullanıcıyı uyar
 if [ -z "$MY_GITHUB_TOKEN" ]; then
