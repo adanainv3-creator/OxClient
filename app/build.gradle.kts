@@ -1,10 +1,9 @@
-@file:Suppress("VulnerableLibrariesLocal")
+import java.util.concurrent.TimeUnit
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -16,8 +15,13 @@ android {
         minSdk        = 26
         targetSdk     = 35
         versionCode   = 2
-        versionName   = "2.1.0"
+        versionName   = "3.0.0"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+
+        buildConfigField("String", "SERVER_HOST",       "\"2b2tpe.org\"")
+        buildConfigField("int",    "SERVER_PORT",       "19132")
+        buildConfigField("int",    "LOCAL_PROXY_PORT",  "19133")
+        buildConfigField("int",    "LOCAL_RELAY_PORT",  "19132")
     }
 
     signingConfigs {
@@ -34,10 +38,7 @@ android {
             isMinifyEnabled   = true
             isShrinkResources = true
             signingConfig     = signingConfigs.getByName("release")
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
             isMinifyEnabled     = false
@@ -52,7 +53,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true; buildConfig = true }
+    buildFeatures {
+        compose     = true
+        buildConfig = true
+    }
 
     sourceSets {
         named("main") { java.srcDirs("src/main/java", "src/main/kotlin") }
@@ -62,28 +66,27 @@ android {
         resources {
             excludes += listOf(
                 "META-INF/INDEX.LIST",
+                "META-INF/io.netty.versions.properties",
                 "META-INF/DEPENDENCIES",
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
                 "META-INF/AL2.0",
                 "META-INF/LGPL2.1",
-                "META-INF/io.netty.versions.properties",
-                "META-INF/native-image/**",
-                "google/protobuf/**",
-                "DebugProbesKt.bin"
+                "META-INF/*.kotlin_module",
+                "META-INF/versions/**",
+                "google/protobuf/*.proto"
             )
         }
     }
 }
 
 dependencies {
-    // ── Kotlin ────────────────────────────────────────────────────────────────
+    // ── Kotlin & Coroutines ───────────────────────────────────────────────
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
 
-    // ── AndroidX ─────────────────────────────────────────────────────────────
+    // ── AndroidX Core ─────────────────────────────────────────────────────
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
@@ -91,11 +94,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("androidx.savedstate:savedstate-ktx:1.2.1")
 
-    // ── Compose ───────────────────────────────────────────────────────────────
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
-    implementation(composeBom)
+    // ── Jetpack Compose ───────────────────────────────────────────────────
+    val bom = platform("androidx.compose:compose-bom:2024.06.00")
+    implementation(bom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -105,35 +107,45 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    // ── Network / Auth ────────────────────────────────────────────────────────
+    // ── Netty — RakNet relay çekirdeği ────────────────────────────────────
+    implementation("io.netty:netty-all:4.1.111.Final")
+
+    // ── CloudburstMC — Bedrock RakNet + Codec ─────────────────────────────
+    implementation("org.cloudburstmc.netty:netty-transport-raknet:1.0.0.CR3-SNAPSHOT") {
+        isChanging = true
+        exclude(group = "io.netty")
+    }
+    implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta5-SNAPSHOT") {
+        isChanging = true
+    }
+    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta5-SNAPSHOT") {
+        isChanging = true
+    }
+    implementation("org.cloudburstmc:nbt:3.0.0.Final")
+
+    // ── MinecraftAuth — Microsoft kimlik doğrulama ────────────────────────
+    implementation("net.raphimc:MinecraftAuth:4.0.1")
+
+    // ── Jose4j — JWT işleme (encryption handshake için) ───────────────────
+    implementation("org.bitbucket.b_c:jose4j:0.9.4")
+
+    // ── Kyori Adventure — text bileşenleri ───────────────────────────────
+    implementation("net.kyori:adventure-api:4.14.0")
+    implementation("net.kyori:adventure-text-serializer-gson:4.14.0")
+
+    // ── Auth & HTTP ───────────────────────────────────────────────────────
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    // ── Logging ───────────────────────────────────────────────────────────────
-    implementation("com.jakewharton.timber:timber:5.0.1")
-
-    // ── Relay — Bedrock Protocol ──────────────────────────────────────────────
-    // bedrock-connection brings in bedrock-codec + transport-raknet transitively
-    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta1-SNAPSHOT") {
-        exclude(group = "io.netty", module = "netty-transport-native-epoll")
-        exclude(group = "io.netty", module = "netty-transport-native-kqueue")
-        exclude(group = "io.netty.incubator", module = "netty-incubator-transport-native-io_uring")
-    }
-    implementation("org.cloudburstmc.netty:netty-transport-raknet:1.0.0.CR3-SNAPSHOT") {
-        exclude(group = "io.netty", module = "netty-transport-native-epoll")
-        exclude(group = "io.netty", module = "netty-transport-native-kqueue")
-    }
-    // Netty Android-safe transport
-    implementation("io.netty:netty-transport:4.1.111.Final")
-    implementation("io.netty:netty-buffer:4.1.111.Final")
-    implementation("io.netty:netty-codec:4.1.111.Final")
-    implementation("io.netty:netty-handler:4.1.111.Final")
-    implementation("io.netty:netty-common:4.1.111.Final")
-
-    // compression (bedrock-codec ihtiyacı)
-    implementation("org.xerial.snappy:snappy-java:1.1.10.5")
-
-    // ── Test ──────────────────────────────────────────────────────────────────
+    // ── Test ──────────────────────────────────────────────────────────────
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+}
+
+configurations.all {
+    resolutionStrategy {
+        cacheChangingModulesFor(0, TimeUnit.SECONDS)
+        // Netty çakışmalarını çöz
+        force("io.netty:netty-all:4.1.111.Final")
+    }
 }

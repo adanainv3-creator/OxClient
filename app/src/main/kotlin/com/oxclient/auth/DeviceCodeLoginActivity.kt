@@ -26,14 +26,47 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.oxclient.ui.theme.*
+import com.oxclient.ui.theme.OxBackground
+import com.oxclient.ui.theme.OxClientTheme
+import com.oxclient.ui.theme.OxOnSurface
+import com.oxclient.ui.theme.OxPurple
+import com.oxclient.ui.theme.OxPurpleLight
+import com.oxclient.ui.theme.OxSurface
 
+/**
+ * DeviceCodeLoginActivity
+ *
+ * Microsoft Device Code Flow giriş ekranı.
+ *
+ * Açılış koşulları:
+ *  - [MicrosoftAuthManager.startSignIn] çağrıldıktan sonra
+ *  - authState = [AuthState.WaitingForUser] olunca DashboardActivity bu Activity'yi başlatır
+ *
+ * Bu Activity:
+ *  1. authState'i gözlemler
+ *  2. [AuthState.WaitingForUser] → user_code'u büyük gösterir + WebView'da verification_uri'yi açar
+ *  3. Kullanıcı WebView'da kodu girip onaylar
+ *  4. [AuthState.Success] veya [AuthState.Error] gelince otomatik kapanır
+ *
+ * Intent ile başlatmak için:
+ *   startActivity(Intent(this, DeviceCodeLoginActivity::class.java))
+ *   (Ekstra parametre gerekmez — authState zaten MicrosoftAuthManager'da)
+ */
 class DeviceCodeLoginActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { OxClientTheme { DeviceCodeLoginScreen(onClose = ::finish) } }
+        setContent {
+            OxClientTheme {
+                DeviceCodeLoginScreen(
+                    onClose = ::finish
+                )
+            }
+        }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -41,6 +74,7 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
     val authState by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
     val clipboard  = LocalClipboardManager.current
 
+    // Başarı veya hata → ekranı kapat
     LaunchedEffect(authState) {
         when (authState) {
             is AuthState.Success, is AuthState.Error -> onClose()
@@ -48,8 +82,13 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(OxBackground)) {
-        // Top bar
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(OxBackground)
+    ) {
+
+        // ── Top bar ───────────────────────────────────────────────────────
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -59,23 +98,36 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                "Hesap Ekle", fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                color = Color.White, fontFamily = FontFamily.Monospace
+                text       = "Hesap Ekle",
+                fontSize   = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color      = Color.White,
+                fontFamily = FontFamily.Monospace
             )
-            IconButton(onClick = { MicrosoftAuthManager.cancelSignIn(); onClose() }) {
+            IconButton(onClick = {
+                MicrosoftAuthManager.cancelSignIn()
+                onClose()
+            }) {
                 Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color.White)
             }
         }
 
+        // ── İçerik ────────────────────────────────────────────────────────
         when (val state = authState) {
+
             is AuthState.Loading -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                // Device code alınıyor
+                Box(
+                    modifier         = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(color = OxPurple)
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "Microsoft bağlantısı kuruluyor…",
-                            fontSize = 14.sp, color = OxOnSurface.copy(0.7f),
+                            text       = "Microsoft bağlantısı kuruluyor…",
+                            fontSize   = 14.sp,
+                            color      = OxOnSurface.copy(0.7f),
                             fontFamily = FontFamily.Monospace
                         )
                     }
@@ -83,19 +135,25 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
             }
 
             is AuthState.WaitingForUser -> {
-                // Kod kartı
+                // Kod banner'ı
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    shape    = RoundedCornerShape(16.dp),
-                    colors   = CardDefaults.cardColors(containerColor = OxSurface)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    shape  = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = OxSurface)
                 ) {
                     Column(
-                        Modifier.fillMaxWidth().padding(20.dp),
+                        modifier            = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            "Microsoft giriş kodu", fontSize = 12.sp,
-                            color = OxOnSurface.copy(0.55f), fontFamily = FontFamily.Monospace
+                            text       = "Microsoft giriş kodu",
+                            fontSize   = 12.sp,
+                            color      = OxOnSurface.copy(0.55f),
+                            fontFamily = FontFamily.Monospace
                         )
                         Spacer(Modifier.height(10.dp))
                         Row(
@@ -103,56 +161,69 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
-                                state.userCode, fontSize = 30.sp,
-                                fontWeight = FontWeight.ExtraBold, color = OxPurpleLight,
-                                fontFamily = FontFamily.Monospace, letterSpacing = 4.sp
+                                text          = state.userCode,
+                                fontSize      = 30.sp,
+                                fontWeight    = FontWeight.ExtraBold,
+                                color         = OxPurpleLight,
+                                fontFamily    = FontFamily.Monospace,
+                                letterSpacing = 4.sp
                             )
                             IconButton(
-                                onClick   = { clipboard.setText(AnnotatedString(state.userCode)) },
-                                modifier  = Modifier.size(32.dp)
+                                onClick  = { clipboard.setText(AnnotatedString(state.userCode)) },
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.ContentCopy, "Kopyala",
-                                    tint = OxOnSurface.copy(0.6f),
-                                    modifier = Modifier.size(18.dp)
+                                    imageVector  = Icons.Default.ContentCopy,
+                                    contentDescription = "Kopyala",
+                                    tint         = OxOnSurface.copy(0.6f),
+                                    modifier     = Modifier.size(18.dp)
                                 )
                             }
                         }
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "Aşağıdaki sayfada bu kodu girin",
-                            fontSize = 11.sp, color = OxOnSurface.copy(0.45f),
+                            text       = "Aşağıdaki sayfada bu kodu girin",
+                            fontSize   = 11.sp,
+                            color      = OxOnSurface.copy(0.45f),
                             fontFamily = FontFamily.Monospace
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(6.dp))
                         LinearProgressIndicator(
-                            modifier   = Modifier.fillMaxWidth(),
-                            color      = OxPurple,
+                            modifier = Modifier.fillMaxWidth(),
+                            color    = OxPurple,
                             trackColor = OxPurple.copy(0.15f)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text       = "Onay bekleniyor…",
+                            fontSize   = 10.sp,
+                            color      = OxOnSurface.copy(0.35f),
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                 }
 
-                // WebView
+                // WebView — microsoft.com/devicelogin
                 Box(modifier = Modifier.weight(1f)) {
-                    val verificationUri = state.verificationUri
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory  = { ctx ->
                             WebView(ctx).apply {
                                 settings.javaScriptEnabled = true
-                                settings.domStorageEnabled  = true
-                                settings.userAgentString    =
+                                settings.domStorageEnabled = true
+                                settings.userAgentString   =
                                     "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
                                     "AppleWebKit/537.36 (KHTML, like Gecko) " +
                                     "Chrome/124.0.0.0 Mobile Safari/537.36"
+
                                 webViewClient = object : WebViewClient() {
                                     override fun shouldOverrideUrlLoading(
                                         view: WebView?,
                                         request: WebResourceRequest?
-                                    ): Boolean = false
+                                    ) = false   // Tüm URL'leri WebView içinde aç
                                 }
-                                loadUrl(verificationUri)
+
+                                loadUrl(state.verificationUri)
                             }
                         }
                     )
@@ -160,7 +231,11 @@ fun DeviceCodeLoginScreen(onClose: () -> Unit) {
             }
 
             else -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                // Idle / Success / Error — LaunchedEffect zaten kapatıyor
+                Box(
+                    modifier         = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
                     CircularProgressIndicator(color = OxPurple)
                 }
             }

@@ -1,129 +1,112 @@
 package com.oxclient.relay
 
-import com.oxclient.relay.codec.OxCodecRegistry
-import com.oxclient.relay.connection.OxConnectionManager
-import com.oxclient.relay.session.OxRelaySession
+import android.util.Log
+import com.oxclient.relay.listener.AutoCodecPacketListener
+import com.oxclient.relay.listener.GamingPacketHandler
+import com.oxclient.relay.listener.OnlineLoginPacketListener
 import io.netty.bootstrap.ServerBootstrap
-import io.netty.channel.Channel
-import io.netty.channel.ChannelFuture
+import io.netty.channel.ChannelInitializer
 import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.nio.NioDatagramChannel
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
-import org.cloudburstmc.netty.handler.codec.raknet.server.RakServerRateLimiter
-import org.cloudburstmc.protocol.bedrock.BedrockPeer
-import org.cloudburstmc.protocol.bedrock.BedrockPong
-import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
-import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
-import timber.log.Timber
-import kotlin.random.Random
+import org.cloudburstmc.protocol.bedrock.BedrockServerSession
+import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockServerInitializer
+import java.net.InetSocketAddress
 
-class OxRelay {
-
+/**
+ * OxRelay — Bedrock Man-in-the-Middle relay.
+ *
+ * Local UDP :19132 üzerinde bir RakNet sunucusu açar.
+ * Minecraft bu relay'e bağlanır, relay gerçek sunucuya bağlanır.
+ * Her bağlantı için bir [OxRelaySession] oluşturulur.
+ */
+class OxRelay(
+    private val targetHost: String,
+    private val targetPort: Int
+) {
     companion object {
-        val DEFAULT_CODEC: BedrockCodec get() = OxCodecRegistry.latestCodec
-        const val LOCAL_PORT = 19132
+        private const val TAG       = "OxRelay"
+        const val  LOCAL_PORT       = 19132
+        private const val RAKNET_ID = 0x4f78436c69656e74L // "OxClient"
     }
 
-    val localAddress: OxAddress = OxAddress("0.0.0.0", LOCAL_PORT)
+    private val scope      = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val bossGroup  = NioEventLoopGroup(1)
+    private val workerGroup= NioEventLoopGroup(4)
+    private var running    = false
 
-    private var channelFuture    : ChannelFuture?       = null
-    private var bossGroup        : NioEventLoopGroup?   = null
-    private var activeSession    : OxRelaySession?      = null
-    var connectionManager        : OxConnectionManager? = null
-        internal set
-
-    val isRunning: Boolean get() = channelFuture != null
-
-    fun start(
-        remoteAddress : OxAddress,
-        mcToken       : String,
-        gamertag      : String,
-        onSessionReady: ((OxRelaySession) -> Unit)? = null
-    ) {
-        if (isRunning) { Timber.w("[OxRelay] Zaten çalışıyor"); return }
-
-        val codec = DEFAULT_CODEC
-        bossGroup = NioEventLoopGroup(2)
-        Timber.i("[OxRelay] Başlatılıyor → local=$localAddress  remote=$remoteAddress  codec=${codec.minecraftVersion}")
+    /**
+     * Relay sunucusunu başlatır.
+     * [thread] ile ayrı bir thread'de çağrılmalı.
+     */
+    fun start() {
+        if (running) return
+        running = true
+        Log.i(TAG, "Relay başlatılıyor → $targetHost:$targetPort")
 
         try {
-            val pong = BedrockPong()
-                .edition("MCPE")
-                .gameType("Survival")
-                .version(codec.minecraftVersion)
-                .protocolVersion(codec.protocolVersion)
-                .motd("§aOxClient §7Relay")
-                .playerCount(0)
-                .maximumPlayerCount(1)
-                .subMotd("§7v2.1.0")
-                .nintendoLimited(false)
-                .ipv4Port(LOCAL_PORT)
-                .ipv6Port(LOCAL_PORT)
-
             ServerBootstrap()
-                .group(bossGroup!!)
+                .group(bossGroup, workerGroup)
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel::class.java))
-                .option(RakChannelOption.RAK_ADVERTISEMENT, pong.toByteBuf())
-                .option(RakChannelOption.RAK_GUID, Random.nextLong())
-                .childHandler(object : BedrockChannelInitializer<OxRelaySession.ServerSide>() {
-
-                    override fun createSession0(peer: BedrockPeer, sub: Int): OxRelaySession.ServerSide {
-                        val session = OxRelaySession(peer, sub, this@OxRelay)
-                        activeSession     = session
-                        connectionManager = OxConnectionManager(session)
-                        session.addDefaultListeners(remoteAddress, mcToken, gamertag)
-                        onSessionReady?.invoke(session)
-                        return session.serverSide
+                .option(RakChannelOption.RAK_ADVERTISEMENT, buildPong())
+                .option(RakChannelOption.RAK_GUID, RAKNET_ID)
+                .option(RakChannelOption.RAK_MAX_CONNECTIONS, 10)
+                .childHandler(object : BedrockServerInitializer() {
+                    override fun initSession(session: BedrockServerSession) {
+                        Log.d(TAG, "Yeni bağlantı: ${session.socketAddress}")
+                        capture(session)
                     }
-
-                    override fun initSession(session: OxRelaySession.ServerSide) {}
-
-                    // PacketDirection 3.0.0.Beta1'de kaldırıldı — preInitChannel override gerekmiyor
                 })
-                .localAddress(localAddress.toInetSocketAddress())
-                .bind()
-                .awaitUninterruptibly()
-                .also { future ->
-                    if (!future.isSuccess) {
-                        Timber.e(future.cause(), "[OxRelay] Bind başarısız")
-                        cleanup(); return
-                    }
-                    runCatching { future.channel().pipeline().remove(RakServerRateLimiter.NAME) }
-                    channelFuture = future
-                    Timber.i("[OxRelay] ✓ Dinleniyor: $localAddress")
-                }
+                .bind(InetSocketAddress("0.0.0.0", LOCAL_PORT))
+                .sync()
+                .channel()
+
+            Log.i(TAG, "Relay dinliyor — 0.0.0.0:$LOCAL_PORT")
         } catch (e: Exception) {
-            Timber.e(e, "[OxRelay] Başlatma hatası")
-            cleanup()
+            Log.e(TAG, "Relay başlatma hatası", e)
+            running = false
         }
     }
 
     fun stop() {
-        Timber.i("[OxRelay] Durduruluyor…")
-        runCatching { activeSession?.serverSide?.disconnect("OxClient durduruldu") }
-        runCatching { activeSession?.clientSide?.disconnect("OxClient durduruldu") }
-        cleanup()
+        if (!running) return
+        running = false
+        Log.i(TAG, "Relay durduruluyor")
+        bossGroup.shutdownGracefully()
+        workerGroup.shutdownGracefully()
     }
 
-    private fun cleanup() {
-        runCatching { channelFuture?.channel()?.close()?.sync() }
-        runCatching { bossGroup?.shutdownGracefully()?.sync() }
-        runCatching { connectionManager?.cleanup() }
-        channelFuture     = null
-        bossGroup         = null
-        activeSession     = null
-        connectionManager = null
-    }
+    val isRunning get() = running
 
-    internal fun connectToServer(address: OxAddress, onConnected: OxRelaySession.ClientSide.() -> Unit) {
-        val manager = connectionManager ?: return
-        CoroutineScope(Dispatchers.IO).launch {
-            manager.connect(address, onConnected).onFailure { e ->
-                Timber.e(e, "[OxRelay] Sunucuya bağlanılamadı")
-                activeSession?.serverSide?.disconnect("Sunucu bağlantısı başarısız: ${e.message}")
-            }
+    /**
+     * Minecraft → relay bağlantısı kurulduğunda çağrılır.
+     * Relay → gerçek sunucu bağlantısı async olarak kurulur.
+     */
+    private fun capture(clientSession: BedrockServerSession) {
+        scope.launch {
+            val relaySession = OxRelaySession(
+                serverSession = clientSession,
+                targetHost    = targetHost,
+                targetPort    = targetPort
+            )
+
+            // Listener'ları kaydet
+            relaySession.addListener(AutoCodecPacketListener(relaySession))
+            relaySession.addListener(OnlineLoginPacketListener(relaySession))
+            relaySession.addListener(GamingPacketHandler(relaySession))
+
+            relaySession.init()
         }
+    }
+
+    // MOTD / Pong paketi
+    private fun buildPong(): ByteArray {
+        val motd = "OxClient Relay;Minecraft Bedrock;1;1.21.0;0;10"
+        return motd.toByteArray(Charsets.UTF_8)
     }
 }

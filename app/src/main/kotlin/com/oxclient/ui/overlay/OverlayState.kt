@@ -1,24 +1,40 @@
 package com.oxclient.ui.overlay
 
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 data class ModuleToast(val moduleName: String, val enabled: Boolean)
 
+/**
+ * OverlayState
+ *
+ * Overlay görünürlüğü ve modül toast bildirimlerini tutan singleton.
+ * Compose state ile reaktif güncelleme sağlar.
+ */
 object OverlayState {
-    const val TOAST_DURATION_MS = 1500L
 
-    private val _overlayVisible = MutableStateFlow(false)
-    val overlayVisible: StateFlow<Boolean> = _overlayVisible.asStateFlow()
-    fun setOverlayVisible(visible: Boolean) { _overlayVisible.value = visible }
+    const val TOAST_DURATION_MS = 1800L
 
-    private val _menuOpen = MutableStateFlow(false)
-    val menuOpen: StateFlow<Boolean> = _menuOpen.asStateFlow()
-    fun setMenuOpen(open: Boolean) { _menuOpen.value = open }
+    var isOverlayVisible by mutableStateOf(false)
+        private set
 
-    private val _activeToasts = MutableStateFlow<List<ModuleToast>>(emptyList())
-    val activeToasts: StateFlow<List<ModuleToast>> = _activeToasts.asStateFlow()
-    fun postModuleToast(toast: ModuleToast) { _activeToasts.value = _activeToasts.value + toast }
-    fun clearModuleToast(toast: ModuleToast) { _activeToasts.value = _activeToasts.value - toast }
+    var isMenuOpen by mutableStateOf(false)
+        private set
+
+    private val _toasts = mutableStateListOf<ModuleToast>()
+    val toasts: List<ModuleToast> get() = _toasts
+
+    internal fun setOverlayVisible(v: Boolean) { isOverlayVisible = v }
+    internal fun setMenuOpen(v: Boolean)       { isMenuOpen = v }
+
+    fun postModuleToast(toast: ModuleToast) {
+        _toasts.removeAll { it.moduleName == toast.moduleName }
+        _toasts.add(toast)
+    }
+
+    fun clearModuleToast(toast: ModuleToast) {
+        _toasts.remove(toast)
+    }
 }

@@ -1,7 +1,12 @@
 package com.oxclient.ui.overlay
 
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
+/** Modül toggle bildirimlerini otomatik-kaldırma zamanlayıcısıyla gönderir. */
 object OverlayNotifier {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

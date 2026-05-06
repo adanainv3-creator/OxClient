@@ -1,20 +1,22 @@
 package com.oxclient
 
 import android.app.Application
-import com.oxclient.auth.AccountManager
+import android.util.Log
+import com.oxclient.config.ServerConfig
 import com.oxclient.module.ModuleManager
-import com.oxclient.session.ServerConfig
-import timber.log.Timber
 
 class OxClientApp : Application() {
+
     override fun onCreate() {
         super.onCreate()
-        if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
+        Log.d("OxClientApp", "Uygulama başlatılıyor")
 
+        // Sunucu konfigürasyonunu başlat
         ServerConfig.init(this)
-        AccountManager.init(this)
-        ModuleManager.init(this)
 
-        Timber.i("OxClient ${BuildConfig.VERSION_NAME} başlatıldı")
+        // Modül yöneticisini başlat
+        ModuleManager.init()
+
+        Log.d("OxClientApp", "Başlatma tamamlandı")
     }
 }

@@ -5,21 +5,25 @@
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+
+    <!-- VPN -->
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
 
     <!-- Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- WakeLock — relay servis arka planda çalışırken CPU uyanık kalsın -->
+    <!-- Wake Lock — relay thread'in arka planda çalışması için -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Android 11+ Package Visibility -->
+    <!-- Battery Optimization Bypass -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Android 11+ Paket Görünürlüğü -->
     <queries>
         <package android:name="com.mojang.minecraftpe" />
         <package android:name="com.netease.mc" />
@@ -55,7 +59,31 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- Oyun içi overlay -->
+        <!-- VPN Servisi (legacy — opsiyonel, relay mimarisinde gereksiz olabilir) -->
+        <service
+            android:name=".core.vpn.OxVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="VPN_tunnel_for_Minecraft_Bedrock_proxy" />
+        </service>
+
+        <!-- ★ Bedrock Relay Servisi (YENİ) -->
+        <service
+            android:name=".relay.service.RelayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Bedrock_MITM_relay_for_Minecraft_packet_injection" />
+        </service>
+
+        <!-- Oyun içi Overlay -->
         <service
             android:name=".ui.overlay.OverlayService"
             android:exported="false"
@@ -63,13 +91,6 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="In-game_HUD_overlay_for_module_control" />
-        </service>
-
-        <!-- MITM Relay Servisi -->
-        <service
-            android:name=".relay.service.OxRelayService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync">
         </service>
 
     </application>
