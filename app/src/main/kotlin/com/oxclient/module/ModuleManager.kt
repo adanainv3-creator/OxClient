@@ -1,21 +1,13 @@
 package com.oxclient.module
 
 import android.util.Log
-import com.oxclient.module.combat.AutoTotem
-import com.oxclient.module.combat.Criticals
-import com.oxclient.module.combat.KillAura
-import com.oxclient.module.movement.TPAura
+import com.oxclient.module.combat.*
+import com.oxclient.module.movement.*
+import com.oxclient.module.visual.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * ModuleManager
- *
- * Tüm modülleri kaydeder ve toggle/sorgulama işlemlerini yönetir.
- * [version] Flow'u her toggle'da güncellenerek Compose UI'nin
- * yeniden çizilmesini tetikler.
- */
 object ModuleManager {
 
     private const val TAG = "ModuleManager"
@@ -28,17 +20,23 @@ object ModuleManager {
 
     private var initialized = false
 
-    // ── Init ──────────────────────────────────────────────────────────────
-
     fun init() {
         if (initialized) return
         initialized = true
 
         register(
+            // Combat
             KillAura(),
             Criticals(),
+            CrystalAura(),
             AutoTotem(),
-            TPAura()
+
+            // Movement
+            TPAura(),
+            Jetpack(),
+
+            // Visual
+            FullBright()
         )
 
         Log.d(TAG, "${_modules.size} modül yüklendi")
@@ -48,7 +46,13 @@ object ModuleManager {
         _modules.addAll(mods)
     }
 
-    // ── Public API ────────────────────────────────────────────────────────
+    /** Shortcut'ı açık olan modülleri döner */
+    fun shortcutModules(): List<BaseModule> =
+        _modules.filter { mod ->
+            mod.settings.filterIsInstance<BoolSetting>()
+                .firstOrNull { it.name == "Shortcut" }
+                ?.value == true
+        }
 
     fun toggle(module: BaseModule) {
         module.setEnabled(!module.isEnabled)
