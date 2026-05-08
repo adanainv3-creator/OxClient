@@ -411,7 +411,7 @@ private fun ModuleRow(
                     module.toggle()
                     enabled = module.enabled
                 },
-                modifier = Modifier.scale(0.65f),
+                modifier = Modifier.size(0.65f),
                 colors = SwitchDefaults.colors(
                     checkedThumbColor   = Color.White,
                     checkedTrackColor   = OxPurple,
@@ -669,7 +669,7 @@ private fun MiniToggle(
         Switch(
             checked         = checked,
             onCheckedChange = onChange,
-            modifier        = Modifier.scale(0.6f),
+            modifier        = Modifier.size(0.6f),
             colors          = SwitchDefaults.colors(
                 checkedThumbColor   = Color.White,
                 checkedTrackColor   = OxPurple,
