@@ -1,8 +1,6 @@
 package com.oxclient.session
 
 import android.content.Context
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -11,7 +9,7 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-val Context.serverDataStore: DataStore<Preferences> by preferencesDataStore(name = "servers")
+val Context.serverDataStore by preferencesDataStore(name = "servers")
 
 /**
  * ServerConfig — Tek bir sunucu bağlantı yapılandırması
@@ -21,16 +19,20 @@ data class ServerConfig(
     val name : String = "Sunucu",
     val host : String = "geo.hivebedrock.network",
     val port : Int    = 19132,
-    val icon : String = "🎮"          // emoji ikon
+    val icon : String = "🎮"
 ) {
     companion object {
         val PRESETS = listOf(
-            ServerConfig("hive",      "Hive",       "geo.hivebedrock.network", 19132, "🐝"),
-            ServerConfig("cubecraft", "CubeCraft",  "mco.cubecraft.net",       19132, "🎲"),
-            ServerConfig("lifeboat",  "Lifeboat",   "mco.lbsg.net",            19132, "⛵"),
-            ServerConfig("mineplex",  "Mineplex",   "mco.mineplex.com",        19132, "🏛️"),
-            ServerConfig("nether",    "NetherGames","play.nethergames.org",    19132, "🔥"),
-            ServerConfig("galaxite",  "Galaxite",   "play.galaxite.net",       19132, "🌌"),
+            ServerConfig("hive",       "Hive MC",        "geo.hivebedrock.network", 19132, "🐝"),
+            ServerConfig("cubecraft",  "CubeCraft",      "mco.cubecraft.net",       19132, "🎲"),
+            ServerConfig("lifeboat",   "Lifeboat",       "mco.lbsg.net",            19132, "⛵"),
+            ServerConfig("mineplex",   "Mineplex",       "mco.mineplex.com",        19132, "🏛️"),
+            ServerConfig("nether",     "NetherGames",    "play.nethergames.org",    19132, "🔥"),
+            ServerConfig("galaxite",   "Galaxite",       "play.galaxite.net",       19132, "🌌"),
+            ServerConfig("hyperlands", "HyperLands",     "play.hyperlandsmc.net",   19132, "⚔️"),
+            ServerConfig("zeqa",       "Zeqa",           "play.zeqa.net",           19132, "💎"),
+            ServerConfig("2b2tpe",     "2b2tPE",         "2b2tpe.org",              19132, "🏴‍☠️"),
+            ServerConfig("vanilla",    "Vanilla Test",   "127.0.0.1",               19132, "🧪"),
         )
     }
 }
@@ -67,7 +69,7 @@ class SessionManager(private val context: Context) {
         }
     }
 
-    private fun getCurrent(prefs: Preferences): List<ServerConfig> {
+    private fun getCurrent(prefs: androidx.datastore.preferences.core.Preferences): List<ServerConfig> {
         val json = prefs[KEY_SERVERS] ?: return ServerConfig.PRESETS
         return try {
             val type = object : TypeToken<List<ServerConfig>>() {}.type
