@@ -75,7 +75,8 @@ class MicrosoftAuthManager {
     private val TAG    = "MsAuth"
     private val client = OkHttpClient()
     private val gson   = Gson()
-    private val JSON   = "application/json".toMediaType()
+    private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+    private val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
 
     private val CLIENT_ID  = "00000000441cc96b"   // Xbox Live public client
     private val SCOPE      = "service::user.auth.xboxlive.com::MBI_SSL"
@@ -85,7 +86,7 @@ class MicrosoftAuthManager {
 
     suspend fun getDeviceCode(): DeviceCodeResponse? = kotlin.runCatching {
         val body = "client_id=$CLIENT_ID&scope=$SCOPE"
-            .toRequestBody("application/x-www-form-urlencoded".toMediaType())
+            .toRequestBody(FORM_MEDIA_TYPE)
 
         val req = Request.Builder()
             .url("https://login.microsoftonline.com/$TENANT/oauth2/v2.0/devicecode")
@@ -93,7 +94,8 @@ class MicrosoftAuthManager {
             .build()
 
         val resp = client.newCall(req).await()
-        val json = JSONObject(resp.body!!.string())
+        val respBody = resp.body?.string() ?: return@runCatching null
+        val json = JSONObject(respBody)
 
         DeviceCodeResponse(
             deviceCode      = json.getString("device_code"),
@@ -101,7 +103,7 @@ class MicrosoftAuthManager {
             verificationUri = json.getString("verification_uri"),
             expiresIn       = json.getInt("expires_in"),
             interval        = json.getInt("interval"),
-            message         = json.optString("message")
+            message         = json.optString("message", "")
         )
     }.onFailure { Log.e(TAG, "DeviceCode hatası", it) }.getOrNull()
 
@@ -112,9 +114,9 @@ class MicrosoftAuthManager {
         while (System.currentTimeMillis() < deadline) {
             kotlinx.coroutines.delay(intervalSec * 1000L)
 
-            val body = "grant_type=urn:ietf:params:oauth:grant-type:device_code" +
-                "&device_code=$deviceCode&client_id=$CLIENT_ID"
-                .toRequestBody("application/x-www-form-urlencoded".toMediaType())
+            val body = ("grant_type=urn:ietf:params:oauth:grant-type:device_code" +
+                "&device_code=$deviceCode&client_id=$CLIENT_ID")
+                .toRequestBody(FORM_MEDIA_TYPE)
 
             val req = Request.Builder()
                 .url("https://login.microsoftonline.com/$TENANT/oauth2/v2.0/token")
@@ -123,7 +125,8 @@ class MicrosoftAuthManager {
 
             try {
                 val resp = client.newCall(req).await()
-                val json = JSONObject(resp.body!!.string())
+                val respBody = resp.body?.string() ?: continue
+                val json = JSONObject(respBody)
 
                 if (json.has("access_token")) {
                     return MsTokenResponse(
@@ -133,7 +136,7 @@ class MicrosoftAuthManager {
                     )
                 }
 
-                val error = json.optString("error")
+                val error = json.optString("error", "")
                 if (error != "authorization_pending" && error != "slow_down") {
                     Log.e(TAG, "Token hatası: $error"); break
                 }
@@ -145,20 +148,23 @@ class MicrosoftAuthManager {
     // ── Adım 3: Xbox Live Token ───────────────────────────────────────────
 
     suspend fun getXblToken(msAccessToken: String): XblToken? = kotlin.runCatching {
-        val payload = """
+        val payloadString = """
             {"Properties":{"AuthMethod":"RPS","SiteName":"user.auth.xboxlive.com",
             "RpsTicket":"d=$msAccessToken"},"RelyingParty":"http://auth.xboxlive.com","TokenType":"JWT"}
-        """.trimIndent().toRequestBody(JSON)
+        """.trimIndent()
+        
+        val payload = payloadString.toRequestBody(JSON_MEDIA_TYPE)
 
         val req = Request.Builder()
             .url("https://user.auth.xboxlive.com/user/authenticate")
             .post(payload)
-            .header("Content-Type","application/json")
-            .header("Accept","application/json")
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
             .build()
 
         val resp = client.newCall(req).await()
-        val json = JSONObject(resp.body!!.string())
+        val respBody = resp.body?.string() ?: return@runCatching null
+        val json = JSONObject(respBody)
         val token    = json.getString("Token")
         val userHash = json.getJSONObject("DisplayClaims")
             .getJSONArray("xui").getJSONObject(0).getString("uhs")
@@ -168,20 +174,23 @@ class MicrosoftAuthManager {
     // ── Adım 4: XSTS Token ────────────────────────────────────────────────
 
     suspend fun getXstsToken(xblToken: XblToken): XblToken? = kotlin.runCatching {
-        val payload = """
+        val payloadString = """
             {"Properties":{"SandboxId":"RETAIL","UserTokens":["${xblToken.token}"]},
             "RelyingParty":"https://multiplayer.minecraft.net/","TokenType":"JWT"}
-        """.trimIndent().toRequestBody(JSON)
+        """.trimIndent()
+        
+        val payload = payloadString.toRequestBody(JSON_MEDIA_TYPE)
 
         val req = Request.Builder()
             .url("https://xsts.auth.xboxlive.com/xsts/authorize")
             .post(payload)
-            .header("Content-Type","application/json")
-            .header("Accept","application/json")
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
             .build()
 
         val resp = client.newCall(req).await()
-        val json = JSONObject(resp.body!!.string())
+        val respBody = resp.body?.string() ?: return@runCatching null
+        val json = JSONObject(respBody)
         val token    = json.getString("Token")
         val userHash = json.getJSONObject("DisplayClaims")
             .getJSONArray("xui").getJSONObject(0).getString("uhs")
@@ -191,16 +200,20 @@ class MicrosoftAuthManager {
     // ── Adım 5: Minecraft Token ───────────────────────────────────────────
 
     suspend fun getMinecraftToken(xstsToken: XblToken): String? = kotlin.runCatching {
-        val payload = """{"identityPublicKey":"${generateDummyKey()}"}""".toRequestBody(JSON)
+        val payloadString = """{"identityPublicKey":"${generateDummyKey()}"}"""
+        val payload = payloadString.toRequestBody(JSON_MEDIA_TYPE)
+        
         val req = Request.Builder()
             .url("https://multiplayer.minecraft.net/authentication")
             .post(payload)
             .header("Authorization", "XBL3.0 x=${xstsToken.userHash};${xstsToken.token}")
-            .header("Content-Type","application/json")
-            .header("Accept","application/json")
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
             .build()
+            
         val resp = client.newCall(req).await()
-        JSONObject(resp.body!!.string()).getString("token")
+        val respBody = resp.body?.string() ?: return@runCatching null
+        JSONObject(respBody).getString("token")
     }.onFailure { Log.e(TAG, "MC Token hatası", it) }.getOrNull()
 
     // ── Adım 6: Profil ────────────────────────────────────────────────────
@@ -212,7 +225,8 @@ class MicrosoftAuthManager {
             .header("Authorization", "Bearer $mcToken")
             .build()
         val resp = client.newCall(req).await()
-        val json = JSONObject(resp.body!!.string())
+        val respBody = resp.body?.string() ?: return@runCatching null
+        val json = JSONObject(respBody)
         MinecraftProfile(
             uuid        = json.getString("id"),
             name        = json.getString("name"),
@@ -224,7 +238,7 @@ class MicrosoftAuthManager {
     private fun generateDummyKey(): String =
         "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE" + "A".repeat(64)
 
-    // OkHttp suspend ext - DÜZELTİLDİ
+    // OkHttp suspend extension
     private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
         enqueue(object : Callback {
             override fun onResponse(call: Call, response: Response) { 
