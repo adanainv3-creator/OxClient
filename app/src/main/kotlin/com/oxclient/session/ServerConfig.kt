@@ -13,7 +13,7 @@ val Context.serverDataStore by preferencesDataStore(name = "servers")
 
 data class ServerConfig(
     val id   : String = java.util.UUID.randomUUID().toString(),
-    val name : String = "Sunucu",
+    val name : String = "2b2tPE",
     val host : String = "2b2tpe.org",
     val port : Int    = 19132,
     val icon : String = "🏴‍☠️"

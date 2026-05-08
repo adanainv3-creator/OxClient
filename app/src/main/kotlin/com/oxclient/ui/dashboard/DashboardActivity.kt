@@ -10,7 +10,6 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
@@ -22,12 +21,13 @@ import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
-import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.auth.AuthState
-import com.oxclient.proxy.BedrockRelay
+import com.oxclient.auth.DeviceCodeLoginActivity
+import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.proxy.BedrockRelayService
 import com.oxclient.session.ServerConfig
 import com.oxclient.ui.overlay.OverlayService
@@ -52,7 +52,6 @@ class DashboardActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Overlay iznini hemen iste
         if (!Settings.canDrawOverlays(this)) {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 Uri.parse("package:$packageName")))
@@ -61,10 +60,10 @@ class DashboardActivity : ComponentActivity() {
         setContent {
             OxTheme {
                 DashboardScreen(
-                    onConnect      = { server -> startRelayAndOverlay(server) },
-                    onDisconnect   = { stopRelayAndOverlay() },
-                    getRelayRunning = { relayService?.isRunning ?: false },
-                    getTargetServer = { relayService?.relay?.targetServer }
+                    onConnect       = { server -> startRelayAndOverlay(server) },
+                    onDisconnect    = { stopRelayAndOverlay() },
+                    getRelayRunning  = { relayService?.isRunning ?: false },
+                    getTargetServer  = { relayService?.relay?.targetServer }
                 )
             }
         }
@@ -84,18 +83,14 @@ class DashboardActivity : ComponentActivity() {
     }
 
     private fun startRelayAndOverlay(server: ServerConfig) {
-        // 1. Önce relay'i başlat
         val intent = Intent(this, BedrockRelayService::class.java).apply {
             putExtra(BedrockRelayService.EXTRA_HOST, server.host)
             putExtra(BedrockRelayService.EXTRA_PORT, server.port)
             putExtra(BedrockRelayService.EXTRA_NAME, server.name)
         }
         startForegroundService(intent)
-
-        // 2. Overlay'i başlat
         startService(Intent(this, OverlayService::class.java))
 
-        // 3. 2 saniye bekle, sonra Minecraft'ı aç
         lifecycleScope.launch {
             delay(2000L)
             launchMinecraft()
@@ -112,15 +107,11 @@ class DashboardActivity : ComponentActivity() {
         val packages = listOf("com.mojang.minecraftpe", "com.netease.mc")
         for (pkg in packages) {
             packageManager.getLaunchIntentForPackage(pkg)?.let {
-                try {
-                    startActivity(it)
-                    return
-                } catch (e: Exception) {
-                    continue
-                }
+                try { startActivity(it); return }
+                catch (_: Exception) { continue }
             }
         }
-        Toast.makeText(this, "Minecraft bulunamadı", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Minecraft bulunamadi", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -136,22 +127,29 @@ private fun DashboardScreen(
     getRelayRunning : () -> Boolean,
     getTargetServer : () -> ServerConfig?
 ) {
+    val context = LocalContext.current
     var isRelayRunning by remember { mutableStateOf(false) }
     var showServerPicker by remember { mutableStateOf(false) }
     var selectedServer by remember { mutableStateOf(ServerConfig.PRESETS[0]) }
-    var showAuthScreen by remember { mutableStateOf(false) }
+    var showAuthDialog by remember { mutableStateOf(false) }
 
-    // Auth state
+    // Auth state - StateFlow'u collectAsState ile oku
     val authState by MicrosoftAuthManager.authState.collectAsState()
     var gamertag by remember { mutableStateOf("") }
 
+    // Auth state değişince
     LaunchedEffect(authState) {
         when (val state = authState) {
             is AuthState.Success -> gamertag = state.gamertag
+            is AuthState.WaitingForUser -> {
+                // Login ekranini ac
+                context.startActivity(Intent(context, DeviceCodeLoginActivity::class.java))
+            }
             else -> {}
         }
     }
 
+    // Relay durumu
     LaunchedEffect(Unit) {
         while (true) {
             isRelayRunning = getRelayRunning()
@@ -160,53 +158,67 @@ private fun DashboardScreen(
         }
     }
 
-    // Hesap giriş ekranı
-    if (showAuthScreen) {
+    // Hesap dialog'u
+    if (showAuthDialog) {
         AlertDialog(
-            onDismissRequest = { showAuthScreen = false },
-            containerColor = OxSurface,
-            title = { Text("Hesap", color = OxText) },
+            onDismissRequest = { showAuthDialog = false },
+            containerColor   = OxSurface,
+            title = { Text("Hesap", color = OxText, fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (gamertag.isNotBlank()) {
-                        Text("Giriş yapıldı: $gamertag", color = OxGreen)
-                        TextButton(onClick = {
-                            MicrosoftAuthManager.signOut()
-                            gamertag = ""
-                        }) { Text("Çıkış Yap", color = OxRed) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CheckCircle, null, tint = OxGreen, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Giris yapildi:", color = OxTextSub, fontSize = 13.sp)
+                        }
+                        Text(gamertag, color = OxText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+
+                        Spacer(Modifier.height(8.dp))
+
+                        OutlinedButton(
+                            onClick = {
+                                MicrosoftAuthManager.signOut()
+                                gamertag = ""
+                                showAuthDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = OxRed)
+                        ) {
+                            Icon(Icons.Default.Logout, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Cikis Yap")
+                        }
                     } else {
-                        Text("Microsoft hesabı ile giriş yapın", color = OxTextSub)
+                        Text("Microsoft hesabi ile giris yapin", color = OxTextSub)
+                        Text("Minecraft Bedrock oynamak icin gerekli", color = OxTextSub.copy(alpha = 0.5f), fontSize = 11.sp)
+
+                        Spacer(Modifier.height(4.dp))
+
                         Button(
                             onClick = {
                                 MicrosoftAuthManager.startSignIn()
-                                showAuthScreen = false
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple)
-                        ) { Text("Microsoft ile Giriş") }
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.Microsoft, null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Microsoft ile Giris")
+                        }
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showAuthScreen = false }) {
+                TextButton(onClick = { showAuthDialog = false }) {
                     Text("Kapat", color = OxPurpleLight)
                 }
             }
         )
     }
 
-    // Auth state izle - WaitingForUser gelince login ekranını aç
-    LaunchedEffect(authState) {
-        when (authState) {
-            is AuthState.WaitingForUser -> {
-                startActivity(Intent(
-                    androidx.compose.ui.platform.LocalContext.current,
-                    com.oxclient.auth.DeviceCodeLoginActivity::class.java
-                ))
-            }
-            else -> {}
-        }
-    }
-
+    // ── Ana Ekran ────────────────────────────────────────────────────────
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -292,7 +304,7 @@ private fun DashboardScreen(
             color = if (isRelayRunning) OxGreen.copy(alpha = 0.15f) else OxRed.copy(alpha = 0.15f)
         ) {
             Text(
-                if (isRelayRunning) "● Bağlı" else "● Bağlı Değil",
+                if (isRelayRunning) "● Bagli" else "● Bagli Degil",
                 color = if (isRelayRunning) OxGreen else OxRed,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 fontSize = 14.sp
@@ -303,7 +315,7 @@ private fun DashboardScreen(
 
         Text(
             if (isRelayRunning) "MC'de 127.0.0.1:19132 girin"
-            else "Connect'e basarak başlat",
+            else "Connect'e basarak baslat",
             color = OxTextSub,
             fontSize = 11.sp,
             textAlign = TextAlign.Center
@@ -338,34 +350,42 @@ private fun DashboardScreen(
         Spacer(Modifier.height(16.dp))
 
         Text(
-            "Overlay menüsü oyun içinde görünecek",
+            "Overlay menusu oyun icinde gorunecek",
             color = OxTextSub.copy(alpha = 0.5f),
             fontSize = 11.sp,
             textAlign = TextAlign.Center
         )
 
-        // Altta profil butonu
+        // Alt kısım - profil butonu
         Spacer(Modifier.weight(1f))
-        
+
         IconButton(
-            onClick = { showAuthScreen = true },
-            modifier = Modifier.size(40.dp)
+            onClick = { showAuthDialog = true },
+            modifier = Modifier.size(44.dp)
         ) {
             Icon(
                 Icons.Default.AccountCircle,
                 contentDescription = "Hesap",
                 tint = if (gamertag.isNotBlank()) OxGreen else OxTextSub,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(36.dp)
+            )
+        }
+
+        if (gamertag.isNotBlank()) {
+            Text(
+                gamertag,
+                color = OxTextSub,
+                fontSize = 11.sp
             )
         }
     }
 
-    // Sunucu Seçme
+    // Sunucu Secme Dialog
     if (showServerPicker) {
         AlertDialog(
             onDismissRequest = { showServerPicker = false },
-            containerColor = OxSurface,
-            title = { Text("Sunucu Seç", color = OxText) },
+            containerColor   = OxSurface,
+            title = { Text("Sunucu Sec", color = OxText, fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState())
