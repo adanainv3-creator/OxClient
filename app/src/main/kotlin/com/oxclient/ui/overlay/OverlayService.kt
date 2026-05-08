@@ -34,7 +34,6 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
@@ -86,7 +85,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var menuView: ComposeView? = null
     private val shortcutViews = mutableMapOf<String, ComposeView>()
 
-    // Pozisyonlar (basit kalıcılık için)
+    // Pozisyonlar
     private var fabX = 50f;  private var fabY = 300f
     private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
 
@@ -178,23 +177,21 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
-    /** Shortcut listesini yeniden oluşturur — modül shortcut ayarı değişince çağrılır */
+    /** Shortcut listesini yeniden oluşturur */
     private fun refreshShortcuts() {
         val activeShortcuts = ModuleManager.shortcutModules().map { it.name }.toSet()
 
         // Kapananları kaldır
-        shortcutViews.entries.removeAll { (name, view) ->
-            if (name !in activeShortcuts) {
-                try { wm.removeViewImmediate(view) } catch (_: Exception) {}
-                true
-            } else false
+        val toRemove = shortcutViews.entries.filter { it.key !in activeShortcuts }
+        toRemove.forEach { (name, view) ->
+            try { wm.removeViewImmediate(view) } catch (_: Exception) {}
+            shortcutViews.remove(name)
         }
 
         // Yeni açılanları ekle
         ModuleManager.shortcutModules().forEach { mod ->
             if (mod.name !in shortcutViews) {
                 val pos = shortcutPositions.getOrPut(mod.name) {
-                    // Varsayılan pozisyon — modül adına göre hafif kaydır
                     val idx = ModuleManager.shortcutModules().indexOf(mod)
                     50f to (420f + idx * 50f)
                 }
@@ -207,7 +204,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                             val nx = cx + dx; val ny = cy + dy
                             shortcutPositions[mod.name] = nx to ny
                             params.x = nx.roundToInt(); params.y = ny.roundToInt()
-                            safeUpdate(view, params)
+                            safeUpdate(shortcutViews[mod.name], params)
                         },
                         onToggle = { ModuleManager.toggle(mod) }
                     )
@@ -237,10 +234,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     .pointerInput(Unit) { detectTapGestures { hideMenu() } }
             ) {
                 HileMenu(
-                    onClose       = { hideMenu() },
-                    moduleVersion = moduleVersion,
+                    onClose           = { hideMenu() },
+                    moduleVersion     = moduleVersion,
                     onShortcutChanged = { refreshShortcuts() },
-                    modifier      = Modifier.align(Alignment.CenterEnd)
+                    modifier          = Modifier.align(Alignment.CenterEnd)
                 )
             }
         }
@@ -395,7 +392,7 @@ private fun ShortcutButton(
     }
 }
 
-// ── Hile Menüsü (Ana Panel) ──────────────────────────────────────────────────
+// ── Hile Menüsü ──────────────────────────────────────────────────────────────
 
 @Composable
 private fun HileMenu(
@@ -414,7 +411,7 @@ private fun HileMenu(
             .background(Brush.verticalGradient(listOf(Color(0xFF1A1A2E), Color(0xFF16213E))))
             .border(1.dp, OxPurple.copy(0.5f), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
             .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-            .pointerInput(Unit) { detectTapGestures { /* tıklamaları yut, menüyü kapatma */ } }
+            .pointerInput(Unit) { detectTapGestures { /* tıklamaları yut */ } }
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
 
@@ -530,7 +527,7 @@ private fun ModuleCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment     = Alignment.CenterVertically
         ) {
-            // İsim + açıklama (tıklanabilir — toggle)
+            // İsim + açıklama
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -555,12 +552,11 @@ private fun ModuleCard(
                 }
             }
 
-            // Sağ taraftaki kontroller
+            // Kontroller
             Row(
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Genişlet ok tuşu (ayarlar varsa)
                 if (settings.isNotEmpty()) {
                     Text(
                         if (expanded) "▲" else "▼",
@@ -573,7 +569,6 @@ private fun ModuleCard(
                     )
                 }
 
-                // Aç/Kapa düğmesi
                 Switch(
                     checked = enabled,
                     onCheckedChange = {
