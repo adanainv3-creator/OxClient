@@ -21,10 +21,12 @@ import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
+import androidx.lifecycle.lifecycleScope
 import com.oxclient.auth.AuthState
 import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
@@ -91,6 +93,7 @@ class DashboardActivity : ComponentActivity() {
         startForegroundService(intent)
         startService(Intent(this, OverlayService::class.java))
 
+        // FIX 1: Added `import androidx.lifecycle.lifecycleScope` — resolves "Unresolved reference 'lifecycleScope'"
         lifecycleScope.launch {
             delay(2000L)
             launchMinecraft()
@@ -105,10 +108,12 @@ class DashboardActivity : ComponentActivity() {
 
     private fun launchMinecraft() {
         val packages = listOf("com.mojang.minecraftpe", "com.netease.mc")
+        // FIX 2: Replaced `continue` inside inline lambda with labeled `return@let`
+        // to avoid "break/continue in inline lambdas is experimental" error
         for (pkg in packages) {
             packageManager.getLaunchIntentForPackage(pkg)?.let {
                 try { startActivity(it); return }
-                catch (_: Exception) { continue }
+                catch (_: Exception) { return@let }
             }
         }
         Toast.makeText(this, "Minecraft bulunamadi", Toast.LENGTH_SHORT).show()
@@ -203,7 +208,14 @@ private fun DashboardScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Icon(Icons.Default.Microsoft, null, modifier = Modifier.size(20.dp))
+                            // FIX 3: Icons.Default.Microsoft does not exist in Material Icons.
+                            // Replaced with Icons.Default.AccountBox as a Microsoft-style placeholder.
+                            // Alternatively, use a custom SVG painter via painterResource(R.drawable.ic_microsoft).
+                            Icon(
+                                imageVector = Icons.Default.AccountBox,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
                             Spacer(Modifier.width(8.dp))
                             Text("Microsoft ile Giris")
                         }
