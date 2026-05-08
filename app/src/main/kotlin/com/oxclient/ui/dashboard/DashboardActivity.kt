@@ -3,6 +3,7 @@ package com.oxclient.ui.dashboard
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -42,7 +43,9 @@ import com.oxclient.auth.AuthState
 import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
+import com.oxclient.core.vpn.OxVpnService
 import com.oxclient.module.ModuleManager
+import com.oxclient.session.SessionManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
 import kotlinx.coroutines.launch
@@ -56,11 +59,31 @@ val SUPPORTED_PACKAGES = listOf(
 
 class DashboardActivity : ComponentActivity() {
 
+    // ── Launcher'lar ──────────────────────────────────────────────────────────
+
     private val overlayLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { /* overlay izni sonucu */ }
 
+    /**
+     * VPN izni launcher'ı.
+     * VpnService.prepare() non-null bir Intent döndürürse bu launcher başlatılır.
+     * Kullanıcı "İzin Ver" derse resultCode == RESULT_OK, launchProxy tekrar çağrılır.
+     */
+    private val vpnLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            Log.i("Dashboard", "VPN izni verildi, proxy başlatılıyor…")
+            startVpnService()
+        } else {
+            Log.w("Dashboard", "VPN izni reddedildi")
+        }
+    }
+
     private var pendingPackage: String = SUPPORTED_PACKAGES.first().first
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,7 +100,8 @@ class DashboardActivity : ComponentActivity() {
 
         setContent {
             OxClientTheme {
-                val authState by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
+                val authState  by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
+                val vpnActive  by SessionManager.isActive.collectAsStateWithLifecycle()
 
                 LaunchedEffect(authState) {
                     if (authState is AuthState.WaitingForUser) {
@@ -87,6 +111,7 @@ class DashboardActivity : ComponentActivity() {
 
                 DashboardScreen(
                     installedApps = getInstalledGames(),
+                    vpnActive     = vpnActive,
                     onConnect     = { pkg ->
                         pendingPackage = pkg
                         launchProxy(pkg)
@@ -100,39 +125,62 @@ class DashboardActivity : ComponentActivity() {
         }
     }
 
+    // ── Proxy Başlatma ────────────────────────────────────────────────────────
+
     private fun launchProxy(targetPkg: String) {
         Log.d("Dashboard", "launchProxy → $targetPkg")
 
-        // TODO: VPN servisi eklendiğinde buraya başlatma kodu gelecek
-        // val vpnIntent = Intent(this, OxVpnService::class.java).apply {
-        //     action = OxVpnService.ACTION_START
-        // }
-        // if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(vpnIntent)
-        // else startService(vpnIntent)
+        // VPN izni kontrol et
+        val vpnIntent = VpnService.prepare(this)
+        if (vpnIntent != null) {
+            // İzin henüz verilmemiş — sistem diyaloğunu aç
+            vpnLauncher.launch(vpnIntent)
+            return
+        }
 
-        // Overlay'i yine de başlat (VPN'den bağımsız çalışabilir)
+        // İzin zaten var — direkt başlat
+        startVpnService()
+    }
+
+    private fun startVpnService() {
+        val vpnIntent = Intent(this, OxVpnService::class.java).apply {
+            action = OxVpnService.ACTION_START
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(vpnIntent)
+        } else {
+            startService(vpnIntent)
+        }
+
+        // Overlay'i başlat (VPN'den bağımsız çalışır)
         OverlayService.start(this)
 
+        // Minecraft'ı gecikmeyle başlat (servis oturması için)
         window.decorView.postDelayed({
-            val intent = packageManager.getLaunchIntentForPackage(targetPkg)
+            val intent = packageManager.getLaunchIntentForPackage(pendingPackage)
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 startActivity(intent)
             } else {
                 startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$targetPkg"))
+                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pendingPackage"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }
-        }, 800)
+        }, 1000)
     }
 
+    // ── Proxy Durdurma ────────────────────────────────────────────────────────
+
     private fun stopProxy() {
-        // TODO: VPN servisi eklendiğinde buraya durdurma kodu gelecek
-        // startService(Intent(this, OxVpnService::class.java).apply { action = OxVpnService.ACTION_STOP })
+        startService(Intent(this, OxVpnService::class.java).apply {
+            action = OxVpnService.ACTION_STOP
+        })
         OverlayService.stop(this)
         ModuleManager.disableAll()
     }
+
+    // ── Yardımcı ──────────────────────────────────────────────────────────────
 
     private fun getInstalledGames(): List<Pair<String, String>> {
         return SUPPORTED_PACKAGES.filter { (pkg, _) ->
@@ -150,10 +198,14 @@ class DashboardActivity : ComponentActivity() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Composable — DashboardScreen
+// vpnActive artık SessionManager'dan geliyor (gerçek durum)
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun DashboardScreen(
     installedApps : List<Pair<String, String>>,
+    vpnActive     : Boolean = false,
     onConnect     : (String) -> Unit,
     onDisconnect  : () -> Unit,
     onSignIn      : () -> Unit,
@@ -165,7 +217,9 @@ fun DashboardScreen(
     val serverHost     by ServerConfig.host.collectAsState(initial = ServerConfig.DEFAULT_HOST)
     val serverPort     by ServerConfig.port.collectAsState(initial = ServerConfig.DEFAULT_PORT)
 
-    var proxyRunning   by remember { mutableStateOf(false) }
+    // proxyRunning artık SessionManager.isActive'ten geliyor
+    val proxyRunning   = vpnActive
+
     var showSignIn     by remember { mutableStateOf(false) }
     var showAppPicker  by remember { mutableStateOf(false) }
     var showServerEdit by remember { mutableStateOf(false) }
@@ -234,7 +288,6 @@ fun DashboardScreen(
             LogoSection()
             Spacer(Modifier.height(32.dp))
 
-            // Tıklanabilir sunucu kartı
             ServerCard(
                 host    = serverHost,
                 port    = serverPort,
@@ -246,14 +299,16 @@ fun DashboardScreen(
                 onClick      = { showAppPicker = true }
             )
             Spacer(Modifier.height(12.dp))
+
+            // StatusCard artık SessionManager.isActive'e bağlı
             StatusCard(running = proxyRunning)
             Spacer(Modifier.weight(1f))
 
             ConnectButton(
                 running  = proxyRunning,
                 onToggle = {
-                    if (proxyRunning) { onDisconnect(); proxyRunning = false }
-                    else              { onConnect(selectedApp.first); proxyRunning = true }
+                    if (proxyRunning) onDisconnect()
+                    else              onConnect(selectedApp.first)
                 }
             )
 
@@ -293,16 +348,9 @@ private fun ServerEditDialog(
                 modifier            = Modifier.padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    "Sunucu Ayarları",
-                    fontSize   = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color      = OxOnBackground,
-                    fontFamily = FontFamily.Monospace
-                )
+                Text("Sunucu Ayarları", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
                 HorizontalDivider(color = OxOutline)
 
-                // Host girişi
                 OutlinedTextField(
                     value         = hostInput,
                     onValueChange = { hostInput = it },
@@ -315,82 +363,57 @@ private fun ServerEditDialog(
                         focusedLabelColor    = OxPurple,
                         cursorColor          = OxPurple
                     ),
-                    textStyle = LocalTextStyle.current.copy(
-                        fontFamily = FontFamily.Monospace,
-                        color      = OxOnBackground
-                    )
+                    textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground)
                 )
 
-                // Port girişi
                 OutlinedTextField(
                     value         = portInput,
                     onValueChange = {
                         portInput = it
                         portError = it.toIntOrNull()?.let { p -> p < 1 || p > 65535 } ?: true
                     },
-                    label         = { Text("Port", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-                    singleLine    = true,
-                    isError       = portError,
+                    label           = { Text("Port", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    singleLine      = true,
+                    isError         = portError,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier      = Modifier.fillMaxWidth(),
-                    colors        = OutlinedTextFieldDefaults.colors(
+                    modifier        = Modifier.fillMaxWidth(),
+                    colors          = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor   = OxPurple,
                         unfocusedBorderColor = OxOutline,
                         focusedLabelColor    = OxPurple,
                         cursorColor          = OxPurple
                     ),
-                    textStyle = LocalTextStyle.current.copy(
-                        fontFamily = FontFamily.Monospace,
-                        color      = OxOnBackground
-                    ),
+                    textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground),
                     supportingText = if (portError) {
                         { Text("1–65535 arası geçerli port", color = OxError, fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
                     } else null
                 )
 
-                Text(
-                    text       = "Bedrock varsayılan port: 19132",
-                    fontSize   = 10.sp,
-                    color      = OxOnSurface.copy(0.4f),
-                    fontFamily = FontFamily.Monospace
-                )
+                Text("Bedrock varsayılan port: 19132", fontSize = 10.sp, color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace)
 
-                Row(
-                    modifier              = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Varsayılana dön
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick  = onReset,
                         modifier = Modifier.weight(1f),
                         shape    = RoundedCornerShape(10.dp),
                         colors   = ButtonDefaults.outlinedButtonColors(contentColor = OxOnSurface)
-                    ) {
-                        Text("Varsayılan", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    }
+                    ) { Text("Varsayılan", fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
 
-                    // Kaydet
                     Button(
                         onClick  = {
                             val port = portInput.toIntOrNull()
                             if (hostInput.isBlank() || port == null || port < 1 || port > 65535) {
-                                portError = true
-                                return@Button
+                                portError = true; return@Button
                             }
                             onSave(hostInput.trim(), port)
                         },
                         modifier = Modifier.weight(1f),
                         shape    = RoundedCornerShape(10.dp),
                         colors   = ButtonDefaults.buttonColors(containerColor = OxPurple)
-                    ) {
-                        Text("Kaydet", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                    }
+                    ) { Text("Kaydet", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                 }
 
-                TextButton(
-                    onClick  = onDismiss,
-                    modifier = Modifier.align(Alignment.End)
-                ) {
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
                     Text("İptal", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
                 }
             }
@@ -398,43 +421,18 @@ private fun ServerEditDialog(
     }
 }
 
-// ── ServerCard — tıklanabilir ─────────────────────────────────────────────────
+// ── ServerCard ────────────────────────────────────────────────────────────────
 
 @Composable
 private fun ServerCard(host: String, port: Int, onClick: () -> Unit) {
-    Card(
-        modifier  = Modifier.fillMaxWidth().clickable { onClick() },
-        shape     = RoundedCornerShape(12.dp),
-        colors    = CardDefaults.cardColors(containerColor = OxSurface),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Row(
-            modifier              = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+    Card(modifier = Modifier.fillMaxWidth().clickable { onClick() }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = OxSurface), elevation = CardDefaults.cardElevation(2.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
-                Text(
-                    "Hedef Sunucu",
-                    fontSize   = 10.sp,
-                    color      = OxOnSurface.copy(0.5f),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    "$host:$port",
-                    fontSize   = 13.sp,
-                    color      = OxOnBackground,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Text("Hedef Sunucu", fontSize = 10.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                Text("$host:$port", fontSize = 13.sp, color = OxOnBackground, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
             }
-            Row(
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(
-                    modifier = Modifier.size(8.dp).clip(CircleShape).background(OxPurple)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(OxPurple))
                 Text("✎", fontSize = 14.sp, color = OxPurple, fontFamily = FontFamily.Monospace)
             }
         }
@@ -445,17 +443,8 @@ private fun ServerCard(host: String, port: Int, onClick: () -> Unit) {
 
 @Composable
 private fun AppSelectorCard(selectedName: String, onClick: () -> Unit) {
-    Card(
-        modifier  = Modifier.fillMaxWidth().clickable { onClick() },
-        shape     = RoundedCornerShape(12.dp),
-        colors    = CardDefaults.cardColors(containerColor = OxSurface),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Row(
-            modifier              = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+    Card(modifier = Modifier.fillMaxWidth().clickable { onClick() }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = OxSurface), elevation = CardDefaults.cardElevation(2.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
                 Text("Hedef Uygulama", fontSize = 10.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
                 Text(selectedName, fontSize = 13.sp, color = OxOnBackground, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
@@ -515,11 +504,7 @@ private fun AppPickerRow(pkg: String, name: String, selectedPkg: String, onSelec
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(if (isSelected) OxPurple.copy(0.2f) else Color.Transparent)
-            .border(
-                width = if (isSelected) 1.dp else 0.5.dp,
-                color = if (isSelected) OxPurple else OxOutline.copy(0.3f),
-                shape = RoundedCornerShape(10.dp)
-            )
+            .border(width = if (isSelected) 1.dp else 0.5.dp, color = if (isSelected) OxPurple else OxOutline.copy(0.3f), shape = RoundedCornerShape(10.dp))
             .clickable { onSelect(pkg, name) }
             .padding(12.dp),
         verticalAlignment     = Alignment.CenterVertically,
@@ -527,7 +512,7 @@ private fun AppPickerRow(pkg: String, name: String, selectedPkg: String, onSelec
     ) {
         Column {
             Text(name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (isSelected) OxPurpleLight else OxOnBackground, fontFamily = FontFamily.Monospace)
-            Text(pkg, fontSize = 10.sp, color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace)
+            Text(pkg,  fontSize = 10.sp, color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace)
         }
         if (isSelected) Text("✓", color = OxPurple, fontSize = 16.sp, fontFamily = FontFamily.Monospace)
     }
@@ -546,11 +531,7 @@ private fun AuthDialog(
     val dismissEnabled = authState !is AuthState.Loading && authState !is AuthState.WaitingForUser
     Dialog(onDismissRequest = { if (dismissEnabled) onDismiss() }) {
         Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = OxSurface)) {
-            Column(
-                modifier            = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
+            Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("Microsoft Hesabı", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
                 HorizontalDivider(color = OxOutline)
 
@@ -558,9 +539,7 @@ private fun AuthDialog(
                     is AuthState.Success -> {
                         Text("✓ Giriş yapıldı", color = Color(0xFF1AFF6E), fontFamily = FontFamily.Monospace)
                         Text(authState.gamertag, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
-                        Button(onClick = onSignOut, colors = ButtonDefaults.buttonColors(containerColor = OxError), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
-                            Text("Çıkış Yap", fontFamily = FontFamily.Monospace)
-                        }
+                        Button(onClick = onSignOut, colors = ButtonDefaults.buttonColors(containerColor = OxError), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) { Text("Çıkış Yap", fontFamily = FontFamily.Monospace) }
                         TextButton(onClick = onDismiss) { Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace) }
                     }
                     is AuthState.Loading -> {
@@ -575,16 +554,12 @@ private fun AuthDialog(
                     }
                     is AuthState.Error -> {
                         Text("Hata: ${authState.message}", color = OxError, fontFamily = FontFamily.Monospace, fontSize = 12.sp, textAlign = TextAlign.Center)
-                        Button(onClick = onSignIn, colors = ButtonDefaults.buttonColors(containerColor = OxPurple), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
-                            Text("Tekrar Dene", fontFamily = FontFamily.Monospace)
-                        }
+                        Button(onClick = onSignIn, colors = ButtonDefaults.buttonColors(containerColor = OxPurple), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) { Text("Tekrar Dene", fontFamily = FontFamily.Monospace) }
                         TextButton(onClick = onDismiss) { Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace) }
                     }
                     else -> {
                         Text("Xbox/Microsoft hesabınla giriş yap.\nKod ekranda gösterilecek.", color = OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center, fontSize = 13.sp)
-                        Button(onClick = onSignIn, colors = ButtonDefaults.buttonColors(containerColor = OxPurple), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
-                            Text("▶  Giriş Yap", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                        }
+                        Button(onClick = onSignIn, colors = ButtonDefaults.buttonColors(containerColor = OxPurple), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) { Text("▶  Giriş Yap", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                         TextButton(onClick = onDismiss) { Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace) }
                     }
                 }
@@ -598,19 +573,11 @@ private fun AuthDialog(
 @Composable
 private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
     val isLoggedIn = authState is AuthState.Success
-    Row(
-        modifier              = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment     = Alignment.CenterVertically
-    ) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text("OxClient", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (isLoggedIn) {
-                Text(
-                    text = (authState as AuthState.Success).gamertag,
-                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OxPurpleLight,
-                    fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
+                Text(text = (authState as AuthState.Success).gamertag, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OxPurpleLight, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Box(
                 modifier = Modifier.size(36.dp).clip(CircleShape)
@@ -635,11 +602,7 @@ private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
 @Composable
 private fun LogoSection() {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier.size(80.dp).clip(RoundedCornerShape(20.dp))
-                .background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark))),
-            contentAlignment = Alignment.Center
-        ) {
+        Box(modifier = Modifier.size(80.dp).clip(RoundedCornerShape(20.dp)).background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark))), contentAlignment = Alignment.Center) {
             Text("0x", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, fontFamily = FontFamily.Monospace)
         }
         Spacer(Modifier.height(12.dp))
@@ -647,26 +610,22 @@ private fun LogoSection() {
     }
 }
 
-// ── StatusCard ────────────────────────────────────────────────────────────────
+// ── StatusCard — SessionManager.isActive'e bağlı ─────────────────────────────
 
 @Composable
 private fun StatusCard(running: Boolean) {
-    val statusColor by animateColorAsState(
-        targetValue   = if (running) Color(0xFF1AFF6E) else OxOnSurface.copy(0.3f),
-        animationSpec = tween(500), label = "status"
-    )
+    val statusColor by animateColorAsState(targetValue = if (running) Color(0xFF1AFF6E) else OxOnSurface.copy(0.3f), animationSpec = tween(500), label = "status")
     val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue  = 1f,
         targetValue   = if (running) 1.15f else 1f,
         animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
         label         = "pulseAnim"
     )
-
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = OxSurface)) {
         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(modifier = Modifier.size(12.dp).scale(pulse).clip(CircleShape).background(statusColor))
             Column {
-                Text(if (running) "VPN Aktif" else "VPN Kapalı", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (running) Color(0xFF1AFF6E) else OxOnSurface, fontFamily = FontFamily.Monospace)
+                Text(if (running) "VPN Aktif" else "VPN Kapalı", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (running) Color(0xFF1AFF6E) else OxOnBackground, fontFamily = FontFamily.Monospace)
                 Text(if (running) "Trafik yönlendiriliyor → proxy" else "Connect'e basarak başlat", fontSize = 11.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
             }
         }
@@ -677,15 +636,8 @@ private fun StatusCard(running: Boolean) {
 
 @Composable
 private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {
-    val scale by animateFloatAsState(
-        targetValue   = if (running) 1f else 0.97f,
-        animationSpec = spring(Spring.DampingRatioMediumBouncy), label = "btn"
-    )
-    val bgColor by animateColorAsState(
-        targetValue   = if (running) OxError else OxPurple,
-        animationSpec = tween(400), label = "btnColor"
-    )
-
+    val scale by animateFloatAsState(targetValue = if (running) 1f else 0.97f, animationSpec = spring(Spring.DampingRatioMediumBouncy), label = "btn")
+    val bgColor by animateColorAsState(targetValue = if (running) OxError else OxPurple, animationSpec = tween(400), label = "btnColor")
     Button(
         onClick   = onToggle,
         modifier  = Modifier.fillMaxWidth().height(56.dp).scale(scale),
@@ -693,11 +645,6 @@ private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {
         colors    = ButtonDefaults.buttonColors(containerColor = bgColor),
         elevation = ButtonDefaults.buttonElevation(8.dp)
     ) {
-        Text(
-            text       = if (running) "⏹  Disconnect" else "▶  Connect",
-            fontSize   = 16.sp,
-            fontWeight = FontWeight.ExtraBold,
-            fontFamily = FontFamily.Monospace
-        )
+        Text(text = if (running) "⏹  Disconnect" else "▶  Connect", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
     }
 }

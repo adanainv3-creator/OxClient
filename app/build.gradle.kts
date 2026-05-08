@@ -53,10 +53,6 @@ android {
         buildConfig = true
     }
 
-    sourceSets {
-        named("main") { java.srcDirs("src/main/java", "src/main/kotlin") }
-    }
-
     packaging {
         resources {
             excludes += listOf(
@@ -86,7 +82,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
     implementation("androidx.activity:activity-compose:1.9.0")
 
-    // DataStore — sunucu adresi kalıcı depolama için
+    // DataStore
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     // Jetpack Compose
@@ -101,17 +97,8 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    // Netty — RakNet proxy çekirdeği
-    implementation("io.netty:netty-all:4.1.111.Final")
-
-    // CloudburstMC — RakNet transport + Bedrock protocol codec
-    implementation("org.cloudburstmc.netty:netty-transport-raknet:1.0.0.CR3-SNAPSHOT") {
-        isChanging = true
-        exclude(group = "io.netty")
-    }
-    implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta5-SNAPSHOT") { isChanging = true }
-    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta5-SNAPSHOT") { isChanging = true }
-    implementation("org.cloudburstmc:nbt:3.0.0.Final")
+    // SavedState (ComposeView lifecycle için)
+    implementation("androidx.savedstate:savedstate-ktx:1.2.1")
 
     // Auth & HTTP
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
