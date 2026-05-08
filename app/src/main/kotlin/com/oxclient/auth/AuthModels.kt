@@ -7,11 +7,14 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 // ── Modeller ──────────────────────────────────────────────────────────────
 
@@ -173,6 +176,8 @@ class MicrosoftAuthManager {
         val req = Request.Builder()
             .url("https://xsts.auth.xboxlive.com/xsts/authorize")
             .post(payload)
+            .header("Content-Type","application/json")
+            .header("Accept","application/json")
             .build()
 
         val resp = client.newCall(req).await()
@@ -191,6 +196,8 @@ class MicrosoftAuthManager {
             .url("https://multiplayer.minecraft.net/authentication")
             .post(payload)
             .header("Authorization", "XBL3.0 x=${xstsToken.userHash};${xstsToken.token}")
+            .header("Content-Type","application/json")
+            .header("Accept","application/json")
             .build()
         val resp = client.newCall(req).await()
         JSONObject(resp.body!!.string()).getString("token")
@@ -217,11 +224,15 @@ class MicrosoftAuthManager {
     private fun generateDummyKey(): String =
         "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE" + "A".repeat(64)
 
-    // OkHttp suspend ext
-    private suspend fun Call.await(): Response = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+    // OkHttp suspend ext - DÜZELTİLDİ
+    private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
         enqueue(object : Callback {
-            override fun onResponse(call: Call, response: Response) { cont.resume(response) {} }
-            override fun onFailure(call: Call, e: IOException) { cont.resumeWithException(e) }
+            override fun onResponse(call: Call, response: Response) { 
+                cont.resume(response) {}
+            }
+            override fun onFailure(call: Call, e: IOException) { 
+                cont.resumeWithException(e) 
+            }
         })
         cont.invokeOnCancellation { cancel() }
     }

@@ -101,7 +101,18 @@ class OverlayService : Service(),
         rootView = ComposeView(this).apply {
             setViewTreeLifecycleOwner(this@OverlayService)
             setViewTreeViewModelStoreOwner(this@OverlayService)
-            setViewTreeSavedStateRegistryOwner(this@OverlayService)
+            
+            // SavedStateRegistryOwner - reflection ile set edelim (eski API uyumluluğu)
+            try {
+                val method = ComposeView::class.java.getMethod(
+                    "setViewTreeSavedStateRegistryOwner",
+                    SavedStateRegistryOwner::class.java
+                )
+                method.invoke(this, this@OverlayService)
+            } catch (e: Exception) {
+                // Eski Android versiyonlarında bu metod olmayabilir
+                Log.w("OverlayService", "setViewTreeSavedStateRegistryOwner bulunamadı", e)
+            }
 
             setContent {
                 OxTheme {
@@ -145,7 +156,7 @@ class OverlayService : Service(),
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  COMPOSE UI
+//  COMPOSE UI - Modül durumları canlı okunacak
 // ─────────────────────────────────────────────────────────────────────────
 
 @Composable
@@ -154,6 +165,20 @@ private fun OverlayContent(
     onOpenDashboard : () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+
+    // Modül durumlarını gerçek zamanlı oku
+    val killAuraEnabled by remember { 
+        derivedStateOf { ModuleManager.killAura.enabled }
+    }
+    val criticalsEnabled by remember { 
+        derivedStateOf { ModuleManager.criticals.enabled }
+    }
+    val autoTotemEnabled by remember { 
+        derivedStateOf { ModuleManager.autoTotem.enabled }
+    }
+    val tpAuraEnabled by remember { 
+        derivedStateOf { ModuleManager.tpAura.enabled }
+    }
 
     Column(horizontalAlignment = Alignment.End) {
 
@@ -205,27 +230,41 @@ private fun OverlayContent(
                 color   = OxSurface.copy(alpha = 0.95f),
                 border  = BorderStroke(1.dp, OxBorder)
             ) {
-                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     // Başlık
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("OxClient", color = OxPurpleLight, style = MaterialTheme.typography.labelLarge)
-                        IconButton(onClick = onOpenDashboard, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.OpenInFull, null, tint = OxTextSub, modifier = Modifier.size(16.dp))
+                        Text(
+                            "OxClient",
+                            color = OxPurpleLight,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        IconButton(
+                            onClick = onOpenDashboard,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.OpenInFull,
+                                null,
+                                tint = OxTextSub,
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
                     }
 
                     HorizontalDivider(color = OxBorder)
 
-                    // Modül satırları
-                    ModuleRow("KillAura",  ModuleManager.killAura.enabled)  { ModuleManager.killAura.toggle() }
-                    ModuleRow("Criticals", ModuleManager.criticals.enabled) { ModuleManager.criticals.toggle() }
-                    ModuleRow("AutoTotem", ModuleManager.autoTotem.enabled) { ModuleManager.autoTotem.toggle() }
-                    ModuleRow("TPAura",    ModuleManager.tpAura.enabled)    { ModuleManager.tpAura.toggle() }
+                    // Modül satırları - gerçek durumlarla
+                    ModuleRow("KillAura",  killAuraEnabled)  { ModuleManager.killAura.toggle() }
+                    ModuleRow("Criticals", criticalsEnabled) { ModuleManager.criticals.toggle() }
+                    ModuleRow("AutoTotem", autoTotemEnabled) { ModuleManager.autoTotem.toggle() }
+                    ModuleRow("TPAura",    tpAuraEnabled)    { ModuleManager.tpAura.toggle() }
 
                     HorizontalDivider(color = OxBorder)
 
@@ -233,13 +272,17 @@ private fun OverlayContent(
                     val stats = remember { mutableStateOf("") }
                     LaunchedEffect(Unit) {
                         while (true) {
-                            val p = PacketProcessor.packetsIntercepted
+                            val p = com.oxclient.proxy.PacketProcessor.packetsIntercepted
                             stats.value = "📦 $p pkt"
                             delay(1000)
                         }
                     }
-                    Text(stats.value, color = OxTextSub, style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(top = 2.dp))
+                    Text(
+                        stats.value,
+                        color = OxTextSub,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
                 }
             }
         }
@@ -248,36 +291,26 @@ private fun OverlayContent(
 
 @Composable
 private fun ModuleRow(name: String, enabled: Boolean, onToggle: () -> Unit) {
-    // Yeniden kompozisyon için yerel state
-    var state by remember { mutableStateOf(enabled) }
-    LaunchedEffect(enabled) { state = enabled }
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .clickable {
-                onToggle()
-                state = !state
-            }
-            .background(if (state) OxPurple.copy(alpha = 0.18f) else Color.Transparent)
+            .clickable { onToggle() }
+            .background(if (enabled) OxPurple.copy(alpha = 0.18f) else Color.Transparent)
             .padding(horizontal = 10.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text  = name,
-            color = if (state) OxPurpleLight else OxText,
+            color = if (enabled) OxPurpleLight else OxText,
             style = MaterialTheme.typography.bodyMedium
         )
         Box(
             modifier = Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(if (state) OxGreen else OxBorder)
+                .background(if (enabled) OxGreen else OxBorder)
         )
     }
 }
-
-// OverlayService içinden PacketProcessor erişimi için import
-private val PacketProcessor get() = com.oxclient.proxy.PacketProcessor

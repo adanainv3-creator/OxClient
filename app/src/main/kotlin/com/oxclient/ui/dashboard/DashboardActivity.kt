@@ -16,6 +16,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -26,11 +27,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.lifecycleScope
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleManager
+import com.oxclient.module.combat.Criticals
+import com.oxclient.module.combat.KillAura
+import com.oxclient.module.movement.TPAura
 import com.oxclient.proxy.BedrockRelay
 import com.oxclient.proxy.BedrockRelayService
 import com.oxclient.session.ServerConfig
@@ -62,7 +67,6 @@ class DashboardActivity : ComponentActivity() {
         else Toast.makeText(this, "Overlay izni gerekli!", Toast.LENGTH_SHORT).show()
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -155,7 +159,9 @@ private fun DashboardScreen(
     var selectedTab     by remember { mutableIntStateOf(0) }
     var showAddDialog   by remember { mutableStateOf(false) }
 
-    // Tick
+    // Modül ayar paneli state'i
+    var settingsModule   by remember { mutableStateOf<BaseModule?>(null) }
+
     LaunchedEffect(Unit) {
         while (true) {
             isRelayRunning = getRelayRunning()
@@ -207,7 +213,6 @@ private fun DashboardScreen(
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
 
-            // ── Tab bar ───────────────────────────────────────────────────
             TabRow(
                 selectedTabIndex = selectedTab,
                 containerColor   = OxSurface,
@@ -231,12 +236,15 @@ private fun DashboardScreen(
                     onAdd           = { showAddDialog = true },
                     sessionManager  = sessionManager
                 )
-                1 -> ModulesTab()
+                1 -> ModulesTab(
+                    onOpenSettings = { settingsModule = it }
+                )
                 2 -> StatsTab(stats = stats, isRunning = isRelayRunning)
             }
         }
     }
 
+    // Sunucu ekleme dialog'u
     if (showAddDialog) {
         AddServerDialog(
             onDismiss = { showAddDialog = false },
@@ -246,9 +254,18 @@ private fun DashboardScreen(
             }
         )
     }
+
+    // Modül ayarları dialog'u
+    if (settingsModule != null) {
+        ModuleSettingsDialog(
+            module     = settingsModule!!,
+            onDismiss  = { settingsModule = null }
+        )
+    }
 }
 
 // ── Sunucular Tab ─────────────────────────────────────────────────────────
+// (Mevcut haliyle aynı, değişiklik yok)
 
 @Composable
 private fun ServersTab(
@@ -266,7 +283,6 @@ private fun ServersTab(
         contentPadding      = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Başlat / Durdur butonu
         item {
             Button(
                 onClick = { if (isRelayRunning) onStop() else onStart() },
@@ -290,7 +306,6 @@ private fun ServersTab(
             }
         }
 
-        // Açıklama
         item {
             if (selectedServer != null && !isRelayRunning) {
                 InfoCard(
@@ -303,7 +318,6 @@ private fun ServersTab(
             }
         }
 
-        // Server listesi
         items(servers, key = { it.id }) { server ->
             ServerCard(
                 server   = server,
@@ -312,7 +326,6 @@ private fun ServersTab(
             )
         }
 
-        // Ekle butonu
         item {
             OutlinedButton(
                 onClick  = onAdd,
@@ -366,10 +379,12 @@ private fun InfoCard(text: String, color: Color) {
     }
 }
 
-// ── Modüller Tab ──────────────────────────────────────────────────────────
+// ── Modüller Tab (Ayarlar butonu eklendi) ────────────────────────────────
 
 @Composable
-private fun ModulesTab() {
+private fun ModulesTab(
+    onOpenSettings: (BaseModule) -> Unit
+) {
     val modules = ModuleManager.getAll()
     LazyColumn(
         modifier            = Modifier.fillMaxSize(),
@@ -388,14 +403,20 @@ private fun ModulesTab() {
                 )
             }
             items(catModules, key = { it.name }) { module ->
-                ModuleCard(module)
+                ModuleCardWithSettings(
+                    module         = module,
+                    onOpenSettings = { onOpenSettings(module) }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ModuleCard(module: BaseModule) {
+private fun ModuleCardWithSettings(
+    module         : BaseModule,
+    onOpenSettings : () -> Unit
+) {
     var enabled by remember { mutableStateOf(module.enabled) }
 
     Surface(
@@ -404,31 +425,55 @@ private fun ModuleCard(module: BaseModule) {
         color    = if (enabled) OxPurple.copy(alpha = 0.18f) else OxSurface,
         border   = BorderStroke(1.dp, if (enabled) OxPurple.copy(alpha = 0.5f) else OxBorder)
     ) {
-        Row(
-            modifier  = Modifier
-                .clickable {
-                    module.toggle()
-                    enabled = module.enabled
+        Column {
+            Row(
+                modifier  = Modifier
+                    .clickable {
+                        module.toggle()
+                        enabled = module.enabled
+                    }
+                    .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(module.name, color = if (enabled) OxPurpleLight else OxText,
+                        style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                    Text(module.description, color = OxTextSub, style = MaterialTheme.typography.bodySmall)
                 }
-                .padding(16.dp),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(module.name, color = if (enabled) OxPurpleLight else OxText,
-                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                Text(module.description, color = OxTextSub, style = MaterialTheme.typography.bodySmall)
-            }
-            Switch(
-                checked         = enabled,
-                onCheckedChange = { module.toggle(); enabled = module.enabled },
-                colors          = SwitchDefaults.colors(
-                    checkedThumbColor  = Color.White,
-                    checkedTrackColor  = OxPurple,
-                    uncheckedThumbColor= OxTextSub,
-                    uncheckedTrackColor= OxBorder
+                Switch(
+                    checked         = enabled,
+                    onCheckedChange = { module.toggle(); enabled = module.enabled },
+                    colors          = SwitchDefaults.colors(
+                        checkedThumbColor  = Color.White,
+                        checkedTrackColor  = OxPurple,
+                        uncheckedThumbColor= OxTextSub,
+                        uncheckedTrackColor= OxBorder
+                    )
                 )
-            )
+            }
+            // Ayarlar butonu
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenSettings)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = "Ayarlar",
+                    tint = OxTextSub,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "Ayarlar",
+                    color = OxTextSub,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
     }
 }
@@ -492,6 +537,416 @@ private fun StatCard(label: String, value: String, icon: ImageVector, color: Col
                 Text(value, color = OxText, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  MODÜL AYARLARI DIALOG'U
+// ─────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModuleSettingsDialog(
+    module    : BaseModule,
+    onDismiss : () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor   = OxSurface,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Settings, null, tint = OxPurpleLight)
+                Text("${module.name} Ayarları", color = OxText, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                when (module) {
+                    is KillAura  -> KillAuraSettings(module)
+                    is Criticals -> CriticalsSettings(module)
+                    is TPAura    -> TPAuraSettings(module)
+                    else -> Text("Bu modül için ayar bulunmuyor", color = OxTextSub)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Kapat", color = OxPurpleLight)
+            }
+        }
+    )
+}
+
+// ── KillAura Ayarları ─────────────────────────────────────────────────────
+
+@Composable
+private fun KillAuraSettings(ka: KillAura) {
+    // CPS
+    Text("CPS", color = OxText, fontWeight = FontWeight.Medium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SliderSetting(
+            label  = "Min",
+            value  = ka.cpsMin,
+            range  = 1f..20f,
+            steps  = 19,
+            format = { "%.0f".format(it) }
+        ) { ka.cpsMin = it }
+        SliderSetting(
+            label  = "Max",
+            value  = ka.cpsMax,
+            range  = 1f..20f,
+            steps  = 19,
+            format = { "%.0f".format(it) }
+        ) { ka.cpsMax = it }
+    }
+
+    HorizontalDivider(color = OxBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+    // Range
+    SliderSetting(
+        label  = "Range",
+        value  = ka.range,
+        range  = 1f..6f,
+        steps  = 50,
+        format = { "%.2f".format(it) }
+    ) { ka.range = it }
+
+    // FOV
+    SliderSetting(
+        label  = "FOV",
+        value  = ka.fov,
+        range  = 30f..360f,
+        steps  = 33,
+        format = { "%.0f°".format(it) }
+    ) { ka.fov = it }
+
+    // Switch Delay
+    SliderSetting(
+        label  = "Switch Delay",
+        value  = ka.switchDelayMS.toFloat(),
+        range  = 0f..500f,
+        steps  = 50,
+        format = { "%.0f ms".format(it) }
+    ) { ka.switchDelayMS = it.toLong() }
+
+    HorizontalDivider(color = OxBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+    // Attack Mode
+    Text("Attack Mode", color = OxText, fontWeight = FontWeight.Medium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        KillAura.AttackMode.entries.forEach { mode ->
+            FilterChip(
+                selected = ka.attackMode == mode,
+                onClick  = { ka.attackMode = mode },
+                label    = { Text(mode.name, style = MaterialTheme.typography.labelSmall) },
+                colors   = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = OxPurple.copy(alpha = 0.3f),
+                    selectedLabelColor = OxPurpleLight
+                )
+            )
+        }
+    }
+
+    // Rotation Mode
+    Text("Rotation Mode", color = OxText, fontWeight = FontWeight.Medium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        KillAura.RotationMode.entries.forEach { mode ->
+            FilterChip(
+                selected = ka.rotationMode == mode,
+                onClick  = { ka.rotationMode = mode },
+                label    = { Text(mode.name, style = MaterialTheme.typography.labelSmall) },
+                colors   = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = OxPurple.copy(alpha = 0.3f),
+                    selectedLabelColor = OxPurpleLight
+                )
+            )
+        }
+    }
+
+    // Swing Mode
+    Text("Swing", color = OxText, fontWeight = FontWeight.Medium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        KillAura.SwingMode.entries.forEach { mode ->
+            FilterChip(
+                selected = ka.swingMode == mode,
+                onClick  = { ka.swingMode = mode },
+                label    = { Text(mode.name, style = MaterialTheme.typography.labelSmall) },
+                colors   = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = OxPurple.copy(alpha = 0.3f),
+                    selectedLabelColor = OxPurpleLight
+                )
+            )
+        }
+    }
+
+    // Priority Mode
+    Text("Priority Mode", color = OxText, fontWeight = FontWeight.Medium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        KillAura.PriorityMode.entries.forEach { mode ->
+            FilterChip(
+                selected = ka.priorityMode == mode,
+                onClick  = { ka.priorityMode = mode },
+                label    = { Text(mode.name, style = MaterialTheme.typography.labelSmall) },
+                colors   = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = OxPurple.copy(alpha = 0.3f),
+                    selectedLabelColor = OxPurpleLight
+                )
+            )
+        }
+    }
+
+    HorizontalDivider(color = OxBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+    // Toggle ayarlar
+    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Text("Reverse Priority", color = OxText)
+        Switch(
+            checked = ka.reversePriority,
+            onCheckedChange = { ka.reversePriority = it },
+            colors  = SwitchDefaults.colors(
+                checkedThumbColor  = Color.White,
+                checkedTrackColor  = OxPurple
+            )
+        )
+    }
+
+    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Text("Mouse Over", color = OxText)
+        Switch(
+            checked = ka.mouseOver,
+            onCheckedChange = { ka.mouseOver = it },
+            colors  = SwitchDefaults.colors(
+                checkedThumbColor  = Color.White,
+                checkedTrackColor  = OxPurple
+            )
+        )
+    }
+
+    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Text("Swing Sound", color = OxText)
+        Switch(
+            checked = ka.swingSound,
+            onCheckedChange = { ka.swingSound = it },
+            colors  = SwitchDefaults.colors(
+                checkedThumbColor  = Color.White,
+                checkedTrackColor  = OxPurple
+            )
+        )
+    }
+
+    // Fail Rate
+    SliderSetting(
+        label  = "Fail Rate",
+        value  = ka.failRate,
+        range  = 0f..100f,
+        steps  = 100,
+        format = { "%.0f%%".format(it) }
+    ) { ka.failRate = it }
+
+    // Shortcut
+    OutlinedTextField(
+        value       = ka.shortcut,
+        onValueChange = { ka.shortcut = it },
+        label       = { Text("Shortcut", color = OxTextSub) },
+        placeholder = { Text("Örn: F", color = OxTextSub.copy(alpha = 0.5f)) },
+        modifier    = Modifier.fillMaxWidth(),
+        singleLine  = true,
+        colors      = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor   = OxPurple,
+            unfocusedBorderColor = OxBorder,
+            cursorColor          = OxPurple,
+            focusedTextColor     = OxText,
+            unfocusedTextColor   = OxText
+        )
+    )
+}
+
+// ── Criticals Ayarları ────────────────────────────────────────────────────
+
+@Composable
+private fun CriticalsSettings(crit: Criticals) {
+    Text("Mode", color = OxText, fontWeight = FontWeight.Medium)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Criticals.CriticalMode.entries.forEach { mode ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { crit.mode = mode }
+                    .background(
+                        if (crit.mode == mode) OxPurple.copy(alpha = 0.2f)
+                        else Color.Transparent
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                RadioButton(
+                    selected = crit.mode == mode,
+                    onClick  = { crit.mode = mode },
+                    colors   = RadioButtonDefaults.colors(
+                        selectedColor = OxPurpleLight
+                    )
+                )
+                Column {
+                    Text(
+                        mode.name,
+                        color = if (crit.mode == mode) OxPurpleLight else OxText,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        when (mode) {
+                            Criticals.CriticalMode.VANILLA    -> "onGround=false ile kritik"
+                            Criticals.CriticalMode.JUMP       -> "Küçük y-offset enjekte et"
+                            Criticals.CriticalMode.TPJUMP     -> "Hedefe ışınla + kritik"
+                            Criticals.CriticalMode.MOVEPACKET -> "MovePlayer manipülasyonu"
+                        },
+                        color = OxTextSub,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── TPAura Ayarları ───────────────────────────────────────────────────────
+
+@Composable
+private fun TPAuraSettings(tp: TPAura) {
+    // Mode
+    Text("Mode", color = OxText, fontWeight = FontWeight.Medium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TPAura.TPMode.entries.forEach { mode ->
+            FilterChip(
+                selected = tp.mode == mode,
+                onClick  = { tp.mode = mode },
+                label    = { Text(mode.name, style = MaterialTheme.typography.labelSmall) },
+                colors   = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = OxPurple.copy(alpha = 0.3f),
+                    selectedLabelColor = OxPurpleLight
+                )
+            )
+        }
+    }
+
+    HorizontalDivider(color = OxBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+    // Range
+    SliderSetting(
+        label  = "Range",
+        value  = tp.range,
+        range  = 1.5f..6f,
+        steps  = 45,
+        format = { "%.2f".format(it) }
+    ) { tp.range = it }
+
+    // Y Offset
+    SliderSetting(
+        label  = "Y Offset",
+        value  = tp.yOffset,
+        range  = -2f..2f,
+        steps  = 40,
+        format = { "%.2f".format(it) }
+    ) { tp.yOffset = it }
+
+    // Horizontal Speed
+    SliderSetting(
+        label  = "Horizontal Speed",
+        value  = tp.horizontalSpeed,
+        range  = 1f..20f,
+        steps  = 19,
+        format = { "%.2f".format(it) }
+    ) { tp.horizontalSpeed = it }
+
+    // Vertical Speed
+    SliderSetting(
+        label  = "Vertical Speed",
+        value  = tp.verticalSpeed,
+        range  = 1f..20f,
+        steps  = 19,
+        format = { "%.2f".format(it) }
+    ) { tp.verticalSpeed = it }
+
+    // Strafe Speed
+    SliderSetting(
+        label  = "Strafe Speed",
+        value  = tp.strafeSpeed,
+        range  = 0.5f..10f,
+        steps  = 19,
+        format = { "%.2f".format(it) }
+    ) { tp.strafeSpeed = it }
+
+    HorizontalDivider(color = OxBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+    // Passive
+    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Text("Passive", color = OxText)
+        Switch(
+            checked = tp.passive,
+            onCheckedChange = { tp.passive = it },
+            colors  = SwitchDefaults.colors(
+                checkedThumbColor  = Color.White,
+                checkedTrackColor  = OxPurple
+            )
+        )
+    }
+
+    // Shortcut
+    OutlinedTextField(
+        value       = tp.shortcut,
+        onValueChange = { tp.shortcut = it },
+        label       = { Text("Shortcut", color = OxTextSub) },
+        placeholder = { Text("Örn: R", color = OxTextSub.copy(alpha = 0.5f)) },
+        modifier    = Modifier.fillMaxWidth(),
+        singleLine  = true,
+        colors      = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor   = OxPurple,
+            unfocusedBorderColor = OxBorder,
+            cursorColor          = OxPurple,
+            focusedTextColor     = OxText,
+            unfocusedTextColor   = OxText
+        )
+    )
+}
+
+// ── Slider Bileşeni ──────────────────────────────────────────────────────
+
+@Composable
+private fun SliderSetting(
+    label  : String,
+    value  : Float,
+    range  : ClosedFloatingPointRange<Float>,
+    steps  : Int,
+    format : (Float) -> String,
+    onChange: (Float) -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(label, color = OxTextSub, style = MaterialTheme.typography.bodySmall)
+            Text(format(value), color = OxPurpleLight, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+        }
+        Slider(
+            value      = value,
+            onValueChange = onChange,
+            valueRange = range,
+            steps      = steps,
+            colors     = SliderDefaults.colors(
+                thumbColor   = OxPurpleLight,
+                activeTrackColor = OxPurple
+            )
+        )
     }
 }
 
