@@ -3,7 +3,6 @@ package com.oxclient.ui.dashboard
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -43,7 +42,6 @@ import com.oxclient.auth.AuthState
 import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
-import com.oxclient.core.vpn.OxVpnService
 import com.oxclient.module.ModuleManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
@@ -57,17 +55,6 @@ val SUPPORTED_PACKAGES = listOf(
 )
 
 class DashboardActivity : ComponentActivity() {
-
-    private val vpnLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            Log.d("Dashboard", "VPN izni verildi, proxy başlatılıyor")
-            launchProxy(pendingPackage)
-        } else {
-            Log.w("Dashboard", "VPN izni kullanıcı tarafından reddedildi")
-        }
-    }
 
     private val overlayLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -102,7 +89,7 @@ class DashboardActivity : ComponentActivity() {
                     installedApps = getInstalledGames(),
                     onConnect     = { pkg ->
                         pendingPackage = pkg
-                        requestVpn()
+                        launchProxy(pkg)
                     },
                     onDisconnect  = { stopProxy() },
                     onSignIn      = { MicrosoftAuthManager.startSignIn() },
@@ -113,21 +100,17 @@ class DashboardActivity : ComponentActivity() {
         }
     }
 
-    private fun requestVpn() {
-        val pi = VpnService.prepare(this)
-        if (pi != null) vpnLauncher.launch(pi)
-        else launchProxy(pendingPackage)
-    }
-
     private fun launchProxy(targetPkg: String) {
         Log.d("Dashboard", "launchProxy → $targetPkg")
 
-        val vpnIntent = Intent(this, OxVpnService::class.java).apply {
-            action = OxVpnService.ACTION_START
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(vpnIntent)
-        else startService(vpnIntent)
+        // TODO: VPN servisi eklendiğinde buraya başlatma kodu gelecek
+        // val vpnIntent = Intent(this, OxVpnService::class.java).apply {
+        //     action = OxVpnService.ACTION_START
+        // }
+        // if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(vpnIntent)
+        // else startService(vpnIntent)
 
+        // Overlay'i yine de başlat (VPN'den bağımsız çalışabilir)
         OverlayService.start(this)
 
         window.decorView.postDelayed({
@@ -145,7 +128,8 @@ class DashboardActivity : ComponentActivity() {
     }
 
     private fun stopProxy() {
-        startService(Intent(this, OxVpnService::class.java).apply { action = OxVpnService.ACTION_STOP })
+        // TODO: VPN servisi eklendiğinde buraya durdurma kodu gelecek
+        // startService(Intent(this, OxVpnService::class.java).apply { action = OxVpnService.ACTION_STOP })
         OverlayService.stop(this)
         ModuleManager.disableAll()
     }
