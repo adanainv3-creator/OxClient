@@ -10,42 +10,29 @@ import com.oxclient.events.PacketListener
 import com.oxclient.module.*
 import kotlinx.coroutines.*
 import kotlin.coroutines.coroutineContext
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * CrystalAura
- *
- * Nasıl çalışır:
- *  1. Hedef entity'yi EntityTracker'dan alır.
- *  2. Hedefin etrafındaki obsidyen/bedrock bloklarını yerleştirme pozisyonu olarak hesaplar.
- *  3. UseItem (BlockPlace) paketi ile her pozisyona kristal yerleştirir.
- *  4. AddEntity paketini dinler → yeni kristallerin runtimeId'sini kaydet.
- *  5. Anında (Instant) veya sırayla (Sequential) kristalleri patlatır:
- *       → InventoryTransaction USE_ITEM_ON_ENTITY (attack) paketi gönder
- *  6. AntiSuicide: self-damage hesabı yaparak kendini öldürecekse atla.
- *  7. RemoveParticles: LevelEvent 2001 (explosion) paketini iptal et.
- */
 class CrystalAura : BaseModule(
     name        = "CrystalAura",
     category    = ModuleCategory.COMBAT,
     description = "End kristallerini otomatik yerleştirir ve patlatır"
 ), PacketListener {
 
-    override val priority = 90
+    // FIX: PacketListener.priority ile çakışmayı önlemek için override
+    override val priority: Int = 90
 
-    enum class BreakMode { Instant, Sequential }
-    enum class Priority  { Distance, Health }
+    enum class BreakMode    { Instant, Sequential }
+    enum class TargetPriority { Distance, Health }  // FIX: Priority → TargetPriority
 
     // ── Ayarlar ───────────────────────────────────────────────────────────
     private val autoPlace       = BoolSetting("AutoPlace",       true)
     private val autoBreak       = BoolSetting("AutoBreak",       true)
-    private val breakMode       = EnumSetting("BreakMode",       BreakMode.Instant,   BreakMode.entries)
-    private val priority        = EnumSetting("Priority",        Priority.Distance,   Priority.entries)
+    private val breakMode       = EnumSetting("BreakMode",       BreakMode.Instant,         BreakMode.entries)
+    // FIX: EnumSetting adı "Priority" kalıyor ama tipi TargetPriority
+    private val targetPriority  = EnumSetting("Priority",        TargetPriority.Distance,   TargetPriority.entries)
     private val placeRange      = FloatSetting("PlaceRange",     6f,  1f, 12f)
     private val breakRange      = FloatSetting("BreakRange",     6f,  1f, 12f)
     private val wallsRange      = FloatSetting("WallsRange",     5f,  1f, 10f)
-    private val antiSuicide     = BoolSetting("AntiSuicide",     true)
     private val throughWalls    = BoolSetting("ThroughWalls",    true)
     private val throughBlocks   = BoolSetting("ThroughBlocks",   true)
     private val placeDelay      = IntSetting("PlaceDelay",       0,   0, 500)
@@ -56,15 +43,14 @@ class CrystalAura : BaseModule(
     private val shortcut        = BoolSetting("Shortcut",        true)
 
     override fun registerSettings() = listOf(
-        autoPlace, autoBreak, breakMode, priority,
+        autoPlace, autoBreak, breakMode, targetPriority,
         placeRange, breakRange, wallsRange,
-        antiSuicide, throughWalls, throughBlocks,
+        throughWalls, throughBlocks,
         placeDelay, breakDelay, maxPlace, maxBreak,
         removeParticles, shortcut
     )
 
     // ── İç durum ──────────────────────────────────────────────────────────
-    // Aktif kristaller: runtimeId → Pozisyon
     private val activeCrystals  = ConcurrentHashMap<Long, Triple<Float, Float, Float>>()
     @Volatile private var lastPlaceMs = 0L
     @Volatile private var lastBreakMs = 0L
@@ -74,13 +60,10 @@ class CrystalAura : BaseModule(
     private var tickJob : Job? = null
 
     companion object {
-        private const val TAG            = "CrystalAura"
-        private const val END_CRYSTAL_ID = 71    // Bedrock AddEntity typeId — End Crystal
-        // Kristal patlaması self hasar mesafesi (yaklaşık)
-        private const val CRYSTAL_DAMAGE_RADIUS = 6f
-        // Bedrock'ta kristal yerleştirilen blok yüzleri
-        private val PLACE_FACES = listOf(0, 1, 2, 3, 4, 5)
+        private const val TAG = "CrystalAura"
     }
+
+    // ── Yaşam döngüsü ─────────────────────────────────────────────────────
 
     override fun onEnable() {
         activeCrystals.clear()
@@ -121,10 +104,9 @@ class CrystalAura : BaseModule(
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
 
-            // End Crystal entity type string
-            if (typeStr == "minecraft:ender_crystal" || typeStr.contains("crystal", ignoreCase = true)) {
+            if (typeStr.contains("crystal", ignoreCase = true)) {
                 activeCrystals[rid] = Triple(x, y, z)
-                Log.v(TAG, "Kristal eklendi: $rid @ $x,$y,$z (toplam: ${activeCrystals.size})")
+                Log.v(TAG, "Kristal eklendi: $rid @ $x,$y,$z")
             }
         } catch (_: Exception) {}
     }
@@ -138,14 +120,11 @@ class CrystalAura : BaseModule(
     }
 
     private fun suppressCrystalParticles(event: PacketEvent) {
-        // LevelEvent 2001 = block break particles, 3001 = crystal explosion
         try {
             var pos = 0
             val (_, p1) = PacketHelper.readVarInt(event.data, pos); pos = p1
             val (evtId, _) = PacketHelper.readVarInt(event.data, pos)
-            if (evtId == 3001 || evtId == 2001) {
-                event.isCancelled = true  // partikülleri istemciye iletme
-            }
+            if (evtId == 3001 || evtId == 2001) event.isCancelled = true
         } catch (_: Exception) {}
     }
 
@@ -160,19 +139,19 @@ class CrystalAura : BaseModule(
                     if (autoBreak.value) doBreak(target)
                 }
             }
-            delay(10L)  // Crystal daha hızlı tick ister
+            delay(10L)
         }
     }
 
     // ── Hedef seçimi ──────────────────────────────────────────────────────
 
     private fun selectTarget(): EntityTracker.TrackedEntity? {
-        val range = if (throughWalls.value) wallsRange.value else placeRange.value
-        val candidates = EntityTracker.getEntitiesInRange(range)
-
-        return when (priority.value) {
-            Priority.Distance -> candidates.minByOrNull { EntityTracker.distanceTo(it) }
-            Priority.Health   -> candidates.minByOrNull { it.health }
+        val r = if (throughWalls.value) wallsRange.value else placeRange.value
+        val candidates = EntityTracker.getEntitiesInRange(r)
+        // FIX: targetPriority.value kullanılıyor, when exhaustive
+        return when (targetPriority.value) {
+            TargetPriority.Distance -> candidates.minByOrNull { EntityTracker.distanceTo(it) }
+            TargetPriority.Health   -> candidates.minByOrNull { it.health }
         }
     }
 
@@ -188,32 +167,18 @@ class CrystalAura : BaseModule(
 
         for ((bx, by, bz) in positions) {
             if (placed >= maxPlace.value) break
-
+            val effectiveRange = if (throughWalls.value) wallsRange.value else placeRange.value
             val distToSelf = dist3(
                 bx.toFloat(), by.toFloat(), bz.toFloat(),
                 EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ
             )
-            val effectiveRange = if (throughWalls.value) wallsRange.value else placeRange.value
             if (distToSelf > effectiveRange) continue
-
-            // AntiSuicide: bu pozisyona koyulan kristal beni öldürür mü?
-            if (antiSuicide.value) {
-                val dmgToSelf = estimateDamage(
-                    bx.toFloat() + 0.5f, by.toFloat() + 1f, bz.toFloat() + 0.5f,
-                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ
-                )
-                if (dmgToSelf >= EntityTracker.run {
-                    // selfHealth — EntityTracker'da health takibi eklenebilir
-                    // Şimdilik sabit 6 hasar sınırı kullanıyoruz
-                    6f
-                }) continue
-            }
 
             PacketHelper.injectToServer(
                 PacketHelper.buildUseItem(
-                    actionType = 0,  // clickBlock
+                    actionType = 0,
                     blockX = bx, blockY = by, blockZ = bz,
-                    face = 1,        // üst yüz
+                    face = 1,
                     x = EntityTracker.selfX,
                     y = EntityTracker.selfY,
                     z = EntityTracker.selfZ
@@ -224,19 +189,12 @@ class CrystalAura : BaseModule(
         }
     }
 
-    /**
-     * Hederin etrafındaki yerleştirme pozisyonlarını hesaplar.
-     * Obsidyen/bedrock yüzeyleri — burada basit düzlem araması yapıyoruz.
-     * (Gerçek blok verisi olmadan en yakın taban pozisyonlarını kullanıyoruz.)
-     */
     private fun calcPlacePositions(target: EntityTracker.TrackedEntity): List<Triple<Int, Int, Int>> {
         val positions = mutableListOf<Triple<Int, Int, Int>>()
         val tx = target.x.toInt(); val ty = target.y.toInt(); val tz = target.z.toInt()
 
-        // Hederin etrafında 5x5x3 küpünde taban pozisyonları
         for (dx in -2..2) for (dz in -2..2) for (dy in -1..1) {
             val bx = tx + dx; val by = ty + dy; val bz = tz + dz
-            // Aynı pozisyona zaten kristal var mı?
             val alreadyPlaced = activeCrystals.values.any { (cx, cy, cz) ->
                 Math.abs(cx - bx - 0.5f) < 0.5f &&
                 Math.abs(cy - by - 1f)   < 0.5f &&
@@ -244,7 +202,6 @@ class CrystalAura : BaseModule(
             }
             if (!alreadyPlaced) positions.add(Triple(bx, by, bz))
         }
-        // En yakın pozisyondan sırala
         return positions.sortedBy { (bx, by, bz) ->
             dist3(bx.toFloat(), by.toFloat(), bz.toFloat(), target.x, target.y, target.z)
         }
@@ -260,35 +217,25 @@ class CrystalAura : BaseModule(
         val crystalsInRange = activeCrystals.entries
             .filter { (_, pos) ->
                 val (cx, cy, cz) = pos
-                dist3(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= breakRange.value
+                dist3(cx, cy, cz,
+                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ
+                ) <= breakRange.value
             }
             .sortedBy { (_, pos) ->
                 val (cx, cy, cz) = pos
-                // Hedere en yakın kristali önce patlat
                 dist3(cx, cy, cz, target.x, target.y, target.z)
             }
 
         when (breakMode.value) {
-            BreakMode.Instant    -> breakInstant(crystalsInRange, target)
-            BreakMode.Sequential -> breakSequential(crystalsInRange, target)
+            BreakMode.Instant    -> breakInstant(crystalsInRange)
+            BreakMode.Sequential -> breakSequential(crystalsInRange)
         }
     }
 
-    private fun breakInstant(
-        crystals: List<Map.Entry<Long, Triple<Float, Float, Float>>>,
-        target: EntityTracker.TrackedEntity
-    ) {
+    private fun breakInstant(crystals: List<Map.Entry<Long, Triple<Float, Float, Float>>>) {
         var broken = 0
-        for ((rid, pos) in crystals) {
+        for ((rid, _) in crystals) {
             if (broken >= maxBreak.value) break
-            val (cx, cy, cz) = pos
-
-            if (antiSuicide.value) {
-                val dmg = estimateDamage(cx, cy, cz,
-                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                if (dmg >= 6f) continue
-            }
-            // Animate + Attack
             PacketHelper.injectToServer(PacketHelper.buildAnimate(EntityTracker.selfRuntimeId))
             PacketHelper.injectToServer(PacketHelper.buildAttack(rid, EntityTracker.selfRuntimeId))
             activeCrystals.remove(rid)
@@ -297,51 +244,18 @@ class CrystalAura : BaseModule(
         }
     }
 
-    private fun breakSequential(
-        crystals: List<Map.Entry<Long, Triple<Float, Float, Float>>>,
-        target: EntityTracker.TrackedEntity
-    ) {
+    private fun breakSequential(crystals: List<Map.Entry<Long, Triple<Float, Float, Float>>>) {
         if (crystals.isEmpty()) { seqBreakIndex = 0; return }
         seqBreakIndex = seqBreakIndex % crystals.size
-        val (rid, pos) = crystals[seqBreakIndex]
-        val (cx, cy, cz) = pos
-
-        if (antiSuicide.value) {
-            val dmg = estimateDamage(cx, cy, cz,
-                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-            if (dmg < 6f) {
-                PacketHelper.injectToServer(PacketHelper.buildAnimate(EntityTracker.selfRuntimeId))
-                PacketHelper.injectToServer(PacketHelper.buildAttack(rid, EntityTracker.selfRuntimeId))
-                activeCrystals.remove(rid)
-                Log.v(TAG, "Sequential kristal: $rid (idx=$seqBreakIndex)")
-            }
-        } else {
-            PacketHelper.injectToServer(PacketHelper.buildAnimate(EntityTracker.selfRuntimeId))
-            PacketHelper.injectToServer(PacketHelper.buildAttack(rid, EntityTracker.selfRuntimeId))
-            activeCrystals.remove(rid)
-        }
+        val (rid, _) = crystals[seqBreakIndex]
+        PacketHelper.injectToServer(PacketHelper.buildAnimate(EntityTracker.selfRuntimeId))
+        PacketHelper.injectToServer(PacketHelper.buildAttack(rid, EntityTracker.selfRuntimeId))
+        activeCrystals.remove(rid)
+        Log.v(TAG, "Sequential kristal: $rid (idx=$seqBreakIndex)")
         seqBreakIndex++
     }
 
-    // ── Hasar tahmini ─────────────────────────────────────────────────────
-
-    /**
-     * Basit kübik hasar düşüşü formülü (Bedrock yaklaşımı).
-     * Gerçek formül blast protection, armo'ru hesaba katar —
-     * bu versiyon proxy'de blok verisi olmadan maksimum hasarı tahmin eder.
-     */
-    private fun estimateDamage(
-        expX: Float, expY: Float, expZ: Float,
-        victimX: Float, victimY: Float, victimZ: Float
-    ): Float {
-        val dist = dist3(expX, expY, expZ, victimX, victimY, victimZ)
-        if (dist > CRYSTAL_DAMAGE_RADIUS) return 0f
-        val exposure = 1f - (dist / CRYSTAL_DAMAGE_RADIUS)
-        // Bedrock End Crystal güç = 6 (yaklaşık max ~96 raw, armor ile ~25-30)
-        return exposure * exposure * 97f * 0.85f  // ~%85 coverage varsayımı
-    }
-
-    // ── Yardımcılar ───────────────────────────────────────────────────────
+    // ── Yardımcı ──────────────────────────────────────────────────────────
 
     private fun dist3(x1: Float, y1: Float, z1: Float, x2: Float, y2: Float, z2: Float): Float {
         val dx = x1-x2; val dy = y1-y2; val dz = z1-z2
