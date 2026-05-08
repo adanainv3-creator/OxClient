@@ -5,20 +5,13 @@
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <!-- VPN -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
 
     <!-- Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!--
-        FIX 1a: FOREGROUND_SERVICE_SPECIAL_USE kaldırıldı.
-        BedrockRelayService ve OverlayService artık "dataSync" tipini kullanıyor.
-        Android 14+ "specialUse" için Google Play onayı gerektirir ve sideload'da
-        çökmeye yol açar. "dataSync" izni runtime'da ayrıca talep gerektirmez.
-    -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Overlay -->
@@ -57,13 +50,13 @@
             </intent-filter>
         </activity>
 
-        <!-- Microsoft Auth -->
+        <!-- Microsoft Auth WebView -->
         <activity
             android:name=".auth.DeviceCodeLoginActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- VPN Servisi — specialUse burada mantıklı, VPN izni zaten örtük onay sayılır -->
+        <!-- VPN Servisi -->
         <service
             android:name=".core.vpn.OxVpnService"
             android:exported="false"
@@ -77,24 +70,15 @@
                 android:value="VPN_tunnel_for_Minecraft_Bedrock_proxy" />
         </service>
 
-        <!--
-            FIX 1b: BedrockRelayService foregroundServiceType="specialUse" → "dataSync"
-            "specialUse" Android 14'te FOREGROUND_SERVICE_SPECIAL_USE iznini zorunlu kılar
-            ve Play dışı dağıtımda SecurityException fırlatır. "dataSync" bu kısıtlamadan muaftır.
-        -->
-        <service
-            android:name=".proxy.BedrockRelayService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
-        <!--
-            FIX 1c: OverlayService foregroundServiceType="specialUse" → "dataSync"
-            Aynı sebep; ayrıca overlay izni zaten SYSTEM_ALERT_WINDOW ile yönetilir.
-        -->
+        <!-- Oyun içi Overlay -->
         <service
             android:name=".ui.overlay.OverlayService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="In-game_HUD_overlay_for_module_control" />
+        </service>
 
     </application>
 </manifest>

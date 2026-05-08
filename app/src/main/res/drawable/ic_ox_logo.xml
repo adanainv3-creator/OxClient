@@ -1,51 +1,76 @@
-<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Dark background circle -->
+    <!-- Background -->
     <path
-        android:fillColor="#0F0F14"
-        android:pathData="M54,54m-54,0a54,54 0,1 1,108 0a54,54 0,1 1,-108 0" />
+        android:fillColor="#070711"
+        android:pathData="M54,54m-54,0a54,54 0,1 1,108 0a54,54 0,1 1,-108 0"/>
 
-    <!-- Purple glow ring -->
+    <!-- Outer glow ring -->
     <path
-        android:fillColor="#207B2FBE"
-        android:pathData="M54,54m-50,0a50,50 0,1 1,100 0a50,50 0,1 1,-100 0" />
+        android:fillColor="#1A1033"
+        android:pathData="M54,16
+        A38,38 0 1,1 53.9,16Z"/>
 
-    <!-- Hex border -->
+    <!-- Inner dark circle -->
     <path
+        android:fillColor="#0D0B18"
+        android:pathData="M54,22
+        A32,32 0 1,1 53.9,22Z"/>
+
+    <!-- O Letter -->
+    <path
+        android:fillColor="#EDEBFF"
+        android:pathData="
+        M39,54
+        A15,15 0 1,1 69,54
+        A15,15 0 1,1 39,54Z
+
+        M46,54
+        A8,8 0 1,0 62,54
+        A8,8 0 1,0 46,54Z"
+        android:fillType="evenOdd"/>
+
+    <!-- Purple glow inside O -->
+    <path
+        android:fillColor="#9C4DFF"
+        android:pathData="
+        M48,54
+        A6,6 0 1,0 60,54
+        A6,6 0 1,0 48,54Z"/>
+
+    <!-- X Letter -->
+    <path
+        android:fillColor="#F4F4FF"
+        android:pathData="
+        M63,35
+        L71,35
+        L86,50
+        L78,50Z
+
+        M78,50
+        L86,58
+        L71,73
+        L63,73
+        L78,58Z"/>
+
+    <!-- Purple slash -->
+    <path
+        android:fillColor="#A855FF"
+        android:pathData="
+        M42,78
+        L69,50
+        L89,28
+        L76,58
+        L50,84Z"/>
+
+    <!-- Soft outer border -->
+    <path
+        android:strokeWidth="1.2"
+        android:strokeColor="#6F4BFF"
         android:fillColor="#00000000"
-        android:strokeColor="#7B2FBE"
-        android:strokeWidth="2.5"
-        android:pathData="M54,12 L90,33 L90,75 L54,96 L18,75 L18,33 Z" />
-
-    <!-- Inner hex fill -->
-    <path
-        android:fillColor="#1A1A24"
-        android:pathData="M54,18 L84,36 L84,72 L54,90 L24,72 L24,36 Z" />
-
-    <!-- "O" letter - left arc -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#9B59D6"
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:pathData="M32,54 A14,14 0 1,1 32,54.1" />
-
-    <!-- "x" letter -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#7B2FBE"
-        android:strokeWidth="5"
-        android:strokeLineCap="round"
-        android:pathData="M58,42 L76,66 M76,42 L58,66" />
-
-    <!-- Accent dot -->
-    <path
-        android:fillColor="#9B59D6"
-        android:pathData="M54,94m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
-
+        android:pathData="M54,54m-53,0a53,53 0,1 1,106 0a53,53 0,1 1,-106 0"/>
 </vector>

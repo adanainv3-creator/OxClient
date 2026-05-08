@@ -1,23 +1,40 @@
 package com.oxclient.ui.overlay
 
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.oxclient.module.ModuleManager
+
+data class ModuleToast(val moduleName: String, val enabled: Boolean)
 
 /**
- * OverlayState — Overlay UI'nın reaktif durumu
+ * OverlayState
+ *
+ * Overlay görünürlüğü ve modül toast bildirimlerini tutan singleton.
+ * Compose state ile reaktif güncelleme sağlar.
  */
 object OverlayState {
-    var isMenuOpen    by mutableStateOf(false)
-    var isRelayActive by mutableStateOf(false)
-    var connectedServer by mutableStateOf("—")
-    var packetCount   by mutableStateOf(0L)
-    var ping          by mutableStateOf(0)
 
-    // Modül toggle UI state
-    val killAuraEnabled  get() = ModuleManager.killAura.enabled
-    val criticalsEnabled get() = ModuleManager.criticals.enabled
-    val autoTotemEnabled get() = ModuleManager.autoTotem.enabled
-    val tpAuraEnabled    get() = ModuleManager.tpAura.enabled
+    const val TOAST_DURATION_MS = 1800L
+
+    var isOverlayVisible by mutableStateOf(false)
+        private set
+
+    var isMenuOpen by mutableStateOf(false)
+        private set
+
+    private val _toasts = mutableStateListOf<ModuleToast>()
+    val toasts: List<ModuleToast> get() = _toasts
+
+    internal fun setOverlayVisible(v: Boolean) { isOverlayVisible = v }
+    internal fun setMenuOpen(v: Boolean)       { isMenuOpen = v }
+
+    fun postModuleToast(toast: ModuleToast) {
+        _toasts.removeAll { it.moduleName == toast.moduleName }
+        _toasts.add(toast)
+    }
+
+    fun clearModuleToast(toast: ModuleToast) {
+        _toasts.remove(toast)
+    }
 }

@@ -1,53 +1,71 @@
 package com.oxclient.module
 
-import com.oxclient.events.PacketEventBus
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * BaseModule
- *
- * Tüm modüllerin türetildiği taban sınıf.
- * Modüller PacketEventBus'a abone olarak paketlere müdahale eder.
- */
+// ── Kategoriler ───────────────────────────────────────────────────────────────
+
+enum class ModuleCategory(val displayName: String) {
+    COMBAT("Combat"),
+    MOVEMENT("Movement"),
+    VISUAL("Visual"),
+    MISC("Misc")
+}
+
+// ── Ayar sınıfları ────────────────────────────────────────────────────────────
+
+sealed class ModuleSetting<T>(val name: String) {
+    abstract var value: T
+}
+
+class FloatSetting(name: String, default: Float, val min: Float, val max: Float) : ModuleSetting<Float>(name) {
+    override var value: Float = default
+}
+
+class IntSetting(name: String, default: Int, val min: Int, val max: Int) : ModuleSetting<Int>(name) {
+    override var value: Int = default
+}
+
+class BoolSetting(name: String, default: Boolean) : ModuleSetting<Boolean>(name) {
+    override var value: Boolean = default
+}
+
+class EnumSetting<T : Enum<T>>(name: String, default: T, val values: List<T>) : ModuleSetting<T>(name) {
+    override var value: T = default
+}
+
+// ── Temel modül sınıfı ────────────────────────────────────────────────────────
+
 abstract class BaseModule(
-    val name       : String,
-    val description: String,
-    val category   : Category
+    val name        : String,
+    val category    : ModuleCategory,
+    val description : String = ""
 ) {
-    enum class Category { COMBAT, MOVEMENT, VISUAL, MISC }
+    private val _enabledFlow = MutableStateFlow(false)
+    val enabledFlow: StateFlow<Boolean> = _enabledFlow.asStateFlow()
 
-    @Volatile var enabled: Boolean = false
-        private set
+    var isEnabled: Boolean
+        get()      = _enabledFlow.value
+        private set(v) { _enabledFlow.value = v }
 
-    // Her modül kendi listener referanslarını burada tutar (unsubscribe için)
-    protected val listeners = mutableListOf<com.oxclient.events.PacketListener>()
+    val settings: List<ModuleSetting<*>> by lazy { registerSettings() }
 
+    /** Alt sınıflar ayarlarını burada tanımlar */
+    protected open fun registerSettings(): List<ModuleSetting<*>> = emptyList()
+
+    /** Modül etkinleştiğinde çağrılır */
     open fun onEnable()  {}
+
+    /** Modül devre dışı bırakıldığında çağrılır */
     open fun onDisable() {}
-    open fun onTick()    {}       // 20 TPS tick (opsiyonel)
 
-    fun toggle() { if (enabled) disable() else enable() }
+    /** PacketEventBus üzerinden gelen paket olaylarını işler */
+    open fun onPacket(event: com.oxclient.events.PacketEvent) {}
 
-    fun enable() {
-        if (enabled) return
-        enabled = true
-        onEnable()
-    }
-
-    fun disable() {
-        if (!enabled) return
-        enabled = false
-        listeners.forEach { PacketEventBus.unsubscribe(it) }
-        listeners.clear()
-        onDisable()
-    }
-
-    protected fun subscribe(
-        packetId  : Int?                              = null,
-        direction : com.oxclient.events.PacketDirection? = null,
-        priority  : Int                               = 100,
-        block     : com.oxclient.events.PacketListener
-    ) {
-        listeners.add(block)
-        PacketEventBus.subscribe(packetId, direction, priority, block)
+    internal fun setEnabled(enabled: Boolean) {
+        if (isEnabled == enabled) return
+        isEnabled = enabled
+        if (enabled) onEnable() else onDisable()
     }
 }

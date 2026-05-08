@@ -1,50 +1,22 @@
 package com.oxclient
 
 import android.app.Application
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import com.oxclient.auth.AccountManager
-import com.oxclient.auth.MicrosoftAuthManager
-import com.oxclient.proxy.BedrockRelayService
-import com.oxclient.ui.overlay.OverlayService
+import android.util.Log
+import com.oxclient.config.ServerConfig
+import com.oxclient.module.ModuleManager
 
 class OxClientApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
-        createNotificationChannels()
-        MicrosoftAuthManager.init(this)
-    }
+        Log.d("OxClientApp", "Uygulama başlatılıyor")
 
-    private fun createNotificationChannels() {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        // Sunucu konfigürasyonunu başlat
+        ServerConfig.init(this)
 
-        nm.createNotificationChannel(
-            NotificationChannel(
-                OverlayService.CHANNEL_ID,
-                "OxClient Overlay",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Oyun ici HUD overlay"
-                setShowBadge(false)
-            }
-        )
+        // Modül yöneticisini başlat
+        ModuleManager.init()
 
-        nm.createNotificationChannel(
-            NotificationChannel(
-                BedrockRelayService.CHANNEL_ID,
-                "OxClient MITM Relay",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Bedrock MITM proxy servisi"
-                setShowBadge(false)
-            }
-        )
-    }
-
-    companion object {
-        lateinit var instance: OxClientApp
-            private set
+        Log.d("OxClientApp", "Başlatma tamamlandı")
     }
 }

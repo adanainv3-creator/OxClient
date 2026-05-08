@@ -1,447 +1,719 @@
 package com.oxclient.ui.dashboard
 
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.*
+import android.net.VpnService
+import android.os.Build
+import android.os.Bundle
 import android.provider.Settings
-import android.widget.Toast
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.*
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.*
-import androidx.lifecycle.lifecycleScope
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.oxclient.auth.AuthState
 import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
-import com.oxclient.proxy.BedrockRelayService
-import com.oxclient.session.ServerConfig
+import com.oxclient.config.ServerConfig
+import com.oxclient.core.vpn.OxVpnService
+import com.oxclient.module.ModuleManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
-import kotlinx.coroutines.*
+import kotlinx.coroutines.launch
+
+/** Desteklenen paketler — öncelik sırasına göre */
+val SUPPORTED_PACKAGES = listOf(
+    "com.mojang.minecraftpe"      to "Minecraft",
+    "com.netease.mc"              to "Minecraft (Çin)",
+    "com.mojang.minecrafttrialpe" to "Minecraft Trial",
+)
 
 class DashboardActivity : ComponentActivity() {
 
-    private var relayService: BedrockRelayService? = null
-    private var relayBound   = false
-
-    private val serviceConn = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            relayService = (binder as BedrockRelayService.RelayBinder).getService()
-            relayBound   = true
-        }
-        override fun onServiceDisconnected(name: ComponentName) {
-            relayBound = false; relayService = null
+    private val vpnLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            Log.d("Dashboard", "VPN izni verildi, proxy başlatılıyor")
+            launchProxy(pendingPackage)
+        } else {
+            Log.w("Dashboard", "VPN izni kullanıcı tarafından reddedildi")
         }
     }
+
+    private val overlayLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { /* overlay izni sonucu */ }
+
+    private var pendingPackage: String = SUPPORTED_PACKAGES.first().first
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Overlay izni yoksa sistem ayarlarına yönlendir — kontrol her zaman burada yapılır,
-        // OverlayService yalnızca izin verilmişken başlatılır (bkz. startRelayAndOverlay).
         if (!Settings.canDrawOverlays(this)) {
-            startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            overlayLauncher.launch(
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                }
             )
         }
 
+        MicrosoftAuthManager.init(this)
+
         setContent {
-            OxTheme {
+            OxClientTheme {
+                val authState by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
+
+                LaunchedEffect(authState) {
+                    if (authState is AuthState.WaitingForUser) {
+                        startActivity(Intent(this@DashboardActivity, DeviceCodeLoginActivity::class.java))
+                    }
+                }
+
                 DashboardScreen(
-                    onConnect        = { server -> startRelayAndOverlay(server) },
-                    onDisconnect     = { stopRelayAndOverlay() },
-                    getRelayRunning  = { relayService?.isRunning ?: false },
-                    getTargetServer  = { relayService?.relay?.targetServer }
+                    installedApps = getInstalledGames(),
+                    onConnect     = { pkg ->
+                        pendingPackage = pkg
+                        requestVpn()
+                    },
+                    onDisconnect  = { stopProxy() },
+                    onSignIn      = { MicrosoftAuthManager.startSignIn() },
+                    onSignOut     = { MicrosoftAuthManager.signOut() },
+                    onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() }
                 )
             }
         }
     }
 
-    override fun onStart() {
-        super.onStart()
-        bindService(
-            Intent(this, BedrockRelayService::class.java),
-            serviceConn, Context.BIND_AUTO_CREATE
-        )
+    private fun requestVpn() {
+        val pi = VpnService.prepare(this)
+        if (pi != null) vpnLauncher.launch(pi)
+        else launchProxy(pendingPackage)
     }
 
-    override fun onStop() {
-        super.onStop()
-        if (relayBound) { unbindService(serviceConn); relayBound = false }
-    }
+    private fun launchProxy(targetPkg: String) {
+        Log.d("Dashboard", "launchProxy → $targetPkg")
 
-    private fun startRelayAndOverlay(server: ServerConfig) {
-        // BedrockRelayService başlat
-        val intent = Intent(this, BedrockRelayService::class.java).apply {
-            putExtra(BedrockRelayService.EXTRA_HOST, server.host)
-            putExtra(BedrockRelayService.EXTRA_PORT, server.port)
-            putExtra(BedrockRelayService.EXTRA_NAME, server.name)
+        val vpnIntent = Intent(this, OxVpnService::class.java).apply {
+            action = OxVpnService.ACTION_START
         }
-        startForegroundService(intent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(vpnIntent)
+        else startService(vpnIntent)
 
-        // FIX 2: OverlayService yalnızca overlay izni verilmişse başlatılır.
-        // Önceden izin kontrolü yapılmadan startService çağrılıyordu; izin yoksa
-        // WindowManager.addView() IllegalStateException fırlatır ve servis çöker.
-        if (Settings.canDrawOverlays(this)) {
-            startForegroundService(Intent(this, OverlayService::class.java))
-        } else {
-            Toast.makeText(this, "Overlay izni gerekli", Toast.LENGTH_SHORT).show()
-        }
+        OverlayService.start(this)
 
-        lifecycleScope.launch {
-            delay(2000L)
-            launchMinecraft()
-        }
-    }
-
-    private fun stopRelayAndOverlay() {
-        relayService?.stopRelay()
-        stopService(Intent(this, BedrockRelayService::class.java))
-        stopService(Intent(this, OverlayService::class.java))
-    }
-
-    private fun launchMinecraft() {
-        val packages = listOf("com.mojang.minecraftpe", "com.netease.mc")
-        for (pkg in packages) {
-            packageManager.getLaunchIntentForPackage(pkg)?.let {
-                try { startActivity(it); return }
-                catch (_: Exception) { return@let }
+        window.decorView.postDelayed({
+            val intent = packageManager.getLaunchIntentForPackage(targetPkg)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                startActivity(intent)
+            } else {
+                startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$targetPkg"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
             }
+        }, 800)
+    }
+
+    private fun stopProxy() {
+        startService(Intent(this, OxVpnService::class.java).apply { action = OxVpnService.ACTION_STOP })
+        OverlayService.stop(this)
+        ModuleManager.disableAll()
+    }
+
+    private fun getInstalledGames(): List<Pair<String, String>> {
+        return SUPPORTED_PACKAGES.filter { (pkg, _) ->
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.getApplicationInfo(pkg, PackageManager.ApplicationInfoFlags.of(0))
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.getApplicationInfo(pkg, 0)
+                }
+                true
+            } catch (e: PackageManager.NameNotFoundException) { false }
         }
-        Toast.makeText(this, "Minecraft bulunamadi", Toast.LENGTH_SHORT).show()
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-//  DASHBOARD SCREEN
-// ─────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DashboardScreen(
-    onConnect       : (ServerConfig) -> Unit,
-    onDisconnect    : () -> Unit,
-    getRelayRunning : () -> Boolean,
-    getTargetServer : () -> ServerConfig?
+fun DashboardScreen(
+    installedApps : List<Pair<String, String>>,
+    onConnect     : (String) -> Unit,
+    onDisconnect  : () -> Unit,
+    onSignIn      : () -> Unit,
+    onSignOut     : () -> Unit,
+    onCancelAuth  : () -> Unit
 ) {
-    // FIX 3: LocalContext yerine Activity context'i kullanmak için cast yapılır.
-    // Composable içinde LocalContext.current bir ContextWrapper döndürebilir;
-    // startActivity çağrısında FLAG_ACTIVITY_NEW_TASK eksik olduğunda Activity
-    // context'i dışında sessizce başarısız olur. Cast ile Activity'e ulaşıyoruz
-    // ve flag'i kesin olarak ekliyoruz.
-    val context = LocalContext.current
-    val activity = context as? androidx.activity.ComponentActivity
+    val authState      by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
+    val scope          = rememberCoroutineScope()
+    val serverHost     by ServerConfig.host.collectAsState(initial = ServerConfig.DEFAULT_HOST)
+    val serverPort     by ServerConfig.port.collectAsState(initial = ServerConfig.DEFAULT_PORT)
 
-    var isRelayRunning    by remember { mutableStateOf(false) }
-    var showServerPicker  by remember { mutableStateOf(false) }
-    var selectedServer    by remember { mutableStateOf(ServerConfig.PRESETS[0]) }
-    var showAuthDialog    by remember { mutableStateOf(false) }
-
-    val authState by MicrosoftAuthManager.authState.collectAsState()
-    var gamertag  by remember { mutableStateOf("") }
-
-    // Auth state değişince
-    LaunchedEffect(authState) {
-        when (val state = authState) {
-            is AuthState.Success -> gamertag = state.gamertag
-            is AuthState.WaitingForUser -> {
-                // FIX 3 (devam): Intent FLAG_ACTIVITY_NEW_TASK ile açılıyor.
-                // Activity context yoksa (test/preview ortamı) fallback olarak
-                // application context + NEW_TASK kullanılır; hiçbir durumda
-                // sessizce başarısız olmaz.
-                val intent = Intent(context, DeviceCodeLoginActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                (activity ?: context).startActivity(intent)
-            }
-            else -> {}
-        }
+    var proxyRunning   by remember { mutableStateOf(false) }
+    var showSignIn     by remember { mutableStateOf(false) }
+    var showAppPicker  by remember { mutableStateOf(false) }
+    var showServerEdit by remember { mutableStateOf(false) }
+    var selectedApp    by remember {
+        mutableStateOf(installedApps.firstOrNull() ?: SUPPORTED_PACKAGES.first())
     }
 
-    // Relay durumu
-    LaunchedEffect(Unit) {
-        while (true) {
-            isRelayRunning = getRelayRunning()
-            getTargetServer()?.let { selectedServer = it }
-            delay(500)
-        }
-    }
-
-    // Hesap dialog'u
-    if (showAuthDialog) {
-        AlertDialog(
-            onDismissRequest = { showAuthDialog = false },
-            containerColor   = OxSurface,
-            title = { Text("Hesap", color = OxText, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (gamertag.isNotBlank()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CheckCircle, null, tint = OxGreen, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Giris yapildi:", color = OxTextSub, fontSize = 13.sp)
-                        }
-                        Text(gamertag, color = OxText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-
-                        Spacer(Modifier.height(8.dp))
-
-                        OutlinedButton(
-                            onClick = {
-                                MicrosoftAuthManager.signOut()
-                                gamertag = ""
-                                showAuthDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = OxRed)
-                        ) {
-                            Icon(Icons.Default.Logout, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Cikis Yap")
-                        }
-                    } else {
-                        Text("Microsoft hesabi ile giris yapin", color = OxTextSub)
-                        Text("Minecraft Bedrock oynamak icin gerekli",
-                            color = OxTextSub.copy(alpha = 0.5f), fontSize = 11.sp)
-
-                        Spacer(Modifier.height(4.dp))
-
-                        Button(
-                            onClick = { MicrosoftAuthManager.startSignIn() },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            // Icons.Default.Microsoft Material Icons'da yoktur.
-                            // AccountCircle veya alternatif bir ikon kullanılır.
-                            Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Microsoft ile Giris Yap", fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showAuthDialog = false }) {
-                    Text("Kapat", color = OxPurpleLight)
-                }
-            }
+    if (showSignIn) {
+        AuthDialog(
+            authState = authState,
+            onDismiss = { showSignIn = false },
+            onSignIn  = onSignIn,
+            onSignOut = { onSignOut(); showSignIn = false },
+            onCancel  = { onCancelAuth(); showSignIn = false }
         )
     }
 
-    // ── Ana Ekran ────────────────────────────────────────────────────────
-    Column(
+    if (showAppPicker) {
+        AppPickerDialog(
+            apps        = installedApps,
+            selectedPkg = selectedApp.first,
+            onSelect    = { pkg, name -> selectedApp = pkg to name; showAppPicker = false },
+            onDismiss   = { showAppPicker = false }
+        )
+    }
+
+    if (showServerEdit) {
+        ServerEditDialog(
+            currentHost = serverHost,
+            currentPort = serverPort,
+            onSave      = { host, port ->
+                scope.launch { ServerConfig.save(host, port) }
+                showServerEdit = false
+            },
+            onReset     = {
+                scope.launch { ServerConfig.reset() }
+                showServerEdit = false
+            },
+            onDismiss   = { showServerEdit = false }
+        )
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(OxBackground)
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
     ) {
-        // Logo
         Box(
             modifier = Modifier
-                .size(80.dp)
-                .clip(CircleShape)
+                .fillMaxWidth()
+                .height(300.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(OxPurpleDark.copy(alpha = 0.4f), Color.Transparent)
+                    )
+                )
+        )
+
+        Column(
+            modifier            = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(32.dp))
+            TopBar(authState = authState, onAvatarClick = { showSignIn = true })
+            Spacer(Modifier.height(48.dp))
+            LogoSection()
+            Spacer(Modifier.height(32.dp))
+
+            // Tıklanabilir sunucu kartı
+            ServerCard(
+                host    = serverHost,
+                port    = serverPort,
+                onClick = { showServerEdit = true }
+            )
+            Spacer(Modifier.height(12.dp))
+            AppSelectorCard(
+                selectedName = selectedApp.second,
+                onClick      = { showAppPicker = true }
+            )
+            Spacer(Modifier.height(12.dp))
+            StatusCard(running = proxyRunning)
+            Spacer(Modifier.weight(1f))
+
+            ConnectButton(
+                running  = proxyRunning,
+                onToggle = {
+                    if (proxyRunning) { onDisconnect(); proxyRunning = false }
+                    else              { onConnect(selectedApp.first); proxyRunning = true }
+                }
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text       = "Overlay menüsü oyun içinde görünecek",
+                fontSize   = 11.sp,
+                color      = OxOnSurface.copy(alpha = 0.4f),
+                fontFamily = FontFamily.Monospace,
+                textAlign  = TextAlign.Center
+            )
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+// ── Sunucu Düzenleme Dialog ───────────────────────────────────────────────────
+
+@Composable
+private fun ServerEditDialog(
+    currentHost : String,
+    currentPort : Int,
+    onSave      : (String, Int) -> Unit,
+    onReset     : () -> Unit,
+    onDismiss   : () -> Unit
+) {
+    var hostInput  by remember { mutableStateOf(currentHost) }
+    var portInput  by remember { mutableStateOf(currentPort.toString()) }
+    var portError  by remember { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape  = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = OxSurface)
+        ) {
+            Column(
+                modifier            = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Sunucu Ayarları",
+                    fontSize   = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color      = OxOnBackground,
+                    fontFamily = FontFamily.Monospace
+                )
+                HorizontalDivider(color = OxOutline)
+
+                // Host girişi
+                OutlinedTextField(
+                    value         = hostInput,
+                    onValueChange = { hostInput = it },
+                    label         = { Text("Sunucu Adresi", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    singleLine    = true,
+                    modifier      = Modifier.fillMaxWidth(),
+                    colors        = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = OxPurple,
+                        unfocusedBorderColor = OxOutline,
+                        focusedLabelColor    = OxPurple,
+                        cursorColor          = OxPurple
+                    ),
+                    textStyle = LocalTextStyle.current.copy(
+                        fontFamily = FontFamily.Monospace,
+                        color      = OxOnBackground
+                    )
+                )
+
+                // Port girişi
+                OutlinedTextField(
+                    value         = portInput,
+                    onValueChange = {
+                        portInput = it
+                        portError = it.toIntOrNull()?.let { p -> p < 1 || p > 65535 } ?: true
+                    },
+                    label         = { Text("Port", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    singleLine    = true,
+                    isError       = portError,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier      = Modifier.fillMaxWidth(),
+                    colors        = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = OxPurple,
+                        unfocusedBorderColor = OxOutline,
+                        focusedLabelColor    = OxPurple,
+                        cursorColor          = OxPurple
+                    ),
+                    textStyle = LocalTextStyle.current.copy(
+                        fontFamily = FontFamily.Monospace,
+                        color      = OxOnBackground
+                    ),
+                    supportingText = if (portError) {
+                        { Text("1–65535 arası geçerli port", color = OxError, fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
+                    } else null
+                )
+
+                Text(
+                    text       = "Bedrock varsayılan port: 19132",
+                    fontSize   = 10.sp,
+                    color      = OxOnSurface.copy(0.4f),
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Varsayılana dön
+                    OutlinedButton(
+                        onClick  = onReset,
+                        modifier = Modifier.weight(1f),
+                        shape    = RoundedCornerShape(10.dp),
+                        colors   = ButtonDefaults.outlinedButtonColors(contentColor = OxOnSurface)
+                    ) {
+                        Text("Varsayılan", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+
+                    // Kaydet
+                    Button(
+                        onClick  = {
+                            val port = portInput.toIntOrNull()
+                            if (hostInput.isBlank() || port == null || port < 1 || port > 65535) {
+                                portError = true
+                                return@Button
+                            }
+                            onSave(hostInput.trim(), port)
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape    = RoundedCornerShape(10.dp),
+                        colors   = ButtonDefaults.buttonColors(containerColor = OxPurple)
+                    ) {
+                        Text("Kaydet", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                TextButton(
+                    onClick  = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("İptal", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+    }
+}
+
+// ── ServerCard — tıklanabilir ─────────────────────────────────────────────────
+
+@Composable
+private fun ServerCard(host: String, port: Int, onClick: () -> Unit) {
+    Card(
+        modifier  = Modifier.fillMaxWidth().clickable { onClick() },
+        shape     = RoundedCornerShape(12.dp),
+        colors    = CardDefaults.cardColors(containerColor = OxSurface),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(
+                    "Hedef Sunucu",
+                    fontSize   = 10.sp,
+                    color      = OxOnSurface.copy(0.5f),
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    "$host:$port",
+                    fontSize   = 13.sp,
+                    color      = OxOnBackground,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Row(
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier.size(8.dp).clip(CircleShape).background(OxPurple)
+                )
+                Text("✎", fontSize = 14.sp, color = OxPurple, fontFamily = FontFamily.Monospace)
+            }
+        }
+    }
+}
+
+// ── App Selector Card ─────────────────────────────────────────────────────────
+
+@Composable
+private fun AppSelectorCard(selectedName: String, onClick: () -> Unit) {
+    Card(
+        modifier  = Modifier.fillMaxWidth().clickable { onClick() },
+        shape     = RoundedCornerShape(12.dp),
+        colors    = CardDefaults.cardColors(containerColor = OxSurface),
+        elevation = CardDefaults.cardElevation(2.dp)
+    ) {
+        Row(
+            modifier              = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text("Hedef Uygulama", fontSize = 10.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                Text(selectedName, fontSize = 13.sp, color = OxOnBackground, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+            }
+            Text("▾", fontSize = 18.sp, color = OxPurple, fontFamily = FontFamily.Monospace)
+        }
+    }
+}
+
+// ── App Picker Dialog ─────────────────────────────────────────────────────────
+
+@Composable
+private fun AppPickerDialog(
+    apps        : List<Pair<String, String>>,
+    selectedPkg : String,
+    onSelect    : (String, String) -> Unit,
+    onDismiss   : () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = OxSurface)) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text("Uygulama Seç", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = OxOutline)
+                Spacer(Modifier.height(8.dp))
+
+                val listToShow = apps.ifEmpty { SUPPORTED_PACKAGES }
+                if (apps.isEmpty()) {
+                    Text(
+                        "Cihazda Minecraft bulunamadı.\nYine de bir hedef seçebilirsiniz:",
+                        color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp, textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    )
+                }
+
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listToShow) { (pkg, name) ->
+                        AppPickerRow(pkg = pkg, name = name, selectedPkg = selectedPkg, onSelect = onSelect)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppPickerRow(pkg: String, name: String, selectedPkg: String, onSelect: (String, String) -> Unit) {
+    val isSelected = pkg == selectedPkg
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) OxPurple.copy(0.2f) else Color.Transparent)
+            .border(
+                width = if (isSelected) 1.dp else 0.5.dp,
+                color = if (isSelected) OxPurple else OxOutline.copy(0.3f),
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable { onSelect(pkg, name) }
+            .padding(12.dp),
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column {
+            Text(name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (isSelected) OxPurpleLight else OxOnBackground, fontFamily = FontFamily.Monospace)
+            Text(pkg, fontSize = 10.sp, color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace)
+        }
+        if (isSelected) Text("✓", color = OxPurple, fontSize = 16.sp, fontFamily = FontFamily.Monospace)
+    }
+}
+
+// ── Auth Dialog ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun AuthDialog(
+    authState : AuthState,
+    onDismiss : () -> Unit,
+    onSignIn  : () -> Unit,
+    onSignOut : () -> Unit,
+    onCancel  : () -> Unit
+) {
+    val dismissEnabled = authState !is AuthState.Loading && authState !is AuthState.WaitingForUser
+    Dialog(onDismissRequest = { if (dismissEnabled) onDismiss() }) {
+        Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = OxSurface)) {
+            Column(
+                modifier            = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text("Microsoft Hesabı", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
+                HorizontalDivider(color = OxOutline)
+
+                when (authState) {
+                    is AuthState.Success -> {
+                        Text("✓ Giriş yapıldı", color = Color(0xFF1AFF6E), fontFamily = FontFamily.Monospace)
+                        Text(authState.gamertag, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
+                        Button(onClick = onSignOut, colors = ButtonDefaults.buttonColors(containerColor = OxError), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            Text("Çıkış Yap", fontFamily = FontFamily.Monospace)
+                        }
+                        TextButton(onClick = onDismiss) { Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace) }
+                    }
+                    is AuthState.Loading -> {
+                        CircularProgressIndicator(color = OxPurple)
+                        Text("Microsoft bağlantısı kuruluyor…", color = OxOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                        TextButton(onClick = onCancel) { Text("İptal", color = OxError, fontFamily = FontFamily.Monospace) }
+                    }
+                    is AuthState.WaitingForUser -> {
+                        CircularProgressIndicator(color = OxPurple)
+                        Text("Giriş sayfası açıldı…", color = OxOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                        TextButton(onClick = onCancel) { Text("İptal", color = OxError, fontFamily = FontFamily.Monospace) }
+                    }
+                    is AuthState.Error -> {
+                        Text("Hata: ${authState.message}", color = OxError, fontFamily = FontFamily.Monospace, fontSize = 12.sp, textAlign = TextAlign.Center)
+                        Button(onClick = onSignIn, colors = ButtonDefaults.buttonColors(containerColor = OxPurple), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            Text("Tekrar Dene", fontFamily = FontFamily.Monospace)
+                        }
+                        TextButton(onClick = onDismiss) { Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace) }
+                    }
+                    else -> {
+                        Text("Xbox/Microsoft hesabınla giriş yap.\nKod ekranda gösterilecek.", color = OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center, fontSize = 13.sp)
+                        Button(onClick = onSignIn, colors = ButtonDefaults.buttonColors(containerColor = OxPurple), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            Text("▶  Giriş Yap", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(onClick = onDismiss) { Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── TopBar ────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
+    val isLoggedIn = authState is AuthState.Success
+    Row(
+        modifier              = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment     = Alignment.CenterVertically
+    ) {
+        Text("OxClient", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (isLoggedIn) {
+                Text(
+                    text = (authState as AuthState.Success).gamertag,
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OxPurpleLight,
+                    fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+            }
+            Box(
+                modifier = Modifier.size(36.dp).clip(CircleShape)
+                    .background(if (isLoggedIn) OxPurple.copy(0.3f) else OxSurface)
+                    .border(1.dp, if (isLoggedIn) OxPurple else OxOutline, CircleShape)
+                    .clickable { onAvatarClick() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (isLoggedIn) (authState as AuthState.Success).gamertag.firstOrNull()?.uppercase() ?: "?" else "?",
+                    fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    color = if (isLoggedIn) OxPurpleLight else OxOnSurface.copy(0.5f),
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+// ── LogoSection ───────────────────────────────────────────────────────────────
+
+@Composable
+private fun LogoSection() {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier.size(80.dp).clip(RoundedCornerShape(20.dp))
                 .background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark))),
             contentAlignment = Alignment.Center
         ) {
-            Text("Ox", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+            Text("0x", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, fontFamily = FontFamily.Monospace)
         }
+        Spacer(Modifier.height(12.dp))
+        Text("Minecraft Bedrock Client", fontSize = 13.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+    }
+}
 
-        Spacer(Modifier.height(24.dp))
+// ── StatusCard ────────────────────────────────────────────────────────────────
 
-        Text("OxClient", color = OxText, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Text("Minecraft Client", color = OxTextSub, fontSize = 14.sp)
+@Composable
+private fun StatusCard(running: Boolean) {
+    val statusColor by animateColorAsState(
+        targetValue   = if (running) Color(0xFF1AFF6E) else OxOnSurface.copy(0.3f),
+        animationSpec = tween(500), label = "status"
+    )
+    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
+        initialValue  = 1f,
+        targetValue   = if (running) 1.15f else 1f,
+        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+        label         = "pulseAnim"
+    )
 
-        Spacer(Modifier.height(32.dp))
-
-        // Hedef Sunucu
-        Text("Hedef Sunucu", color = OxTextSub, fontSize = 12.sp)
-        Spacer(Modifier.height(6.dp))
-
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = !isRelayRunning) { showServerPicker = true },
-            shape  = RoundedCornerShape(12.dp),
-            color  = OxSurface,
-            border = BorderStroke(1.dp, if (isRelayRunning) OxGreen.copy(alpha = 0.5f) else OxBorder)
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(selectedServer.icon, fontSize = 24.sp)
-                    Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text(selectedServer.name, color = OxText, fontWeight = FontWeight.Medium)
-                        Text("${selectedServer.host}:${selectedServer.port}",
-                            color = OxTextSub, fontSize = 12.sp)
-                    }
-                }
-                if (!isRelayRunning) Icon(Icons.Default.KeyboardArrowDown, null, tint = OxTextSub)
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = OxSurface)) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(modifier = Modifier.size(12.dp).scale(pulse).clip(CircleShape).background(statusColor))
+            Column {
+                Text(if (running) "VPN Aktif" else "VPN Kapalı", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (running) Color(0xFF1AFF6E) else OxOnSurface, fontFamily = FontFamily.Monospace)
+                Text(if (running) "Trafik yönlendiriliyor → proxy" else "Connect'e basarak başlat", fontSize = 11.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
             }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Hedef Uygulama
-        Text("Hedef Uygulama", color = OxTextSub, fontSize = 12.sp)
-        Spacer(Modifier.height(6.dp))
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape  = RoundedCornerShape(12.dp),
-            color  = OxSurface,
-            border = BorderStroke(1.dp, OxBorder)
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Default.SportsEsports, null, tint = OxPurpleLight)
-                Spacer(Modifier.width(10.dp))
-                Text("Minecraft", color = OxText)
-            }
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        // Durum
-        Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = if (isRelayRunning) OxGreen.copy(alpha = 0.15f) else OxRed.copy(alpha = 0.15f)
-        ) {
-            Text(
-                if (isRelayRunning) "● Bagli" else "● Bagli Degil",
-                color    = if (isRelayRunning) OxGreen else OxRed,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                fontSize = 14.sp
-            )
-        }
-
-        Spacer(Modifier.height(6.dp))
-
-        Text(
-            if (isRelayRunning) "MC'de 127.0.0.1:19132 girin"
-            else "Connect'e basarak baslat",
-            color     = OxTextSub,
-            fontSize  = 11.sp,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(Modifier.height(24.dp))
-
-        // Connect / Disconnect
-        Button(
-            onClick = { if (isRelayRunning) onDisconnect() else onConnect(selectedServer) },
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            colors   = ButtonDefaults.buttonColors(
-                containerColor = if (isRelayRunning) OxRed else OxPurple
-            ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(
-                if (isRelayRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                null, modifier = Modifier.size(20.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                if (isRelayRunning) "Disconnect" else "Connect",
-                fontSize     = 16.sp,
-                fontWeight   = FontWeight.SemiBold
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        Text(
-            "Overlay menusu oyun icinde gorunecek",
-            color     = OxTextSub.copy(alpha = 0.5f),
-            fontSize  = 11.sp,
-            textAlign = TextAlign.Center
-        )
-
-        // Alt kısım — profil butonu
-        Spacer(Modifier.weight(1f))
-
-        IconButton(
-            onClick  = { showAuthDialog = true },
-            modifier = Modifier.size(44.dp)
-        ) {
-            Icon(
-                Icons.Default.AccountCircle,
-                contentDescription = "Hesap",
-                tint     = if (gamertag.isNotBlank()) OxGreen else OxTextSub,
-                modifier = Modifier.size(36.dp)
-            )
-        }
-
-        if (gamertag.isNotBlank()) {
-            Text(gamertag, color = OxTextSub, fontSize = 11.sp)
         }
     }
+}
 
-    // Sunucu Secme Dialog
-    if (showServerPicker) {
-        AlertDialog(
-            onDismissRequest = { showServerPicker = false },
-            containerColor   = OxSurface,
-            title = { Text("Sunucu Sec", color = OxText, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    ServerConfig.PRESETS.forEach { server ->
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    selectedServer = server
-                                    showServerPicker = false
-                                }
-                                .padding(vertical = 2.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (server.id == selectedServer.id)
-                                OxPurple.copy(alpha = 0.2f) else Color.Transparent
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(server.icon, fontSize = 20.sp)
-                                Spacer(Modifier.width(10.dp))
-                                Column {
-                                    Text(server.name, color = OxText, fontWeight = FontWeight.Medium)
-                                    Text("${server.host}:${server.port}",
-                                        color = OxTextSub, fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showServerPicker = false }) {
-                    Text("Kapat", color = OxPurpleLight)
-                }
-            }
+// ── ConnectButton ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {
+    val scale by animateFloatAsState(
+        targetValue   = if (running) 1f else 0.97f,
+        animationSpec = spring(Spring.DampingRatioMediumBouncy), label = "btn"
+    )
+    val bgColor by animateColorAsState(
+        targetValue   = if (running) OxError else OxPurple,
+        animationSpec = tween(400), label = "btnColor"
+    )
+
+    Button(
+        onClick   = onToggle,
+        modifier  = Modifier.fillMaxWidth().height(56.dp).scale(scale),
+        shape     = RoundedCornerShape(14.dp),
+        colors    = ButtonDefaults.buttonColors(containerColor = bgColor),
+        elevation = ButtonDefaults.buttonElevation(8.dp)
+    ) {
+        Text(
+            text       = if (running) "⏹  Disconnect" else "▶  Connect",
+            fontSize   = 16.sp,
+            fontWeight = FontWeight.ExtraBold,
+            fontFamily = FontFamily.Monospace
         )
     }
 }

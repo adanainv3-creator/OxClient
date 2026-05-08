@@ -1,46 +1,36 @@
 package com.oxclient.ui.theme
 
-import androidx.compose.material3.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// ── Renk paleti ───────────────────────────────────────────────────────────
-val OxPurple        = Color(0xFF7B2FBE)
-val OxPurpleLight   = Color(0xFF9B59D6)
-val OxPurpleDark    = Color(0xFF5A1E9A)
-val OxBackground    = Color(0xFF0D0D14)
-val OxSurface       = Color(0xFF1A1A26)
-val OxSurface2      = Color(0xFF222233)
-val OxBorder        = Color(0xFF2E2E44)
-val OxText          = Color(0xFFE8E8F0)
-val OxTextSub       = Color(0xFF8888AA)
-val OxGreen         = Color(0xFF2ECC71)
-val OxRed           = Color(0xFFE74C3C)
-val OxYellow        = Color(0xFFF39C12)
-val OxCyan          = Color(0xFF1ABC9C)
+val OxPurple       = Color(0xFF7B2FBE)
+val OxPurpleLight  = Color(0xFF9B59D6)
+val OxPurpleDark   = Color(0xFF4A1080)
+val OxBackground   = Color(0xFF0F0F14)
+val OxSurface      = Color(0xFF1A1A24)
+val OxSurfaceVar   = Color(0xFF22222F)
+val OxOnBackground = Color(0xFFE8E8F0)
+val OxOnSurface    = Color(0xFFD0D0E0)
+val OxOutline      = Color(0xFF3A3A50)
+val OxError        = Color(0xFFCF6679)
 
-private val DarkColorScheme = darkColorScheme(
+private val Scheme = darkColorScheme(
     primary          = OxPurple,
     onPrimary        = Color.White,
     primaryContainer = OxPurpleDark,
     secondary        = OxPurpleLight,
-    onSecondary      = Color.White,
     background       = OxBackground,
-    onBackground     = OxText,
     surface          = OxSurface,
-    onSurface        = OxText,
-    surfaceVariant   = OxSurface2,
-    onSurfaceVariant = OxTextSub,
-    outline          = OxBorder,
-    error            = OxRed,
-    onError          = Color.White,
+    surfaceVariant   = OxSurfaceVar,
+    onBackground     = OxOnBackground,
+    onSurface        = OxOnSurface,
+    outline          = OxOutline,
+    error            = OxError
 )
 
 @Composable
-fun OxTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = DarkColorScheme,
-        typography  = Typography(),
-        content     = content
-    )
+fun OxClientTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = Scheme, content = content)
 }

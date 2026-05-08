@@ -1,61 +1,49 @@
 package com.oxclient.events
 
+import android.util.Log
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.util.concurrent.CopyOnWriteArrayList
-
-typealias PacketListener = (PacketEvent) -> Unit
 
 /**
  * PacketEventBus
  *
- * Yayın/abone (publish/subscribe) deseni.
- * Modüller [subscribe] ile belirli paket ID'lerine abone olur.
- * PacketProcessor [publish] ile olayı senkron olarak dağıtır.
+ * Senkron listener listesi + asenkron Flow arayüzü sağlar.
+ * OxVpnService içindeki PacketProcessor tarafından publish edilir,
+ * modüller onPacket() ile dinler.
  */
 object PacketEventBus {
+    private const val TAG = "PacketEventBus"
 
-    private data class Subscription(
-        val packetId  : Int?,               // null = tüm paketler
-        val direction : PacketDirection?,   // null = her iki yön
-        val priority  : Int,
-        val listener  : PacketListener
-    )
+    private val listeners = CopyOnWriteArrayList<PacketListener>()
+    private val _flow     = MutableSharedFlow<PacketEvent>(replay = 0, extraBufferCapacity = 128)
+    val flow: SharedFlow<PacketEvent> = _flow.asSharedFlow()
 
-    private val subscriptions = CopyOnWriteArrayList<Subscription>()
-
-    /**
-     * Belirli bir paket ID'sine abone ol.
-     * @param packetId  null = tüm paketler
-     * @param direction null = her iki yön
-     * @param priority  Düşük sayı = önce çalışır (default 100)
-     */
-    fun subscribe(
-        packetId  : Int?            = null,
-        direction : PacketDirection? = null,
-        priority  : Int             = 100,
-        listener  : PacketListener
-    ) {
-        subscriptions.add(Subscription(packetId, direction, priority, listener))
-        subscriptions.sortBy { it.priority }
+    fun register(l: PacketListener) {
+        if (listeners.contains(l)) return
+        listeners.add(l)
+        listeners.sortBy { it.priority }
+        Log.d(TAG, "Registered: ${l.javaClass.simpleName}")
     }
 
-    fun unsubscribe(listener: PacketListener) {
-        subscriptions.removeIf { it.listener === listener }
-    }
+    fun unregister(l: PacketListener) { listeners.remove(l) }
 
-    fun unsubscribeAll(owner: Any) {
-        // Modüller kendi listener'larını bir Set'te tutup toplu iptal edebilir
-    }
+    fun clear() { listeners.clear() }
 
+    @JvmStatic
     fun publish(event: PacketEvent) {
-        for (sub in subscriptions) {
-            if (event.cancelled) break
-            if (sub.packetId  != null && sub.packetId  != event.id)        continue
-            if (sub.direction != null && sub.direction != event.direction)  continue
-            try {
-                sub.listener(event)
-            } catch (_: Exception) { /* izole et */ }
+        for (l in listeners) {
+            try { l.onPacket(event) } catch (e: Exception) {
+                Log.e(TAG, "${l.javaClass.simpleName} threw", e)
+            }
+            if (event.isCancelled) break
         }
+        _flow.tryEmit(event)
     }
+}
 
-    fun clear() = subscriptions.clear()
+interface PacketListener {
+    val priority: Int get() = 100
+    fun onPacket(event: PacketEvent)
 }

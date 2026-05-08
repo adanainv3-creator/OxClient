@@ -1,6 +1,12 @@
 pluginManagement {
     repositories {
-        google()
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
         mavenCentral()
         gradlePluginPortal()
     }
@@ -11,9 +17,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven("https://repo.opencollab.dev/maven-snapshots/")
-        maven("https://repo.opencollab.dev/maven-releases/")
-        maven("https://jitpack.io")
+        maven {
+            url = uri("https://repo.opencollab.dev/maven-snapshots")
+        }
+        maven {
+            url = uri("https://repo.opencollab.dev/maven-releases")
+        }
     }
 }
 
