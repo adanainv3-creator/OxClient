@@ -11,7 +11,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -22,7 +21,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.*
 import androidx.lifecycle.*
 import androidx.savedstate.SavedStateRegistry
@@ -372,12 +370,12 @@ private fun ModuleRow(
                     .size(22.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(
-                        if (shortcutActive) OxPurple.copy(alpha = 0.3f) 
+                        if (shortcutActive) OxPurple.copy(alpha = 0.3f)
                         else Color.Transparent
                     )
                     .border(
-                        1.dp, 
-                        if (shortcutActive) OxPurpleLight else OxBorder, 
+                        1.dp,
+                        if (shortcutActive) OxPurpleLight else OxBorder,
                         RoundedCornerShape(4.dp)
                     )
                     .clickable { shortcutActive = !shortcutActive },
@@ -411,7 +409,6 @@ private fun ModuleRow(
                     module.toggle()
                     enabled = module.enabled
                 },
-                modifier = Modifier.size(0.65f),
                 colors = SwitchDefaults.colors(
                     checkedThumbColor   = Color.White,
                     checkedTrackColor   = OxPurple,
@@ -483,10 +480,10 @@ private fun KillAuraOverlaySettings(ka: KillAura) {
         MiniSlider("Range", ka.range, 1f..6f, "%.1f") { ka.range = it }
 
         // FOV
-        MiniSlider("FOV", ka.fov, 30f..360f, "%.0f°") { ka.fov = it }
+        MiniSlider("FOV", ka.fov, 30f..360f, "%.0f") { ka.fov = it }
 
         // Switch Delay
-        MiniSlider("Switch", ka.switchDelayMS.toFloat(), 0f..500f, "%.0fms") { 
+        MiniSlider("Switch", ka.switchDelayMS.toFloat(), 0f..500f, "%.0f") { 
             ka.switchDelayMS = it.toLong() 
         }
 
@@ -532,7 +529,7 @@ private fun KillAuraOverlaySettings(ka: KillAura) {
         MiniToggle("Swing Sound", ka.swingSound) { ka.swingSound = it }
 
         // Fail Rate
-        MiniSlider("Fail Rate", ka.failRate, 0f..100f, "%.0f%%") { ka.failRate = it }
+        MiniSlider("Fail Rate", ka.failRate, 0f..100f, "%.0f") { ka.failRate = it }
     }
 }
 
@@ -633,8 +630,7 @@ private fun MiniSlider(
         ) {
             Text(label, color = OxTextSub, fontSize = 10.sp)
             Text(
-                format.replace("%.0f", "%.0f").replace("%.1f", "%.1f").replace("%.2f", "%.2f")
-                    .let { fmt -> java.lang.String.format(fmt, value) },
+                String.format(format, value),
                 color = OxPurpleLight,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium
@@ -669,7 +665,6 @@ private fun MiniToggle(
         Switch(
             checked         = checked,
             onCheckedChange = onChange,
-            modifier        = Modifier.size(0.6f),
             colors          = SwitchDefaults.colors(
                 checkedThumbColor   = Color.White,
                 checkedTrackColor   = OxPurple,
@@ -687,7 +682,7 @@ private fun ChipGroup(
     onSelect : (String) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         options.forEach { option ->
