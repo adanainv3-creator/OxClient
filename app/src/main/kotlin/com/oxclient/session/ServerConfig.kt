@@ -11,35 +11,24 @@ import kotlinx.coroutines.flow.map
 
 val Context.serverDataStore by preferencesDataStore(name = "servers")
 
-/**
- * ServerConfig — Tek bir sunucu bağlantı yapılandırması
- */
 data class ServerConfig(
     val id   : String = java.util.UUID.randomUUID().toString(),
     val name : String = "Sunucu",
-    val host : String = "geo.hivebedrock.network",
+    val host : String = "2b2tpe.org",
     val port : Int    = 19132,
-    val icon : String = "🎮"
+    val icon : String = "🏴‍☠️"
 ) {
     companion object {
         val PRESETS = listOf(
+            ServerConfig("2b2tpe",     "2b2tPE",         "2b2tpe.org",              19132, "🏴‍☠️"),
             ServerConfig("hive",       "Hive MC",        "geo.hivebedrock.network", 19132, "🐝"),
             ServerConfig("cubecraft",  "CubeCraft",      "mco.cubecraft.net",       19132, "🎲"),
-            ServerConfig("lifeboat",   "Lifeboat",       "mco.lbsg.net",            19132, "⛵"),
-            ServerConfig("mineplex",   "Mineplex",       "mco.mineplex.com",        19132, "🏛️"),
-            ServerConfig("nether",     "NetherGames",    "play.nethergames.org",    19132, "🔥"),
-            ServerConfig("galaxite",   "Galaxite",       "play.galaxite.net",       19132, "🌌"),
             ServerConfig("hyperlands", "HyperLands",     "play.hyperlandsmc.net",   19132, "⚔️"),
             ServerConfig("zeqa",       "Zeqa",           "play.zeqa.net",           19132, "💎"),
-            ServerConfig("2b2tpe",     "2b2tPE",         "2b2tpe.org",              19132, "🏴‍☠️"),
-            ServerConfig("vanilla",    "Vanilla Test",   "127.0.0.1",               19132, "🧪"),
         )
     }
 }
 
-/**
- * SessionManager — DataStore üzerinden sunucu listesi kalıcı depolama
- */
 class SessionManager(private val context: Context) {
 
     private val gson = Gson()
@@ -58,13 +47,6 @@ class SessionManager(private val context: Context) {
             val current = getCurrent(prefs).toMutableList()
             val idx = current.indexOfFirst { it.id == server.id }
             if (idx >= 0) current[idx] = server else current.add(server)
-            prefs[KEY_SERVERS] = gson.toJson(current)
-        }
-    }
-
-    suspend fun deleteServer(id: String) {
-        context.serverDataStore.edit { prefs ->
-            val current = getCurrent(prefs).filter { it.id != id }
             prefs[KEY_SERVERS] = gson.toJson(current)
         }
     }

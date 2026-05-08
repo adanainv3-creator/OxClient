@@ -25,17 +25,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
-import androidx.lifecycle.lifecycleScope
 import com.oxclient.auth.MicrosoftAuthManager
+import com.oxclient.auth.AuthState
 import com.oxclient.proxy.BedrockRelay
 import com.oxclient.proxy.BedrockRelayService
 import com.oxclient.session.ServerConfig
-import com.oxclient.session.SessionManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.StateFlow
 
 class DashboardActivity : ComponentActivity() {
 
@@ -61,17 +58,13 @@ class DashboardActivity : ComponentActivity() {
                 Uri.parse("package:$packageName")))
         }
 
-        val sessionManager = SessionManager(this)
-
         setContent {
             OxTheme {
                 DashboardScreen(
-                    sessionManager     = sessionManager,
-                    onStartRelay       = { server -> startRelay(server) },
-                    onStopRelay        = { stopRelay() },
-                    onLaunchMinecraft   = { launchMinecraft() },
-                    getRelayRunning     = { relayService?.isRunning ?: false },
-                    getTargetServer     = { relayService?.relay?.targetServer }
+                    onConnect      = { server -> startRelayAndOverlay(server) },
+                    onDisconnect   = { stopRelayAndOverlay() },
+                    getRelayRunning = { relayService?.isRunning ?: false },
+                    getTargetServer = { relayService?.relay?.targetServer }
                 )
             }
         }
@@ -90,20 +83,26 @@ class DashboardActivity : ComponentActivity() {
         if (relayBound) { unbindService(serviceConn); relayBound = false }
     }
 
-    private fun startRelay(server: ServerConfig) {
+    private fun startRelayAndOverlay(server: ServerConfig) {
+        // 1. Önce relay'i başlat
         val intent = Intent(this, BedrockRelayService::class.java).apply {
             putExtra(BedrockRelayService.EXTRA_HOST, server.host)
             putExtra(BedrockRelayService.EXTRA_PORT, server.port)
             putExtra(BedrockRelayService.EXTRA_NAME, server.name)
         }
         startForegroundService(intent)
-        // Overlay'i başlat
+
+        // 2. Overlay'i başlat
         startService(Intent(this, OverlayService::class.java))
-        // Minecraft'ı aç
-        launchMinecraft()
+
+        // 3. 2 saniye bekle, sonra Minecraft'ı aç
+        lifecycleScope.launch {
+            delay(2000L)
+            launchMinecraft()
+        }
     }
 
-    private fun stopRelay() {
+    private fun stopRelayAndOverlay() {
         relayService?.stopRelay()
         stopService(Intent(this, BedrockRelayService::class.java))
         stopService(Intent(this, OverlayService::class.java))
@@ -113,7 +112,12 @@ class DashboardActivity : ComponentActivity() {
         val packages = listOf("com.mojang.minecraftpe", "com.netease.mc")
         for (pkg in packages) {
             packageManager.getLaunchIntentForPackage(pkg)?.let {
-                startActivity(it); return
+                try {
+                    startActivity(it)
+                    return
+                } catch (e: Exception) {
+                    continue
+                }
             }
         }
         Toast.makeText(this, "Minecraft bulunamadı", Toast.LENGTH_SHORT).show()
@@ -121,35 +125,86 @@ class DashboardActivity : ComponentActivity() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  DASHBOARD SCREEN - Basit Connect ekranı
+//  DASHBOARD SCREEN
 // ─────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DashboardScreen(
-    sessionManager    : SessionManager,
-    onStartRelay      : (ServerConfig) -> Unit,
-    onStopRelay       : () -> Unit,
-    onLaunchMinecraft : () -> Unit,
-    getRelayRunning   : () -> Boolean,
-    getTargetServer   : () -> ServerConfig?
+    onConnect       : (ServerConfig) -> Unit,
+    onDisconnect    : () -> Unit,
+    getRelayRunning : () -> Boolean,
+    getTargetServer : () -> ServerConfig?
 ) {
-    var servers         by remember { mutableStateOf(ServerConfig.PRESETS) }
-    var selectedServer  by remember { mutableStateOf(servers.first()) }
-    var isRelayRunning  by remember { mutableStateOf(false) }
+    var isRelayRunning by remember { mutableStateOf(false) }
     var showServerPicker by remember { mutableStateOf(false) }
+    var selectedServer by remember { mutableStateOf(ServerConfig.PRESETS[0]) }
+    var showAuthScreen by remember { mutableStateOf(false) }
+
+    // Auth state
+    val authState by MicrosoftAuthManager.authState.collectAsState()
+    var gamertag by remember { mutableStateOf("") }
+
+    LaunchedEffect(authState) {
+        when (val state = authState) {
+            is AuthState.Success -> gamertag = state.gamertag
+            else -> {}
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
             isRelayRunning = getRelayRunning()
-            // Çalışan sunucuyu göster
             getTargetServer()?.let { selectedServer = it }
             delay(500)
         }
     }
 
-    LaunchedEffect(Unit) {
-        sessionManager.serversFlow.collectLatest { servers = it }
+    // Hesap giriş ekranı
+    if (showAuthScreen) {
+        AlertDialog(
+            onDismissRequest = { showAuthScreen = false },
+            containerColor = OxSurface,
+            title = { Text("Hesap", color = OxText) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (gamertag.isNotBlank()) {
+                        Text("Giriş yapıldı: $gamertag", color = OxGreen)
+                        TextButton(onClick = {
+                            MicrosoftAuthManager.signOut()
+                            gamertag = ""
+                        }) { Text("Çıkış Yap", color = OxRed) }
+                    } else {
+                        Text("Microsoft hesabı ile giriş yapın", color = OxTextSub)
+                        Button(
+                            onClick = {
+                                MicrosoftAuthManager.startSignIn()
+                                showAuthScreen = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple)
+                        ) { Text("Microsoft ile Giriş") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAuthScreen = false }) {
+                    Text("Kapat", color = OxPurpleLight)
+                }
+            }
+        )
+    }
+
+    // Auth state izle - WaitingForUser gelince login ekranını aç
+    LaunchedEffect(authState) {
+        when (authState) {
+            is AuthState.WaitingForUser -> {
+                startActivity(Intent(
+                    androidx.compose.ui.platform.LocalContext.current,
+                    com.oxclient.auth.DeviceCodeLoginActivity::class.java
+                ))
+            }
+            else -> {}
+        }
     }
 
     Column(
@@ -173,34 +228,22 @@ private fun DashboardScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        Text(
-            "OxClient",
-            color = OxText,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold
-        )
+        Text("OxClient", color = OxText, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Text("Minecraft Client", color = OxTextSub, fontSize = 14.sp)
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(32.dp))
 
-        Text(
-            "Minecraft Client",
-            color = OxTextSub,
-            fontSize = 14.sp
-        )
-
-        Spacer(Modifier.height(40.dp))
-
-        // Hedef Sunucu Seçimi
+        // Hedef Sunucu
         Text("Hedef Sunucu", color = OxTextSub, fontSize = 12.sp)
         Spacer(Modifier.height(6.dp))
 
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { showServerPicker = true },
+                .clickable(enabled = !isRelayRunning) { showServerPicker = true },
             shape = RoundedCornerShape(12.dp),
             color = OxSurface,
-            border = BorderStroke(1.dp, OxBorder)
+            border = BorderStroke(1.dp, if (isRelayRunning) OxGreen.copy(alpha = 0.5f) else OxBorder)
         ) {
             Row(
                 modifier = Modifier.padding(16.dp),
@@ -211,19 +254,11 @@ private fun DashboardScreen(
                     Text(selectedServer.icon, fontSize = 24.sp)
                     Spacer(Modifier.width(10.dp))
                     Column {
-                        Text(
-                            selectedServer.name,
-                            color = OxText,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            "${selectedServer.host}:${selectedServer.port}",
-                            color = OxTextSub,
-                            fontSize = 12.sp
-                        )
+                        Text(selectedServer.name, color = OxText, fontWeight = FontWeight.Medium)
+                        Text("${selectedServer.host}:${selectedServer.port}", color = OxTextSub, fontSize = 12.sp)
                     }
                 }
-                Icon(Icons.Default.KeyboardArrowDown, null, tint = OxTextSub)
+                if (!isRelayRunning) Icon(Icons.Default.KeyboardArrowDown, null, tint = OxTextSub)
             }
         }
 
@@ -276,15 +311,13 @@ private fun DashboardScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        // Connect / Disconnect Butonu
+        // Connect / Disconnect
         Button(
             onClick = {
-                if (isRelayRunning) onStopRelay()
-                else onStartRelay(selectedServer)
+                if (isRelayRunning) onDisconnect()
+                else onConnect(selectedServer)
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (isRelayRunning) OxRed else OxPurple
             ),
@@ -310,17 +343,34 @@ private fun DashboardScreen(
             fontSize = 11.sp,
             textAlign = TextAlign.Center
         )
+
+        // Altta profil butonu
+        Spacer(Modifier.weight(1f))
+        
+        IconButton(
+            onClick = { showAuthScreen = true },
+            modifier = Modifier.size(40.dp)
+        ) {
+            Icon(
+                Icons.Default.AccountCircle,
+                contentDescription = "Hesap",
+                tint = if (gamertag.isNotBlank()) OxGreen else OxTextSub,
+                modifier = Modifier.size(32.dp)
+            )
+        }
     }
 
-    // Sunucu Seçme Dialog
+    // Sunucu Seçme
     if (showServerPicker) {
         AlertDialog(
             onDismissRequest = { showServerPicker = false },
             containerColor = OxSurface,
             title = { Text("Sunucu Seç", color = OxText) },
             text = {
-                Column {
-                    servers.forEach { server ->
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    ServerConfig.PRESETS.forEach { server ->
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -328,9 +378,9 @@ private fun DashboardScreen(
                                     selectedServer = server
                                     showServerPicker = false
                                 }
-                                .padding(vertical = 4.dp),
+                                .padding(vertical = 2.dp),
                             shape = RoundedCornerShape(8.dp),
-                            color = if (server.id == selectedServer.id) 
+                            color = if (server.id == selectedServer.id)
                                 OxPurple.copy(alpha = 0.2f) else Color.Transparent
                         ) {
                             Row(
@@ -341,7 +391,7 @@ private fun DashboardScreen(
                                 Spacer(Modifier.width(10.dp))
                                 Column {
                                     Text(server.name, color = OxText, fontWeight = FontWeight.Medium)
-                                    Text("${server.host}:${server.port}", 
+                                    Text("${server.host}:${server.port}",
                                         color = OxTextSub, fontSize = 12.sp)
                                 }
                             }
