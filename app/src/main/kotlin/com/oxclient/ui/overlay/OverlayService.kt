@@ -26,7 +26,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -309,10 +308,14 @@ private fun FabButton(onDrag: (Float, Float) -> Unit, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(52.dp)
-            .shadow(8.dp, CircleShape)
             .clip(CircleShape)
             .background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark)))
             .border(2.dp, OxPurpleLight.copy(alpha = 0.7f), CircleShape)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { if (!isDragging) onClick() }
+                )
+            }
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { isDragging = true; totalDist = 0f },
@@ -353,19 +356,23 @@ private fun ShortcutButton(
     }
 
     val bgColor = if (enabled)
-        Brush.horizontalGradient(listOf(OxPurple.copy(0.9f), OxPurpleDark.copy(0.9f)))
+        Brush.horizontalGradient(listOf(OxPurple.copy(0.85f), OxPurpleDark.copy(0.85f)))
     else
-        Brush.horizontalGradient(listOf(Color(0xCC0D0D1A), Color(0xCC1A1A2E)))
+        Brush.horizontalGradient(listOf(Color(0xBB0D0D1A), Color(0xBB1A1A2E)))
 
     val borderColor = if (enabled) OxPurpleLight.copy(0.9f) else OxOutline.copy(0.4f)
 
     Box(
         modifier = Modifier
             .wrapContentSize()
-            .shadow(6.dp, RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .background(bgColor)
             .border(if (enabled) 1.5.dp else 0.8.dp, borderColor, RoundedCornerShape(10.dp))
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { if (!isDragging) onToggle() }
+                )
+            }
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { isDragging = true; totalDrag = 0f },
