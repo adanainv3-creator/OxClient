@@ -54,16 +54,19 @@ class DashboardActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Overlay izni yoksa sistem ayarlarına yönlendir — kontrol her zaman burada yapılır,
+        // OverlayService yalnızca izin verilmişken başlatılır (bkz. startRelayAndOverlay).
         if (!Settings.canDrawOverlays(this)) {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")))
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            )
         }
 
         setContent {
             OxTheme {
                 DashboardScreen(
-                    onConnect       = { server -> startRelayAndOverlay(server) },
-                    onDisconnect    = { stopRelayAndOverlay() },
+                    onConnect        = { server -> startRelayAndOverlay(server) },
+                    onDisconnect     = { stopRelayAndOverlay() },
                     getRelayRunning  = { relayService?.isRunning ?: false },
                     getTargetServer  = { relayService?.relay?.targetServer }
                 )
@@ -85,15 +88,23 @@ class DashboardActivity : ComponentActivity() {
     }
 
     private fun startRelayAndOverlay(server: ServerConfig) {
+        // BedrockRelayService başlat
         val intent = Intent(this, BedrockRelayService::class.java).apply {
             putExtra(BedrockRelayService.EXTRA_HOST, server.host)
             putExtra(BedrockRelayService.EXTRA_PORT, server.port)
             putExtra(BedrockRelayService.EXTRA_NAME, server.name)
         }
         startForegroundService(intent)
-        startService(Intent(this, OverlayService::class.java))
 
-        // FIX 1: Added `import androidx.lifecycle.lifecycleScope` — resolves "Unresolved reference 'lifecycleScope'"
+        // FIX 2: OverlayService yalnızca overlay izni verilmişse başlatılır.
+        // Önceden izin kontrolü yapılmadan startService çağrılıyordu; izin yoksa
+        // WindowManager.addView() IllegalStateException fırlatır ve servis çöker.
+        if (Settings.canDrawOverlays(this)) {
+            startForegroundService(Intent(this, OverlayService::class.java))
+        } else {
+            Toast.makeText(this, "Overlay izni gerekli", Toast.LENGTH_SHORT).show()
+        }
+
         lifecycleScope.launch {
             delay(2000L)
             launchMinecraft()
@@ -108,8 +119,6 @@ class DashboardActivity : ComponentActivity() {
 
     private fun launchMinecraft() {
         val packages = listOf("com.mojang.minecraftpe", "com.netease.mc")
-        // FIX 2: Replaced `continue` inside inline lambda with labeled `return@let`
-        // to avoid "break/continue in inline lambdas is experimental" error
         for (pkg in packages) {
             packageManager.getLaunchIntentForPackage(pkg)?.let {
                 try { startActivity(it); return }
@@ -132,23 +141,34 @@ private fun DashboardScreen(
     getRelayRunning : () -> Boolean,
     getTargetServer : () -> ServerConfig?
 ) {
+    // FIX 3: LocalContext yerine Activity context'i kullanmak için cast yapılır.
+    // Composable içinde LocalContext.current bir ContextWrapper döndürebilir;
+    // startActivity çağrısında FLAG_ACTIVITY_NEW_TASK eksik olduğunda Activity
+    // context'i dışında sessizce başarısız olur. Cast ile Activity'e ulaşıyoruz
+    // ve flag'i kesin olarak ekliyoruz.
     val context = LocalContext.current
-    var isRelayRunning by remember { mutableStateOf(false) }
-    var showServerPicker by remember { mutableStateOf(false) }
-    var selectedServer by remember { mutableStateOf(ServerConfig.PRESETS[0]) }
-    var showAuthDialog by remember { mutableStateOf(false) }
+    val activity = context as? androidx.activity.ComponentActivity
 
-    // Auth state - StateFlow'u collectAsState ile oku
+    var isRelayRunning    by remember { mutableStateOf(false) }
+    var showServerPicker  by remember { mutableStateOf(false) }
+    var selectedServer    by remember { mutableStateOf(ServerConfig.PRESETS[0]) }
+    var showAuthDialog    by remember { mutableStateOf(false) }
+
     val authState by MicrosoftAuthManager.authState.collectAsState()
-    var gamertag by remember { mutableStateOf("") }
+    var gamertag  by remember { mutableStateOf("") }
 
     // Auth state değişince
     LaunchedEffect(authState) {
         when (val state = authState) {
             is AuthState.Success -> gamertag = state.gamertag
             is AuthState.WaitingForUser -> {
-                // Login ekranini ac
-                context.startActivity(Intent(context, DeviceCodeLoginActivity::class.java))
+                // FIX 3 (devam): Intent FLAG_ACTIVITY_NEW_TASK ile açılıyor.
+                // Activity context yoksa (test/preview ortamı) fallback olarak
+                // application context + NEW_TASK kullanılır; hiçbir durumda
+                // sessizce başarısız olmaz.
+                val intent = Intent(context, DeviceCodeLoginActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                (activity ?: context).startActivity(intent)
             }
             else -> {}
         }
@@ -196,28 +216,22 @@ private fun DashboardScreen(
                         }
                     } else {
                         Text("Microsoft hesabi ile giris yapin", color = OxTextSub)
-                        Text("Minecraft Bedrock oynamak icin gerekli", color = OxTextSub.copy(alpha = 0.5f), fontSize = 11.sp)
+                        Text("Minecraft Bedrock oynamak icin gerekli",
+                            color = OxTextSub.copy(alpha = 0.5f), fontSize = 11.sp)
 
                         Spacer(Modifier.height(4.dp))
 
                         Button(
-                            onClick = {
-                                MicrosoftAuthManager.startSignIn()
-                            },
+                            onClick = { MicrosoftAuthManager.startSignIn() },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            // FIX 3: Icons.Default.Microsoft does not exist in Material Icons.
-                            // Replaced with Icons.Default.AccountBox as a Microsoft-style placeholder.
-                            // Alternatively, use a custom SVG painter via painterResource(R.drawable.ic_microsoft).
-                            Icon(
-                                imageVector = Icons.Default.AccountBox,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp)
-                            )
+                            // Icons.Default.Microsoft Material Icons'da yoktur.
+                            // AccountCircle veya alternatif bir ikon kullanılır.
+                            Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Microsoft ile Giris")
+                            Text("Microsoft ile Giris Yap", fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -265,8 +279,8 @@ private fun DashboardScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(enabled = !isRelayRunning) { showServerPicker = true },
-            shape = RoundedCornerShape(12.dp),
-            color = OxSurface,
+            shape  = RoundedCornerShape(12.dp),
+            color  = OxSurface,
             border = BorderStroke(1.dp, if (isRelayRunning) OxGreen.copy(alpha = 0.5f) else OxBorder)
         ) {
             Row(
@@ -279,7 +293,8 @@ private fun DashboardScreen(
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(selectedServer.name, color = OxText, fontWeight = FontWeight.Medium)
-                        Text("${selectedServer.host}:${selectedServer.port}", color = OxTextSub, fontSize = 12.sp)
+                        Text("${selectedServer.host}:${selectedServer.port}",
+                            color = OxTextSub, fontSize = 12.sp)
                     }
                 }
                 if (!isRelayRunning) Icon(Icons.Default.KeyboardArrowDown, null, tint = OxTextSub)
@@ -294,8 +309,8 @@ private fun DashboardScreen(
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            color = OxSurface,
+            shape  = RoundedCornerShape(12.dp),
+            color  = OxSurface,
             border = BorderStroke(1.dp, OxBorder)
         ) {
             Row(
@@ -317,7 +332,7 @@ private fun DashboardScreen(
         ) {
             Text(
                 if (isRelayRunning) "● Bagli" else "● Bagli Degil",
-                color = if (isRelayRunning) OxGreen else OxRed,
+                color    = if (isRelayRunning) OxGreen else OxRed,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 fontSize = 14.sp
             )
@@ -328,8 +343,8 @@ private fun DashboardScreen(
         Text(
             if (isRelayRunning) "MC'de 127.0.0.1:19132 girin"
             else "Connect'e basarak baslat",
-            color = OxTextSub,
-            fontSize = 11.sp,
+            color     = OxTextSub,
+            fontSize  = 11.sp,
             textAlign = TextAlign.Center
         )
 
@@ -337,12 +352,9 @@ private fun DashboardScreen(
 
         // Connect / Disconnect
         Button(
-            onClick = {
-                if (isRelayRunning) onDisconnect()
-                else onConnect(selectedServer)
-            },
+            onClick = { if (isRelayRunning) onDisconnect() else onConnect(selectedServer) },
             modifier = Modifier.fillMaxWidth().height(52.dp),
-            colors = ButtonDefaults.buttonColors(
+            colors   = ButtonDefaults.buttonColors(
                 containerColor = if (isRelayRunning) OxRed else OxPurple
             ),
             shape = RoundedCornerShape(12.dp)
@@ -354,8 +366,8 @@ private fun DashboardScreen(
             Spacer(Modifier.width(8.dp))
             Text(
                 if (isRelayRunning) "Disconnect" else "Connect",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold
+                fontSize     = 16.sp,
+                fontWeight   = FontWeight.SemiBold
             )
         }
 
@@ -363,32 +375,28 @@ private fun DashboardScreen(
 
         Text(
             "Overlay menusu oyun icinde gorunecek",
-            color = OxTextSub.copy(alpha = 0.5f),
-            fontSize = 11.sp,
+            color     = OxTextSub.copy(alpha = 0.5f),
+            fontSize  = 11.sp,
             textAlign = TextAlign.Center
         )
 
-        // Alt kısım - profil butonu
+        // Alt kısım — profil butonu
         Spacer(Modifier.weight(1f))
 
         IconButton(
-            onClick = { showAuthDialog = true },
+            onClick  = { showAuthDialog = true },
             modifier = Modifier.size(44.dp)
         ) {
             Icon(
                 Icons.Default.AccountCircle,
                 contentDescription = "Hesap",
-                tint = if (gamertag.isNotBlank()) OxGreen else OxTextSub,
+                tint     = if (gamertag.isNotBlank()) OxGreen else OxTextSub,
                 modifier = Modifier.size(36.dp)
             )
         }
 
         if (gamertag.isNotBlank()) {
-            Text(
-                gamertag,
-                color = OxTextSub,
-                fontSize = 11.sp
-            )
+            Text(gamertag, color = OxTextSub, fontSize = 11.sp)
         }
     }
 
@@ -399,9 +407,7 @@ private fun DashboardScreen(
             containerColor   = OxSurface,
             title = { Text("Sunucu Sec", color = OxText, fontWeight = FontWeight.Bold) },
             text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState())
-                ) {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     ServerConfig.PRESETS.forEach { server ->
                         Surface(
                             modifier = Modifier
