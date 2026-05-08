@@ -45,6 +45,8 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.oxclient.R
+import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.core.proxy.InjectionQueue
 import com.oxclient.module.*
 import com.oxclient.ui.theme.*
 import kotlin.math.abs
@@ -451,6 +453,12 @@ private fun HileMenu(
                 }
             }
 
+            // ── Debug Bilgi Çubuğu ────────────────────────────────────────
+            DebugInfoBar()
+            Spacer(Modifier.height(4.dp))
+            HorizontalDivider(color = OxPurple.copy(0.3f))
+            Spacer(Modifier.height(4.dp))
+
             // Kategori sekmeleri
             Row(
                 modifier = Modifier
@@ -496,6 +504,117 @@ private fun HileMenu(
                     )
                 }
             }
+        }
+    }
+}
+
+// ── Debug Bilgi Çubuğu ──────────────────────────────────────────────────────
+
+@Composable
+private fun DebugInfoBar() {
+    val selfId = EntityTracker.selfRuntimeId
+    val entityCount = EntityTracker.getEntities().size
+    val playerCount = EntityTracker.getEntities().values.count { it.isPlayer }
+    val isBound = InjectionQueue.isBound
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xDD0D0D1A))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "⚡ Durum",
+                fontSize = 10.sp,
+                color = OxPurpleLight,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                if (selfId != 0L && isBound) "✅ AKTIF" else "❌ BEKLİYOR",
+                fontSize = 10.sp,
+                color = if (selfId != 0L && isBound) Color(0xFF1AFF6E) else OxError,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "Entity ID:",
+                fontSize = 9.sp,
+                color = OxOnSurface.copy(0.6f),
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                if (selfId == 0L) "Bekleniyor..." else "$selfId",
+                fontSize = 9.sp,
+                color = if (selfId == 0L) OxError.copy(0.8f) else Color(0xFF1AFF6E),
+                fontFamily = FontFamily.Monospace
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "Varlık/Oyuncu:",
+                fontSize = 9.sp,
+                color = OxOnSurface.copy(0.6f),
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                "$entityCount / $playerCount",
+                fontSize = 9.sp,
+                color = if (playerCount > 0) Color(0xFF1AFF6E) else OxOnSurface.copy(0.7f),
+                fontFamily = FontFamily.Monospace
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "Enjeksiyon:",
+                fontSize = 9.sp,
+                color = OxOnSurface.copy(0.6f),
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                if (isBound) "✅ Bağlı" else "❌ Bağlı Değil",
+                fontSize = 9.sp,
+                color = if (isBound) Color(0xFF1AFF6E) else OxError,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "Konum:",
+                fontSize = 9.sp,
+                color = OxOnSurface.copy(0.6f),
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                "${"%.1f".format(EntityTracker.selfX)}, ${"%.1f".format(EntityTracker.selfY)}, ${"%.1f".format(EntityTracker.selfZ)}",
+                fontSize = 9.sp,
+                color = OxOnSurface.copy(0.7f),
+                fontFamily = FontFamily.Monospace
+            )
         }
     }
 }
