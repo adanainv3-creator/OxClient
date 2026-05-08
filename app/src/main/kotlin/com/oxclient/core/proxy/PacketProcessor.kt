@@ -27,8 +27,6 @@ object PacketProcessor {
         }
     }
 
-    // ── Frame Set İşleme ──────────────────────────────────────────────────
-
     private fun processFrameSet(raw: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         if (raw.size < 4) return raw
 
@@ -42,52 +40,37 @@ object PacketProcessor {
         while (buf.hasRemaining()) {
             if (buf.remaining() < 3) break
 
-            val frameStart  = buf.position() // buf içindeki pozisyon (0-bazlı)
-            val reliability = buf.get().toInt() and 0xFF
-            val oldLengthBits = ((buf.get().toInt() and 0xFF) shl 8) or (buf.get().toInt() and 0xFF)
-            val oldPayloadLen = oldLengthBits / 8
-
-            val headersStart = buf.position() // reliability header'larının başlangıcı
+            val frameStart   = buf.position()
+            val reliability  = buf.get().toInt() and 0xFF
+            val oldBits      = ((buf.get().toInt() and 0xFF) shl 8) or (buf.get().toInt() and 0xFF)
+            val oldLen       = oldBits / 8
+            val headerPos    = buf.position()
             skipReliabilityHeaders(buf, reliability)
-            val headersEnd    = buf.position()
-            val headersLen    = headersEnd - frameStart // reliability byte + length bytes + extra headers
+            val headerLen    = buf.position() - frameStart
 
-            if (buf.remaining() < oldPayloadLen) {
-                buf.position(frameStart)
-                break
-            }
+            if (buf.remaining() < oldLen) { buf.position(frameStart); break }
 
-            val payload = ByteArray(oldPayloadLen)
+            val payload = ByteArray(oldLen)
             buf.get(payload)
 
-            // Minecraft batch payload'unu işle
+            // === ENTITY TRACKER === sunucudan gelen veriyi işle
+            if (direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
+                processForTracker(payload, direction)
+            }
+
             val processed = processBatchPayload(payload, direction)
+            if (processed == null) { anyChanged = true; continue }
 
-            if (processed == null) {
-                // Paket iptal edildi → frame'i tamamen atla
-                anyChanged = true
-                Log.d(TAG, "Frame iptal edildi")
-                continue
-            }
+            val newBits = processed.size * 8
+            if (!processed.contentEquals(payload) || newBits != oldBits) anyChanged = true
 
-            val newPayloadLen = processed.size
-            val newLengthBits = newPayloadLen * 8
-
-            if (!processed.contentEquals(payload) || newPayloadLen != oldPayloadLen) {
-                anyChanged = true
-            }
-
-            // Frame'i yeniden inşa et: değişmişse yeni length, aynı header'lar, yeni payload
-            val frameOut = ByteArrayOutputStream()
-            frameOut.write(reliability)
-            frameOut.write((newLengthBits shr 8) and 0xFF)
-            frameOut.write(newLengthBits and 0xFF)
-            // Orijinal ek header'ları kopyala (reliable/sequenced/ordered/fragment)
-            if (headersLen > 3) {
-                frameOut.write(raw, 4 + frameStart + 3, headersLen - 3)
-            }
-            frameOut.write(processed)
-            newFrames.add(frameOut.toByteArray())
+            val out = ByteArrayOutputStream()
+            out.write(reliability)
+            out.write((newBits shr 8) and 0xFF)
+            out.write(newBits and 0xFF)
+            if (headerLen > 3) out.write(raw, 4 + frameStart + 3, headerLen - 3)
+            out.write(processed)
+            newFrames.add(out.toByteArray())
         }
 
         if (newFrames.isEmpty()) return null
@@ -100,101 +83,78 @@ object PacketProcessor {
         return out.toByteArray()
     }
 
-    private fun skipReliabilityHeaders(buf: ByteBuffer, reliability: Int) {
-        val relType = reliability shr 5
-
-        if (relType in intArrayOf(2, 3, 4, 6, 7)) {
-            if (buf.remaining() >= 3) buf.position(buf.position() + 3)
-        }
-        if (relType in intArrayOf(1, 4)) {
-            if (buf.remaining() >= 3) buf.position(buf.position() + 3)
-        }
-        if (relType in intArrayOf(3, 4, 5, 6, 7)) {
-            if (buf.remaining() >= 4) buf.position(buf.position() + 4)
-        }
-        if ((reliability and 0x10) != 0 && buf.remaining() >= 10) {
-            buf.position(buf.position() + 10)
+    /** Sadece EntityTracker için batch payload'u işler (publish etmez) */
+    private fun processForTracker(payload: ByteArray, direction: PacketEvent.Direction) {
+        if (payload.isEmpty() || payload[0] != 0xFE.toByte()) return
+        val inner  = payload.copyOfRange(1, payload.size)
+        val stream = ByteArrayInputStream(inner)
+        while (stream.available() > 0) {
+            val len = readVarInt(stream)
+            if (len <= 0 || stream.available() < len) break
+            val data = ByteArray(len); stream.read(data)
+            val idStream = ByteArrayInputStream(data)
+            val pktId = readVarInt(idStream)
+            // EntityTracker'a bildir
+            try {
+                EntityTracker.onPacket(PacketEvent(pktId, data, direction))
+            } catch (_: Exception) {}
         }
     }
 
-    // ── Batch Payload İşleme ──────────────────────────────────────────────
+    private fun skipReliabilityHeaders(buf: ByteBuffer, reliability: Int) {
+        val rt = reliability shr 5
+        if (rt in intArrayOf(2,3,4,6,7) && buf.remaining()>=3) buf.position(buf.position()+3)
+        if (rt in intArrayOf(1,4) && buf.remaining()>=3) buf.position(buf.position()+3)
+        if (rt in intArrayOf(3,4,5,6,7) && buf.remaining()>=4) buf.position(buf.position()+4)
+        if ((reliability and 0x10)!=0 && buf.remaining()>=10) buf.position(buf.position()+10)
+    }
 
     private fun processBatchPayload(payload: ByteArray, direction: PacketEvent.Direction): ByteArray? {
-        if (payload.isEmpty()) return payload
+        if (payload.isEmpty() || payload[0] != 0xFE.toByte()) return payload
 
-        if (payload[0] != 0xFE.toByte()) return payload
-
-        val inner = payload.copyOfRange(1, payload.size)
-        val stream    = ByteArrayInputStream(inner)
-        val outParts  = mutableListOf<ByteArray>()
-        var anyModified = false
+        val inner  = payload.copyOfRange(1, payload.size)
+        val stream = ByteArrayInputStream(inner)
+        val parts  = mutableListOf<ByteArray>()
+        var changed = false
 
         while (stream.available() > 0) {
-            val pktLen = readVarInt(stream)
-            if (pktLen <= 0 || stream.available() < pktLen) break
+            val len = readVarInt(stream)
+            if (len <= 0 || stream.available() < len) break
+            val data = ByteArray(len); stream.read(data)
+            val pktId = readVarInt(ByteArrayInputStream(data))
+            val event = PacketEvent(pktId, data, direction)
 
-            val pktData = ByteArray(pktLen)
-            stream.read(pktData)
-
-            val pktStream = ByteArrayInputStream(pktData)
-            val packetId  = readVarInt(pktStream)
-
-            val event = PacketEvent(packetId, pktData, direction)
-
-            try {
-                PacketEventBus.publish(event)
-            } catch (e: Exception) {
-                Log.e(TAG, "PacketEventBus publish hatası: ${e.message}")
-            }
+            try { PacketEventBus.publish(event) } catch (e: Exception) { Log.e(TAG, "Bus: ${e.message}") }
 
             when {
-                event.isCancelled -> {
-                    anyModified = true
-                }
-                event.modifiedData != null -> {
-                    anyModified = true
-                    outParts.add(encodeSubPacket(event.modifiedData!!))
-                }
-                else -> {
-                    outParts.add(encodeSubPacket(pktData))
-                }
+                event.isCancelled        -> changed = true
+                event.modifiedData != null -> { changed = true; parts.add(enc(event.modifiedData!!)) }
+                else                     -> parts.add(enc(data))
             }
         }
 
-        if (outParts.isEmpty()) return null
-        if (!anyModified) return payload
+        if (parts.isEmpty()) return null
+        if (!changed) return payload
 
-        val newInner = outParts.fold(ByteArray(0)) { acc, b -> acc + b }
-        return byteArrayOf(0xFE.toByte()) + newInner
+        val merged = parts.fold(ByteArray(0)) { a, b -> a + b }
+        return byteArrayOf(0xFE.toByte()) + merged
     }
 
-    // ── VarInt ────────────────────────────────────────────────────────────
+    private fun enc(data: ByteArray) = writeVarInt(data.size) + data
 
     fun readVarInt(stream: ByteArrayInputStream): Int {
-        var result = 0
-        var shift  = 0
+        var r = 0; var s = 0
         for (i in 0 until 5) {
-            val b = stream.read()
-            if (b == -1) break
-            result = result or ((b and 0x7F) shl shift)
-            if ((b and 0x80) == 0) return result
-            shift += 7
+            val b = stream.read(); if (b == -1) break
+            r = r or ((b and 0x7F) shl s)
+            if ((b and 0x80) == 0) return r; s += 7
         }
-        return result
+        return r
     }
 
-    fun writeVarInt(value: Int): ByteArray {
-        val buf = mutableListOf<Byte>()
-        var v = value
-        do {
-            var b = (v and 0x7F)
-            v = v ushr 7
-            if (v != 0) b = b or 0x80
-            buf.add(b.toByte())
-        } while (v != 0)
-        return buf.toByteArray()
+    fun writeVarInt(v: Int): ByteArray {
+        val b = mutableListOf<Byte>(); var x = v
+        do { var t = (x and 0x7F); x = x ushr 7; if (x != 0) t = t or 0x80; b.add(t.toByte()) } while (x != 0)
+        return b.toByteArray()
     }
-
-    private fun encodeSubPacket(data: ByteArray): ByteArray =
-        writeVarInt(data.size) + data
 }
