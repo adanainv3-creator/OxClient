@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OxClient</string>
+    <string name="overlay_notif_title">OxClient Overlay</string>
+    <string name="overlay_notif_text">Oyun içi HUD aktif</string>
+    <string name="relay_notif_title">OxClient Relay</string>
+    <string name="relay_notif_text">MITM proxy çalışıyor</string>
 </resources>

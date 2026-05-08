@@ -1,19 +1,26 @@
 package com.oxclient.events
 
 /**
+ * Bir paketin hangi yönde aktığını belirtir.
+ */
+enum class PacketDirection {
+    CLIENT_BOUND,   // Sunucudan MC istemcisine
+    SERVER_BOUND    // MC istemcisinden sunucuya
+}
+
+/**
  * PacketEvent
  *
- * OxVpnService → PacketProcessor tarafından publish edilir.
- * Modüller onPacket() içinde bu event'i alarak paketi değiştirebilir
- * veya iptal edebilir.
+ * Her intercept edilen paket için oluşturulan olay nesnesi.
+ * Modüller bu nesneyi alır, [data]'yı değiştirebilir veya [cancelled] = true yapabilir.
  */
 data class PacketEvent(
-    val packetId  : Int,
-    val data      : ByteArray,
-    val direction : Direction
+    val id        : Int,
+    val direction : PacketDirection,
+    var data      : ByteArray,          // değiştirilebilir
+    val mutable   : Boolean = true,
+    var cancelled : Boolean = false     // true → paket iletilmez
 ) {
-    var isCancelled: Boolean = false
-    var modifiedData: ByteArray? = null
-
-    enum class Direction { CLIENT_TO_SERVER, SERVER_TO_CLIENT }
+    override fun equals(other: Any?): Boolean = other is PacketEvent && id == other.id
+    override fun hashCode(): Int = id
 }

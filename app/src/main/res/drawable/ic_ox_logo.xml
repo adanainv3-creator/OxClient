@@ -1,18 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#1A1A24"
-        android:pathData="M54,54m-54,0a54,54 0,1 1,108 0a54,54 0,1 1,-108 0"/>
-    <path android:fillColor="#7B2FBE"
-        android:pathData="M54,28 C43,28 34,37 34,48 C34,53 36,57 39,61
-        L22,53 L27,64 L36,62
-        C40,68 47,72 54,72
-        C61,72 68,68 72,62
-        L81,64 L86,53 L69,61
-        C72,57 74,53 74,48
-        C74,37 65,28 54,28Z
-        M47,43 C47,40 49,38 51,38 C53,38 55,40 55,43 C55,46 53,48 51,48 C49,48 47,46 47,43Z
-        M55,43 C55,40 57,38 59,38 C61,38 63,40 63,43 C63,46 61,48 59,48 C57,48 55,46 55,43Z"/>
+
+    <!-- Dark background circle -->
+    <path
+        android:fillColor="#0F0F14"
+        android:pathData="M54,54m-54,0a54,54 0,1 1,108 0a54,54 0,1 1,-108 0" />
+
+    <!-- Purple glow ring -->
+    <path
+        android:fillColor="#207B2FBE"
+        android:pathData="M54,54m-50,0a50,50 0,1 1,100 0a50,50 0,1 1,-100 0" />
+
+    <!-- Hex border -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#7B2FBE"
+        android:strokeWidth="2.5"
+        android:pathData="M54,12 L90,33 L90,75 L54,96 L18,75 L18,33 Z" />
+
+    <!-- Inner hex fill -->
+    <path
+        android:fillColor="#1A1A24"
+        android:pathData="M54,18 L84,36 L84,72 L54,90 L24,72 L24,36 Z" />
+
+    <!-- "O" letter - left arc -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#9B59D6"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M32,54 A14,14 0 1,1 32,54.1" />
+
+    <!-- "x" letter -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#7B2FBE"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M58,42 L76,66 M76,42 L58,66" />
+
+    <!-- Accent dot -->
+    <path
+        android:fillColor="#9B59D6"
+        android:pathData="M54,94m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+
 </vector>

@@ -1,163 +1,179 @@
 package com.oxclient.module.combat
 
 import android.util.Log
-import com.oxclient.events.PacketEvent
+import com.oxclient.events.PacketDirection
 import com.oxclient.module.BaseModule
-import com.oxclient.module.BoolSetting
-import com.oxclient.module.IntSetting
-import com.oxclient.module.ModuleCategory
-import com.oxclient.module.ModuleSetting
+import com.oxclient.proxy.BedrockPacketIds
+import com.oxclient.proxy.PacketProcessor
+import io.netty.buffer.Unpooled
 
 /**
  * AutoTotem
  *
- * Envanterde totem of undying varken otomatik olarak
- * off-hand slotuna taşır. Ölüm paketi algılandığında tetiklenir.
+ * Can < eşik değerine düştüğünde envanterden ölümsüzlük tılsımını
+ * otomatik olarak off-hand (slot 119) slotuna taşır.
  *
- * Paket akışı:
- * - SERVER → CLIENT: [MobEffectPacket] / [PlayerActionPacket] ile düşük HP algıla
- * - CLIENT → SERVER: [InventoryTransactionPacket] ile totem taşı
+ * Mekanizma:
+ *  1. UpdateAttributes → mevcut canı izler
+ *  2. InventoryContent / InventorySlot → totem'in slot numarasını bulur
+ *  3. Can tehlikeli seviyeye düşünce ItemStackRequest (SWAP) enjekte eder
  */
 class AutoTotem : BaseModule(
     name        = "AutoTotem",
-    category    = ModuleCategory.COMBAT,
-    description = "Totemi otomatik off-hand'e taşır"
+    description = "Can azaldığında otomatik totem takıp çıkarır",
+    category    = Category.COMBAT
 ) {
-
     // ── Ayarlar ───────────────────────────────────────────────────────────
+    var healthThreshold: Float = 6.0f      // Can < bu değerde → totem tak (6 = 3 kalp)
+    var alwaysEquip    : Boolean = false   // true = canı ne olursa olsun hep totemli kal
 
-    private val strictMode = BoolSetting(
-        name    = "Strict Mode",
-        default = false
-    )
+    // ── İç durum ──────────────────────────────────────────────────────────
+    @Volatile private var currentHealth : Float = 20f
+    @Volatile private var totemSlot     : Int   = -1    // -1 = bulunamadı
+    @Volatile private var offhandHasTotem: Boolean = false
 
-    private val hpThreshold = IntSetting(
-        name    = "HP Eşiği",
-        default = 6,
-        min     = 1,
-        max     = 20
-    )
-
-    private val swapDelay = IntSetting(
-        name    = "Swap Gecikmesi (ms)",
-        default = 50,
-        min     = 0,
-        max     = 500
-    )
-
-    private val notifyOnSwap = BoolSetting(
-        name    = "Swap Bildir",
-        default = true
-    )
-
-    override fun registerSettings(): List<ModuleSetting<*>> =
-        listOf(strictMode, hpThreshold, swapDelay, notifyOnSwap)
-
-    // ── State ─────────────────────────────────────────────────────────────
-
-    private var totemSlot: Int = -1
-    private var offHandHasTotem: Boolean = false
-    private var lastSwapTime: Long = 0L
-
-    companion object {
-        private const val TAG          = "AutoTotem"
-        const val  TOTEM_ITEM_ID       = 752   // Bedrock runtime ID (yaklaşık)
-        const val  OFF_HAND_SLOT       = -1    // off-hand slot ID
-        private const val SWAP_COOLDOWN = 200L
-    }
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────
+    // Totem item ID'si (1.21.60'ta 523)
+    private val TOTEM_ITEM_ID = 523
+    private val OFFHAND_SLOT  = 119
 
     override fun onEnable() {
-        totemSlot      = -1
-        offHandHasTotem = false
-        Log.d(TAG, "AutoTotem aktif — HP eşiği: ${hpThreshold.value}")
+        totemSlot     = -1
+        offhandHasTotem = false
+        subscribePackets()
+        Log.d("AutoTotem", "Etkinleştirildi (eşik=${healthThreshold}hp)")
     }
 
-    override fun onDisable() {
-        totemSlot = -1
-        Log.d(TAG, "AutoTotem devre dışı")
-    }
+    private fun subscribePackets() {
+        // UpdateAttributes → canı izle
+        subscribe(packetId = BedrockPacketIds.UPDATE_ATTRIBUTES, direction = PacketDirection.CLIENT_BOUND) { event ->
+            parseHealth(event.data)
+        }
 
-    // ── Paket işleme ──────────────────────────────────────────────────────
+        // InventoryContent → tüm envanter içeriğini tara
+        subscribe(packetId = BedrockPacketIds.INVENTORY_CONTENT, direction = PacketDirection.CLIENT_BOUND) { event ->
+            parseInventoryContent(event.data)
+        }
 
-    override fun onPacket(event: PacketEvent) {
-        if (!isEnabled) return
+        // InventorySlot → tek slot değişikliğini izle
+        subscribe(packetId = BedrockPacketIds.INVENTORY_SLOT, direction = PacketDirection.CLIENT_BOUND) { event ->
+            parseInventorySlot(event.data)
+        }
 
-        when (event.direction) {
-            PacketEvent.Direction.SERVER_TO_CLIENT -> handleServerPacket(event)
-            PacketEvent.Direction.CLIENT_TO_SERVER -> { /* gözlemle */ }
+        // ItemStackResponse → swap onayı
+        subscribe(packetId = BedrockPacketIds.ITEM_STACK_RESPONSE, direction = PacketDirection.CLIENT_BOUND) { event ->
+            Log.v("AutoTotem", "StackResponse alındı")
+        }
+
+        // EntityEvent → ölüm/yeniden doğma olayı
+        subscribe(packetId = BedrockPacketIds.ENTITY_EVENT, direction = PacketDirection.CLIENT_BOUND) { event ->
+            val buf = Unpooled.wrappedBuffer(event.data)
+            try {
+                buf.readByte()
+                readVarLong(buf)     // entityRuntimeId
+                val eventType = buf.readByte().toInt()
+                if (eventType == 57) {  // CONSUME_TOTEM
+                    offhandHasTotem = false
+                    totemSlot = -1
+                    Log.i("AutoTotem", "Totem kullanıldı! Yeni totem aranıyor...")
+                }
+            } catch (_: Exception) {}
+            finally { buf.release() }
         }
     }
 
-    private fun handleServerPacket(event: PacketEvent) {
-        // Gerçek Bedrock protokol implementasyonunda burası
-        // RespawnPacket, InventorySlotPacket ve PlayerActionPacket'leri işler.
-        // Relay mimarisinde OnlineLoginPacketListener'dan geçen paketler
-        // buraya EventBus aracılığıyla ulaşır.
+    // ─────────────────────────────────────────────────────────────────────
+    //  PARSE
+    // ─────────────────────────────────────────────────────────────────────
 
-        val data = event.data
-        if (data.isEmpty()) return
-
-        val packetId = event.packetId
-
-        when (packetId) {
-            // 0x1B = InventorySlotPacket (Bedrock)
-            0x1B -> handleInventorySlot(data)
-            // 0x2C = PlayerActionPacket (respawn)
-            0x2C -> handlePlayerAction(data)
-        }
-    }
-
-    private fun handleInventorySlot(data: ByteArray) {
-        // Inventory slot güncellemesi — totem slotunu izle
-        // Gerçek implementasyonda CloudburstMC codec ile parse edilir
-        Log.v(TAG, "InventorySlot paketi — totem konumu güncelleniyor")
-        updateTotemSlot(data)
-    }
-
-    private fun handlePlayerAction(data: ByteArray) {
-        // Respawn algılandı → totem off-hand'de olmalı
-        if (!offHandHasTotem && totemSlot >= 0) {
-            val now = System.currentTimeMillis()
-            if (now - lastSwapTime < SWAP_COOLDOWN) return
-
-            Log.d(TAG, "Ölüm algılandı → totem swap (slot $totemSlot → off-hand)")
-            performTotemSwap()
-        }
-    }
-
-    // ── Totem swap logic ──────────────────────────────────────────────────
-
-    private fun updateTotemSlot(data: ByteArray) {
-        // Packet parse: InventorySlotPacket → containerId, slot, item.id
-        // Simplified — gerçek implementasyonda codec ile
-        if (data.size > 4) {
-            val potentialSlot = data[2].toInt() and 0xFF
-            val potentialId   = ((data[3].toInt() and 0xFF) shl 8) or (data[4].toInt() and 0xFF)
-
-            if (potentialId == TOTEM_ITEM_ID) {
-                totemSlot = potentialSlot
-                Log.d(TAG, "Totem slot güncellendi: $totemSlot")
+    private fun parseHealth(data: ByteArray) {
+        val buf = Unpooled.wrappedBuffer(data)
+        try {
+            buf.readByte()
+            readVarLong(buf)                // entityRuntimeId
+            val count = readVarInt(buf)
+            repeat(count) {
+                val attrName = readString(buf)
+                val minVal   = buf.readFloatLE()
+                val curVal   = buf.readFloatLE()
+                val maxVal   = buf.readFloatLE()
+                if (attrName == "minecraft:health") {
+                    currentHealth = curVal
+                    checkAndEquipTotem()
+                }
             }
-        }
+        } catch (_: Exception) {}
+        finally { buf.release() }
     }
 
-    private fun performTotemSwap() {
-        if (totemSlot < 0) return
+    private fun parseInventoryContent(data: ByteArray) {
+        val buf = Unpooled.wrappedBuffer(data)
+        try {
+            buf.readByte()
+            readVarInt(buf)                 // containerId
+            val count = readVarInt(buf)
+            for (i in 0 until count) {
+                val itemId = readVarInt(buf)
+                if (buf.isReadable) readVarInt(buf)   // count
+                if (buf.isReadable) readVarInt(buf)   // damage
+                if (itemId == TOTEM_ITEM_ID && i != OFFHAND_SLOT) {
+                    totemSlot = i
+                }
+                if (itemId == TOTEM_ITEM_ID && i == OFFHAND_SLOT) {
+                    offhandHasTotem = true
+                }
+            }
+            checkAndEquipTotem()
+        } catch (_: Exception) {}
+        finally { buf.release() }
+    }
 
-        val now = System.currentTimeMillis()
-        if (now - lastSwapTime < swapDelay.value + SWAP_COOLDOWN) return
+    private fun parseInventorySlot(data: ByteArray) {
+        val buf = Unpooled.wrappedBuffer(data)
+        try {
+            buf.readByte()
+            readVarInt(buf)                 // containerId
+            val slot   = readVarInt(buf)
+            val itemId = readVarInt(buf)
+            if (itemId == TOTEM_ITEM_ID && slot != OFFHAND_SLOT) totemSlot = slot
+            if (slot == OFFHAND_SLOT) offhandHasTotem = (itemId == TOTEM_ITEM_ID)
+        } catch (_: Exception) {}
+        finally { buf.release() }
+    }
 
-        lastSwapTime    = now
-        offHandHasTotem = true
+    // ─────────────────────────────────────────────────────────────────────
+    //  TOTEM TAKMA
+    // ─────────────────────────────────────────────────────────────────────
 
-        // Relay üzerinden InventoryTransaction paketi gönder
-        // Bu gerçek implementasyonda OxRelaySession.serverBound() ile yapılır
-        Log.d(TAG, "Totem swap yapıldı: slot $totemSlot → off-hand")
-
-        if (notifyOnSwap.value) {
-            com.oxclient.ui.overlay.OverlayNotifier.showModuleToast("AutoTotem", true)
+    private fun checkAndEquipTotem() {
+        val shouldEquip = alwaysEquip || currentHealth <= healthThreshold
+        if (!shouldEquip || offhandHasTotem) return
+        if (totemSlot == -1) {
+            Log.w("AutoTotem", "Envanterde totem bulunamadı!")
+            return
         }
+        val swapPacket = PacketProcessor.buildSwapTotemPacket(totemSlot, OFFHAND_SLOT)
+        PacketProcessor.injectToServer(swapPacket)
+        offhandHasTotem = true
+        Log.i("AutoTotem", "Totem takıldı (slot $totemSlot → offhand) | Can: $currentHealth")
+    }
+
+    // ── VarInt/String yardımcıları ────────────────────────────────────────
+
+    private fun readVarLong(buf: io.netty.buffer.ByteBuf): Long {
+        var r = 0L; var s = 0
+        while (buf.isReadable) { val b = buf.readByte().toLong(); r = r or ((b and 0x7F) shl s); if (b and 0x80L == 0L) break; s += 7 }
+        return r
+    }
+
+    private fun readVarInt(buf: io.netty.buffer.ByteBuf): Int {
+        var r = 0; var s = 0
+        while (buf.isReadable) { val b = buf.readByte().toInt(); r = r or ((b and 0x7F) shl s); if (b and 0x80 == 0) break; s += 7 }
+        return r
+    }
+
+    private fun readString(buf: io.netty.buffer.ByteBuf): String {
+        val len = readVarInt(buf)
+        if (len <= 0 || len > buf.readableBytes()) return ""
+        val b = ByteArray(len); buf.readBytes(b); return String(b, Charsets.UTF_8)
     }
 }

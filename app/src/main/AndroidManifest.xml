@@ -5,6 +5,7 @@
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <!-- VPN -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
@@ -17,11 +18,8 @@
     <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- Wake Lock — relay thread'in arka planda çalışması için -->
+    <!-- Wake Lock — paket işleme sırasında ekranın kapanmasını önler -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <!-- Battery Optimization Bypass -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Android 11+ Paket Görünürlüğü -->
     <queries>
@@ -59,7 +57,7 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- VPN Servisi (legacy — opsiyonel, relay mimarisinde gereksiz olabilir) -->
+        <!-- VPN Servisi -->
         <service
             android:name=".core.vpn.OxVpnService"
             android:exported="false"
@@ -73,14 +71,14 @@
                 android:value="VPN_tunnel_for_Minecraft_Bedrock_proxy" />
         </service>
 
-        <!-- ★ Bedrock Relay Servisi (YENİ) -->
+        <!-- Bedrock Relay Servisi (MITM Proxy) -->
         <service
-            android:name=".relay.service.RelayService"
+            android:name=".proxy.BedrockRelayService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Bedrock_MITM_relay_for_Minecraft_packet_injection" />
+                android:value="Bedrock_MITM_relay_proxy_service" />
         </service>
 
         <!-- Oyun içi Overlay -->

@@ -1,98 +1,57 @@
 package com.oxclient.module
 
-import android.util.Log
 import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.KillAura
-import com.oxclient.module.movement.NoFall
-import com.oxclient.module.movement.Sprint
 import com.oxclient.module.movement.TPAura
-import com.oxclient.module.visual.ESP
-import com.oxclient.module.visual.FullBright
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.*
 
 /**
  * ModuleManager
  *
- * Tüm modülleri kaydeder ve toggle/sorgulama işlemlerini yönetir.
- * [version] Flow'u her toggle'da güncellenerek Compose UI'nin
- * yeniden çizilmesini tetikler.
- *
- * Yeni modül eklemek: sadece sınıfı oluştur ve register() içine ekle.
+ * Tüm modüllerin merkezi kayıt ve yaşam döngüsü yöneticisi.
  */
 object ModuleManager {
 
-    private const val TAG = "ModuleManager"
+    private val modules = mutableListOf<BaseModule>()
 
-    private val _modules = mutableListOf<BaseModule>()
-    val modules: List<BaseModule> get() = _modules
+    // ── Kayıtlı Modüller ──────────────────────────────────────────────────
+    val killAura   = KillAura()
+    val criticals  = Criticals()
+    val autoTotem  = AutoTotem()
+    val tpAura     = TPAura()
 
-    private val _version = MutableStateFlow(0)
-    val version: StateFlow<Int> = _version.asStateFlow()
+    private val tickScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var tickJob: Job? = null
 
-    private var initialized = false
+    // ─────────────────────────────────────────────────────────────────────
+    //  BAŞLATMA
+    // ─────────────────────────────────────────────────────────────────────
 
-    // ── Init ──────────────────────────────────────────────────────────────
-
-    fun init() {
-        if (initialized) return
-        initialized = true
-
-        register(
-            // Combat
-            AutoTotem(),
-            KillAura(),
-            Criticals(),
-            // Movement
-            TPAura(),
-            Sprint(),
-            NoFall(),
-            // Visual
-            ESP(),
-            FullBright()
-        )
-
-        Log.d(TAG, "${_modules.size} modül yüklendi: ${_modules.map { it.name }}")
-    }
-
-    private fun register(vararg mods: BaseModule) {
-        _modules.addAll(mods)
-    }
-
-    // ── Public API ────────────────────────────────────────────────────────
-
-    fun toggle(module: BaseModule) {
-        module.setEnabled(!module.isEnabled)
-        _version.value++
-        Log.d(TAG, "${module.name} → ${if (module.isEnabled) "ON" else "OFF"}")
-        com.oxclient.ui.overlay.OverlayNotifier.showModuleToast(module.name, module.isEnabled)
-    }
-
-    fun enable(module: BaseModule) {
-        if (module.isEnabled) return
-        module.setEnabled(true)
-        _version.value++
-        com.oxclient.ui.overlay.OverlayNotifier.showModuleToast(module.name, true)
-    }
-
-    fun disable(module: BaseModule) {
-        if (!module.isEnabled) return
-        module.setEnabled(false)
-        _version.value++
-        com.oxclient.ui.overlay.OverlayNotifier.showModuleToast(module.name, false)
+    fun initAll() {
+        modules.clear()
+        modules.addAll(listOf(killAura, criticals, autoTotem, tpAura))
+        tickJob = tickScope.launch {
+            while (isActive) {
+                modules.filter { it.enabled }.forEach {
+                    try { it.onTick() } catch (_: Exception) {}
+                }
+                delay(50L)
+            }
+        }
     }
 
     fun disableAll() {
-        _modules.filter { it.isEnabled }.forEach { it.setEnabled(false) }
-        _version.value++
-        Log.d(TAG, "Tüm modüller devre dışı")
+        modules.forEach { if (it.enabled) it.disable() }
+        tickJob?.cancel()
     }
 
-    fun byName(name: String): BaseModule? =
-        _modules.firstOrNull { it.name.equals(name, ignoreCase = true) }
+    // ─────────────────────────────────────────────────────────────────────
+    //  SORGU
+    // ─────────────────────────────────────────────────────────────────────
 
-    fun byCategory(cat: ModuleCategory): List<BaseModule> =
-        _modules.filter { it.category == cat }
+    fun getAll(): List<BaseModule>                = modules.toList()
+    fun getEnabled(): List<BaseModule>            = modules.filter { it.enabled }
+    fun getByName(name: String): BaseModule?      = modules.find { it.name.equals(name, ignoreCase = true) }
+    fun getByCategory(cat: BaseModule.Category)  = modules.filter { it.category == cat }
 }

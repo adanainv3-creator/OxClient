@@ -1,21 +1,19 @@
 package com.oxclient.ui.overlay
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import android.app.NotificationManager
+import android.content.Context
+import androidx.core.app.NotificationCompat
 
-/** Modül toggle bildirimlerini otomatik-kaldırma zamanlayıcısıyla gönderir. */
 object OverlayNotifier {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
-    fun showModuleToast(moduleName: String, enabled: Boolean) {
-        val toast = ModuleToast(moduleName, enabled)
-        OverlayState.postModuleToast(toast)
-        scope.launch {
-            delay(OverlayState.TOAST_DURATION_MS)
-            OverlayState.clearModuleToast(toast)
-        }
+    fun notify(context: Context, title: String, text: String) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notif = NotificationCompat.Builder(context, OverlayService.CHANNEL_ID)
+            .setSmallIcon(com.oxclient.R.drawable.ic_ox_logo)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setSilent(true)
+            .build()
+        nm.notify(9001, notif)
     }
 }
