@@ -8,25 +8,59 @@ class CrystalAura : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "End kristallerini otomatik yerleştirir ve patlatır"
 ) {
+    enum class BreakMode { Instant, Sequential }
+    enum class Priority { Distance, Health }
 
-    private val range           = FloatSetting("Range",           5f,   1f, 10f)
-    private val suicide         = BoolSetting("Suicide",          false)
-    private val place           = BoolSetting("Place",            true)
-    private val delay           = IntSetting("Delay",             400,  0, 2000)
-    private val removeParticles = BoolSetting("RemoveParticles",  true)
-    private val shortcut        = BoolSetting("Shortcut",         false)
+    // ── Ana kontroller ────────────────────────────────────────────────────
+    private val autoPlace        = BoolSetting("AutoPlace",        true)
+    private val autoBreak        = BoolSetting("AutoBreak",        true)
+    private val breakMode        = EnumSetting("BreakMode",       BreakMode.Instant,   BreakMode.entries)
+    private val priority         = EnumSetting("Priority",        Priority.Distance,   Priority.entries)
+
+    // ── Menzil ────────────────────────────────────────────────────────────
+    private val placeRange       = FloatSetting("PlaceRange",      6f,    1f, 12f)
+    private val breakRange       = FloatSetting("BreakRange",      6f,    1f, 12f)
+    private val wallsRange       = FloatSetting("WallsRange",      5f,    1f, 10f)
+
+    // ── Hasar ─────────────────────────────────────────────────────────────
+    private val antiSuicide      = BoolSetting("AntiSuicide",      true)
+
+    // ── Duvar arkası ──────────────────────────────────────────────────────
+    private val throughWalls     = BoolSetting("ThroughWalls",      true)
+    private val throughBlocks    = BoolSetting("ThroughBlocks",     true)
+
+    // ── Yerleştirme ───────────────────────────────────────────────────────
+    private val placeDelay       = IntSetting("PlaceDelay",        0,    0, 500)
+    private val breakDelay       = IntSetting("BreakDelay",        0,    0, 500)
+    private val maxPlace         = IntSetting("MaxPlace",          25,   1, 50)
+    private val maxBreak         = IntSetting("MaxBreak",          25,   1, 50)
+
+    // ── Görsel ────────────────────────────────────────────────────────────
+    private val removeParticles  = BoolSetting("RemoveParticles",  true)
+
+    // ── Shortcut ──────────────────────────────────────────────────────────
+    private val shortcut         = BoolSetting("Shortcut",         true)
 
     override fun registerSettings() = listOf(
-        range, suicide, place, delay, removeParticles, shortcut
+        autoPlace, autoBreak,
+        breakMode, priority,
+        placeRange, breakRange, wallsRange,
+        antiSuicide,
+        throughWalls, throughBlocks,
+        placeDelay, breakDelay,
+        maxPlace, maxBreak,
+        removeParticles,
+        shortcut
     )
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         // Relay bağlandığında:
-        // 1) place=true → yakına kristal yerleştir paketi
-        // 2) delay ms sonra kristali patlat paketi
-        // 3) suicide=false → kendine zarar verecekse atla
-        // 4) removeParticles → patlama partikül paketlerini filtrele
+        // - throughWalls/throughBlocks: obsidyenin arkasına/icine kristal yerlestir
+        // - maxPlace=25: hedefin etrafına aynı anda 25 kristal koy
+        // - maxBreak=25: hepsini aynı anda patlat
+        // - placeDelay/breakDelay=0: bekleme yok
+        // - antiSuicide: kendini öldürecekse patlatma
     }
 
     override fun onEnable()  {}
