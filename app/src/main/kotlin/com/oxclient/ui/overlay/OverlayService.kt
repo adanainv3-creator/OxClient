@@ -444,10 +444,11 @@ private fun HileMenu(onClose: () -> Unit, moduleVersion: Int, onShortcutChanged:
 }
 
 // ── Debug Bilgi Çubuğu ──────────────────────────────────────────────────────
-// ✅ FIX 1: "VPN" → "Relay" olarak değiştirildi
-// ✅ FIX 2: isBound, selfId, entityCount LaunchedEffect polling ile güncelleniyor
-//           (@Volatile değişkenler Compose tarafından izlenemez)
-// ✅ FIX 3: relayHost/relayPort artık StateFlow'dan okunuyor
+// ✅ FIX 4: selfX, selfY, selfZ LaunchedEffect polling'e dahil edildi.
+//           @Volatile Float değişkenler Compose state sistemi tarafından
+//           izlenemez. Önceki kodda konum satırı doğrudan EntityTracker.selfX/Y/Z
+//           okuyordu — bu değerler ilk kompozisyonda 0.0 olduğundan ekranda
+//           hep "0,0,0,0,0,0" görünüyordu, hiç güncellenmiyordu.
 
 @Composable
 private fun DebugInfoBar() {
@@ -461,6 +462,10 @@ private fun DebugInfoBar() {
     var selfId      by remember { mutableLongStateOf(EntityTracker.selfRuntimeId) }
     var entityCount by remember { mutableIntStateOf(0) }
     var playerCount by remember { mutableIntStateOf(0) }
+    // ✅ FIX: selfX/Y/Z state olarak tanımlandı ve polling'e eklendi
+    var selfX       by remember { mutableFloatStateOf(EntityTracker.selfX) }
+    var selfY       by remember { mutableFloatStateOf(EntityTracker.selfY) }
+    var selfZ       by remember { mutableFloatStateOf(EntityTracker.selfZ) }
 
     // Her 500ms'de bir güncelle
     LaunchedEffect(Unit) {
@@ -469,6 +474,10 @@ private fun DebugInfoBar() {
             selfId      = EntityTracker.selfRuntimeId
             entityCount = EntityTracker.getEntities().size
             playerCount = EntityTracker.getEntities().values.count { it.isPlayer }
+            // ✅ FIX: koordinatlar da güncelleniyor
+            selfX       = EntityTracker.selfX
+            selfY       = EntityTracker.selfY
+            selfZ       = EntityTracker.selfZ
             kotlinx.coroutines.delay(500L)
         }
     }
@@ -477,7 +486,6 @@ private fun DebugInfoBar() {
         modifier = Modifier.fillMaxWidth().background(Color(0xDD0D0D1A)).padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        // Başlık satırı + durum
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
                 "⚡ OxClient",
@@ -504,7 +512,6 @@ private fun DebugInfoBar() {
 
         HorizontalDivider(color = OxPurple.copy(0.2f))
 
-        // Relay satırı
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Relay:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
             Text(
@@ -515,7 +522,6 @@ private fun DebugInfoBar() {
             )
         }
 
-        // Self ID
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Self ID:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
             Text(
@@ -526,7 +532,6 @@ private fun DebugInfoBar() {
             )
         }
 
-        // Varlık / Oyuncu
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Varlık/Oyuncu:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
             Text(
@@ -537,7 +542,6 @@ private fun DebugInfoBar() {
             )
         }
 
-        // Enjeksiyon
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Enjeksiyon:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
             Text(
@@ -548,11 +552,12 @@ private fun DebugInfoBar() {
             )
         }
 
-        // Konum
+        // ✅ FIX: artık state değişkenleri (selfX/Y/Z) kullanılıyor,
+        //         EntityTracker.selfX doğrudan okunmuyor
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Konum:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
             Text(
-                "${"%.1f".format(EntityTracker.selfX)}, ${"%.1f".format(EntityTracker.selfY)}, ${"%.1f".format(EntityTracker.selfZ)}",
+                "${"%.1f".format(selfX)}, ${"%.1f".format(selfY)}, ${"%.1f".format(selfZ)}",
                 fontSize = 9.sp, color = OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace
             )
         }

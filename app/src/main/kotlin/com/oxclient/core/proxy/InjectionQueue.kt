@@ -17,11 +17,14 @@ object InjectionQueue {
     @Volatile private var clientAddr   : InetAddress?   = null
     @Volatile private var clientPort   : Int            = 0
 
-    // ✅ FIX: RakNet sequence numarasını atomik sayaçla yönet.
-    //         Orijinal kodda yoktu — her enjekte edilen paket için
-    //         benzersiz ve artan bir sequence number gerekir, aksi
-    //         hâlde sunucu duplicate/invalid frame olarak drop eder.
-    private val seqCounter = AtomicInteger(0x7000)
+    // ✅ FIX: Sequence, Reliable index ve Order index AYRI sayaçlarda.
+    //         Önceki kodda hepsi aynı `seq` değerini paylaşıyordu.
+    //         RakNet protokolünde bu üç sayaç bağımsız olarak artar;
+    //         aynı değeri kullanmak sunucunun duplicate/out-of-order
+    //         tespitini bozar ve frame drop'a yol açar.
+    private val seqCounter      = AtomicInteger(0x7000)  // FrameSet sequence
+    private val reliableCounter = AtomicInteger(0)       // Reliable message index
+    private val orderCounter    = AtomicInteger(0)       // Order index
 
     @Volatile var isBound: Boolean = false
         private set
@@ -42,16 +45,12 @@ object InjectionQueue {
         isBound = false
         serverSocket = null; listenSocket = null
         serverAddr = null; clientAddr = null
+        seqCounter.set(0x7000)
+        reliableCounter.set(0)
+        orderCounter.set(0)
         Log.d(TAG, "Unbound")
     }
 
-    // ✅ FIX: Orijinal kod ham 0xFE UDP paketi gönderiyordu.
-    //         Sunucu (2b2tpe dahil tüm Bedrock sunucuları) UDP katmanında
-    //         yalnızca RakNet FrameSet (0x80–0x8F) paketlerini kabul eder.
-    //         Ham 0xFE paketi RakNet seviyesinde tanınmadığı için DROP edilir
-    //         ve KillAura / CrystalAura / Criticals gibi modüllerin gönderdiği
-    //         hiçbir saldırı paketi sunucuya ulaşmaz.
-    //         Çözüm: her enjeksiyonu wrapInFrameSet() ile sarıyoruz.
     fun enqueueToServer(data: ByteArray) {
         if (!isBound) { Log.w(TAG, "ToServer: UNBOUND — paket atlandı"); return }
         val sock = serverSocket ?: return
@@ -75,63 +74,48 @@ object InjectionQueue {
     }
 
     /**
-     * ✅ FIX — RakNet FrameSet wrapper
-     *
-     * Ham Bedrock paket verisini (0xFE + batch body) geçerli bir
-     * RakNet FrameSet datagramına sarar.
+     * RakNet FrameSet wrapper — RELIABLE_ORDERED (reliability=3)
      *
      * Datagram yapısı:
-     *
-     *   ┌─────────────────────────────────────────────┐
-     *   │ [1B]  FrameSet ID = 0x84 (Reliable Ordered) │
-     *   │ [3B]  Sequence Number (Little Endian)        │
-     *   ├─────────────────────────────────────────────┤
-     *   │ Frame header (tek frame):                   │
-     *   │ [1B]  Flags = 0x60                          │
-     *   │        bit7-5 = 011 → Reliability = 3       │
-     *   │        (RELIABLE_ORDERED)                   │
-     *   │        bit4   = 0   → no split              │
-     *   │ [2B]  Bit length of payload (Big Endian)    │
-     *   │ [3B]  Reliable message index (LE)           │
-     *   │ [3B]  Order index (LE)                      │
-     *   │ [1B]  Order channel = 0                     │
-     *   ├─────────────────────────────────────────────┤
-     *   │ [payload] — 0xFE + varint(len) + packetData │
-     *   └─────────────────────────────────────────────┘
-     *
-     * Reliability 3 (RELIABLE_ORDERED) sunucuların beklediği standarttır.
-     * Reliability 2 (RELIABLE) bazı sunucularda ordered olmadığı için
-     * oyun paketlerini reddeder.
+     *   [1B]  FrameSet ID = 0x84
+     *   [3B]  Sequence Number (LE)          ← seqCounter
+     *   [1B]  Flags = 0x60 (reliability=3, no split)
+     *   [2B]  Payload bit length (BE)
+     *   [3B]  Reliable message index (LE)   ← reliableCounter  ✅ AYRI SAYAÇ
+     *   [3B]  Order index (LE)              ← orderCounter      ✅ AYRI SAYAÇ
+     *   [1B]  Order channel = 0
+     *   [N]   Payload (0xFE + batch data)
      */
     private fun wrapInFrameSet(payload: ByteArray): ByteArray {
-        val seq    = seqCounter.getAndIncrement() and 0xFFFFFF
-        val bitLen = payload.size * 8
+        val seq      = seqCounter.getAndIncrement()      and 0xFFFFFF
+        val reliable = reliableCounter.getAndIncrement() and 0xFFFFFF
+        val order    = orderCounter.getAndIncrement()    and 0xFFFFFF
+        val bitLen   = payload.size * 8
 
         val out = java.io.ByteArrayOutputStream(payload.size + 27)
 
         // ── FrameSet başlığı ──────────────────────────────────────────────
-        out.write(0x84)                         // Reliable Ordered FrameSet ID
-        out.write(seq and 0xFF)                 // sequence byte 0 (LE)
-        out.write((seq shr 8) and 0xFF)         // sequence byte 1
-        out.write((seq shr 16) and 0xFF)        // sequence byte 2
+        out.write(0x84)
+        out.write(seq and 0xFF)
+        out.write((seq shr 8) and 0xFF)
+        out.write((seq shr 16) and 0xFF)
 
         // ── Frame başlığı ─────────────────────────────────────────────────
-        // Flags: reliability=3 (RELIABLE_ORDERED) → bits 7-5 = 011 → 0x60
-        out.write(0x60)
+        out.write(0x60)                         // RELIABLE_ORDERED flags
 
-        // Payload bit uzunluğu (Big Endian, 2 byte)
+        // Payload bit uzunluğu (Big Endian)
         out.write((bitLen shr 8) and 0xFF)
         out.write(bitLen and 0xFF)
 
-        // Reliable message index (Little Endian, 3 byte)
-        out.write(seq and 0xFF)
-        out.write((seq shr 8) and 0xFF)
-        out.write((seq shr 16) and 0xFF)
+        // Reliable message index (Little Endian, 3 byte) ✅ reliableCounter
+        out.write(reliable and 0xFF)
+        out.write((reliable shr 8) and 0xFF)
+        out.write((reliable shr 16) and 0xFF)
 
-        // Order index (Little Endian, 3 byte)
-        out.write(seq and 0xFF)
-        out.write((seq shr 8) and 0xFF)
-        out.write((seq shr 16) and 0xFF)
+        // Order index (Little Endian, 3 byte) ✅ orderCounter
+        out.write(order and 0xFF)
+        out.write((order shr 8) and 0xFF)
+        out.write((order shr 16) and 0xFF)
 
         // Order channel
         out.write(0x00)
