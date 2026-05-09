@@ -48,6 +48,7 @@ import com.oxclient.R
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.proxy.InjectionQueue
 import com.oxclient.module.*
+import com.oxclient.session.SessionManager
 import com.oxclient.ui.theme.*
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -178,18 +179,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
-    /** Shortcut listesini yeniden oluşturur */
     private fun refreshShortcuts() {
         val activeShortcuts = ModuleManager.shortcutModules().map { it.name }.toSet()
 
-        // Kapananları kaldır
         val toRemove = shortcutViews.entries.filter { it.key !in activeShortcuts }
         toRemove.forEach { (name, view) ->
             try { wm.removeViewImmediate(view) } catch (_: Exception) {}
             shortcutViews.remove(name)
         }
 
-        // Yeni açılanları ekle
         ModuleManager.shortcutModules().forEach { mod ->
             if (mod.name !in shortcutViews) {
                 val pos = shortcutPositions.getOrPut(mod.name) {
@@ -211,7 +209,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     )
                 }
                 shortcutViews[mod.name] = view
-                try { wm.addView(view, params) } catch (e: Exception) { Log.e(TAG, "Shortcut ${mod.name}: ${e.message}") }
+                try { wm.addView(view, params) } catch (e: Exception) {
+                    Log.e(TAG, "Shortcut ${mod.name}: ${e.message}")
+                }
             }
         }
     }
@@ -314,9 +314,7 @@ private fun FabButton(onDrag: (Float, Float) -> Unit, onClick: () -> Unit) {
             .background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark)))
             .border(2.dp, OxPurpleLight.copy(alpha = 0.7f), CircleShape)
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { if (!isDragging) onClick() }
-                )
+                detectTapGestures(onTap = { if (!isDragging) onClick() })
             }
             .pointerInput(Unit) {
                 detectDragGestures(
@@ -331,31 +329,19 @@ private fun FabButton(onDrag: (Float, Float) -> Unit, onClick: () -> Unit) {
             },
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            "Ox",
-            color      = Color.White,
-            fontSize   = 15.sp,
-            fontWeight = FontWeight.ExtraBold,
-            fontFamily = FontFamily.Monospace
-        )
+        Text("Ox", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
     }
 }
 
 // ── Shortcut Butonu ──────────────────────────────────────────────────────────
 
 @Composable
-private fun ShortcutButton(
-    module  : BaseModule,
-    onDrag  : (Float, Float) -> Unit,
-    onToggle: () -> Unit
-) {
+private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, onToggle: () -> Unit) {
     var enabled    by remember { mutableStateOf(module.isEnabled) }
     var totalDrag  by remember { mutableFloatStateOf(0f) }
     var isDragging by remember { mutableStateOf(false) }
 
-    LaunchedEffect(module) {
-        module.enabledFlow.collect { enabled = it }
-    }
+    LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
 
     val bgColor = if (enabled)
         Brush.horizontalGradient(listOf(OxPurple.copy(0.85f), OxPurpleDark.copy(0.85f)))
@@ -370,11 +356,7 @@ private fun ShortcutButton(
             .clip(RoundedCornerShape(10.dp))
             .background(bgColor)
             .border(if (enabled) 1.5.dp else 0.8.dp, borderColor, RoundedCornerShape(10.dp))
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { if (!isDragging) onToggle() }
-                )
-            }
+            .pointerInput(Unit) { detectTapGestures(onTap = { if (!isDragging) onToggle() }) }
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { isDragging = true; totalDrag = 0f },
@@ -389,120 +371,75 @@ private fun ShortcutButton(
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            module.name,
-            fontSize   = 11.sp,
-            fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal,
-            color      = if (enabled) Color.White else OxOnSurface.copy(0.7f),
-            fontFamily = FontFamily.Monospace,
-            maxLines   = 1,
-            overflow   = TextOverflow.Ellipsis
-        )
+        Text(module.name, fontSize = 11.sp, fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal,
+            color = if (enabled) Color.White else OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 // ── Hile Menüsü ──────────────────────────────────────────────────────────────
 
 @Composable
-private fun HileMenu(
-    onClose          : () -> Unit,
-    moduleVersion    : Int,
-    onShortcutChanged: () -> Unit,
-    modifier         : Modifier = Modifier
-) {
+private fun HileMenu(onClose: () -> Unit, moduleVersion: Int, onShortcutChanged: () -> Unit, modifier: Modifier = Modifier) {
     var cat by remember { mutableStateOf(ModuleCategory.COMBAT) }
     val mods = remember(moduleVersion, cat) { ModuleManager.byCategory(cat) }
 
     Box(
         modifier = modifier
-            .fillMaxHeight()
-            .width(300.dp)
+            .fillMaxHeight().width(300.dp)
             .background(Brush.verticalGradient(listOf(Color(0xFF1A1A2E), Color(0xFF16213E))))
             .border(1.dp, OxPurple.copy(0.5f), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
             .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-            .pointerInput(Unit) { detectTapGestures { /* tıklamaları yut */ } }
+            .pointerInput(Unit) { detectTapGestures { /* yut */ } }
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
 
             // Header
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(OxPurpleDark.copy(0.5f))
-                    .padding(16.dp),
+                modifier = Modifier.fillMaxWidth().background(OxPurpleDark.copy(0.5f)).padding(16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "OxClient",
-                    fontSize   = 18.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color      = Color.White,
-                    fontFamily = FontFamily.Monospace
-                )
+                Text("OxClient", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, fontFamily = FontFamily.Monospace)
                 Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(OxError.copy(0.2f))
-                        .border(1.dp, OxError.copy(0.5f), CircleShape)
-                        .clickable { onClose() },
+                    modifier = Modifier.size(28.dp).clip(CircleShape).background(OxError.copy(0.2f))
+                        .border(1.dp, OxError.copy(0.5f), CircleShape).clickable { onClose() },
                     contentAlignment = Alignment.Center
-                ) {
-                    Text("✕", color = OxError, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                }
+                ) { Text("✕", color = OxError, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
             }
 
-            // ── Debug Bilgi Çubuğu ────────────────────────────────────────
+            // Debug Bar
             DebugInfoBar()
             Spacer(Modifier.height(4.dp))
             HorizontalDivider(color = OxPurple.copy(0.3f))
             Spacer(Modifier.height(4.dp))
 
-            // Kategori sekmeleri
+            // Kategoriler
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 ModuleCategory.entries.forEach { c ->
                     val sel = c == cat
                     Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
+                        modifier = Modifier.clip(RoundedCornerShape(20.dp))
                             .background(if (sel) OxPurple else OxSurface)
                             .border(1.dp, if (sel) OxPurple else OxOutline, RoundedCornerShape(20.dp))
-                            .clickable { cat = c }
-                            .padding(horizontal = 12.dp, vertical = 5.dp)
+                            .clickable { cat = c }.padding(horizontal = 12.dp, vertical = 5.dp)
                     ) {
-                        Text(
-                            c.displayName,
-                            fontSize   = 11.sp,
-                            color      = if (sel) Color.White else OxOnSurface,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal
-                        )
+                        Text(c.displayName, fontSize = 11.sp, color = if (sel) Color.White else OxOnSurface,
+                            fontFamily = FontFamily.Monospace, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
                     }
                 }
             }
 
-            // Modül listesi
+            // Modüller
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 8.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding      = PaddingValues(vertical = 6.dp)
+                contentPadding = PaddingValues(vertical = 6.dp)
             ) {
-                items(mods) { mod ->
-                    ModuleCard(
-                        module = mod,
-                        onShortcutChanged = onShortcutChanged
-                    )
-                }
+                items(mods) { mod -> ModuleCard(module = mod, onShortcutChanged = onShortcutChanged) }
             }
         }
     }
@@ -516,105 +453,49 @@ private fun DebugInfoBar() {
     val entityCount = EntityTracker.getEntities().size
     val playerCount = EntityTracker.getEntities().values.count { it.isPlayer }
     val isBound = InjectionQueue.isBound
+    val vpnActive = SessionManager.isActive.collectAsState(initial = false).value
+    val vpnHost = SessionManager.connectedHost
+    val vpnPort = SessionManager.connectedPort
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xDD0D0D1A))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().background(Color(0xDD0D0D1A)).padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("⚡ OxClient", fontSize = 10.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
             Text(
-                "⚡ Durum",
+                when { vpnActive && isBound && selfId != 0L -> "✅ AKTIF"; vpnActive -> "🟡 VPN VAR"; else -> "❌ BEKLİYOR" },
                 fontSize = 10.sp,
-                color = OxPurpleLight,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                if (selfId != 0L && isBound) "✅ AKTIF" else "❌ BEKLİYOR",
-                fontSize = 10.sp,
-                color = if (selfId != 0L && isBound) Color(0xFF1AFF6E) else OxError,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold
+                color = when { vpnActive && isBound && selfId != 0L -> Color(0xFF1AFF6E); vpnActive -> Color(0xFFFFAA00); else -> OxError },
+                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold
             )
         }
+        HorizontalDivider(color = OxPurple.copy(0.2f))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                "Entity ID:",
-                fontSize = 9.sp,
-                color = OxOnSurface.copy(0.6f),
-                fontFamily = FontFamily.Monospace
-            )
-            Text(
-                if (selfId == 0L) "Bekleniyor..." else "$selfId",
-                fontSize = 9.sp,
-                color = if (selfId == 0L) OxError.copy(0.8f) else Color(0xFF1AFF6E),
-                fontFamily = FontFamily.Monospace
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("VPN:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
+            Text(if (vpnActive) "✅ $vpnHost:$vpnPort" else "❌ Kapalı", fontSize = 9.sp,
+                color = if (vpnActive) Color(0xFF1AFF6E) else OxError.copy(0.8f), fontFamily = FontFamily.Monospace)
         }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                "Varlık/Oyuncu:",
-                fontSize = 9.sp,
-                color = OxOnSurface.copy(0.6f),
-                fontFamily = FontFamily.Monospace
-            )
-            Text(
-                "$entityCount / $playerCount",
-                fontSize = 9.sp,
-                color = if (playerCount > 0) Color(0xFF1AFF6E) else OxOnSurface.copy(0.7f),
-                fontFamily = FontFamily.Monospace
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Self ID:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
+            Text(if (selfId == 0L) "Bekleniyor..." else "$selfId", fontSize = 9.sp,
+                color = if (selfId == 0L) OxError.copy(0.8f) else Color(0xFF1AFF6E), fontFamily = FontFamily.Monospace)
         }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                "Enjeksiyon:",
-                fontSize = 9.sp,
-                color = OxOnSurface.copy(0.6f),
-                fontFamily = FontFamily.Monospace
-            )
-            Text(
-                if (isBound) "✅ Bağlı" else "❌ Bağlı Değil",
-                fontSize = 9.sp,
-                color = if (isBound) Color(0xFF1AFF6E) else OxError,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Varlık/Oyuncu:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
+            Text("$entityCount / $playerCount", fontSize = 9.sp,
+                color = if (playerCount > 0) Color(0xFF1AFF6E) else OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace)
         }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                "Konum:",
-                fontSize = 9.sp,
-                color = OxOnSurface.copy(0.6f),
-                fontFamily = FontFamily.Monospace
-            )
-            Text(
-                "${"%.1f".format(EntityTracker.selfX)}, ${"%.1f".format(EntityTracker.selfY)}, ${"%.1f".format(EntityTracker.selfZ)}",
-                fontSize = 9.sp,
-                color = OxOnSurface.copy(0.7f),
-                fontFamily = FontFamily.Monospace
-            )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Enjeksiyon:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
+            Text(if (isBound) "✅ Bağlı" else "❌ Bağlı Değil", fontSize = 9.sp,
+                color = if (isBound) Color(0xFF1AFF6E) else OxError, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Konum:", fontSize = 9.sp, color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
+            Text("${"%.1f".format(EntityTracker.selfX)}, ${"%.1f".format(EntityTracker.selfY)}, ${"%.1f".format(EntityTracker.selfZ)}",
+                fontSize = 9.sp, color = OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace)
         }
     }
 }
@@ -622,111 +503,46 @@ private fun DebugInfoBar() {
 // ── Modül Kartı ──────────────────────────────────────────────────────────────
 
 @Composable
-private fun ModuleCard(
-    module           : BaseModule,
-    onShortcutChanged: () -> Unit
-) {
+private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
     var enabled  by remember { mutableStateOf(module.isEnabled) }
     var expanded by remember { mutableStateOf(false) }
     val settings = module.settings
 
-    LaunchedEffect(module) {
-        module.enabledFlow.collect { enabled = it }
-    }
+    LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
             .background(if (enabled) OxPurple.copy(0.15f) else OxSurface)
-            .border(
-                1.dp,
-                if (enabled) OxPurple.copy(0.5f) else OxOutline.copy(0.3f),
-                RoundedCornerShape(10.dp)
-            )
+            .border(1.dp, if (enabled) OxPurple.copy(0.5f) else OxOutline.copy(0.3f), RoundedCornerShape(10.dp))
     ) {
-        // Başlık satırı
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment     = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // İsim + açıklama
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { ModuleManager.toggle(module); enabled = module.isEnabled }
-            ) {
-                Text(
-                    module.name,
-                    fontSize   = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color      = if (enabled) Color.White else OxOnSurface,
-                    fontFamily = FontFamily.Monospace
-                )
+            Column(modifier = Modifier.weight(1f).clickable { ModuleManager.toggle(module); enabled = module.isEnabled }) {
+                Text(module.name, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    color = if (enabled) Color.White else OxOnSurface, fontFamily = FontFamily.Monospace)
                 if (module.description.isNotBlank()) {
-                    Text(
-                        module.description,
-                        fontSize   = 10.sp,
-                        color      = OxOnSurface.copy(0.5f),
-                        fontFamily = FontFamily.Monospace,
-                        maxLines   = 1,
-                        overflow   = TextOverflow.Ellipsis
-                    )
+                    Text(module.description, fontSize = 10.sp, color = OxOnSurface.copy(0.5f),
+                        fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-
-            // Kontroller
-            Row(
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (settings.isNotEmpty()) {
-                    Text(
-                        if (expanded) "▲" else "▼",
-                        fontSize   = 12.sp,
-                        color      = OxPurpleLight,
+                    Text(if (expanded) "▲" else "▼", fontSize = 12.sp, color = OxPurpleLight,
                         fontFamily = FontFamily.Monospace,
-                        modifier   = Modifier
-                            .clickable { expanded = !expanded }
-                            .padding(4.dp)
-                    )
+                        modifier = Modifier.clickable { expanded = !expanded }.padding(4.dp))
                 }
-
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = {
-                        ModuleManager.toggle(module)
-                        enabled = module.isEnabled
-                        onShortcutChanged()
-                    },
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = OxPurple,
-                        checkedThumbColor = Color.White
-                    ),
-                    modifier = Modifier.height(20.dp)
-                )
+                Switch(checked = enabled, onCheckedChange = { ModuleManager.toggle(module); enabled = module.isEnabled; onShortcutChanged() },
+                    colors = SwitchDefaults.colors(checkedTrackColor = OxPurple, checkedThumbColor = Color.White),
+                    modifier = Modifier.height(20.dp))
             }
         }
-
-        // Genişletilmiş ayarlar
-        AnimatedVisibility(
-            visible = expanded && settings.isNotEmpty(),
-            enter   = expandVertically() + fadeIn(),
-            exit    = shrinkVertically() + fadeOut()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0x22000000))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                settings.forEach { s ->
-                    SettingRow(setting = s, onShortcutChanged = onShortcutChanged)
-                }
+        AnimatedVisibility(visible = expanded && settings.isNotEmpty(), enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            Column(modifier = Modifier.fillMaxWidth().background(Color(0x22000000)).padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                settings.forEach { s -> SettingRow(setting = s, onShortcutChanged = onShortcutChanged) }
             }
         }
     }
@@ -740,113 +556,57 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
         is FloatSetting -> {
             var v by remember { mutableFloatStateOf(setting.value) }
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(setting.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
                     Text("%.2f".format(v), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
                 }
-                Slider(
-                    value       = v,
-                    onValueChange = { v = it; setting.value = it },
-                    valueRange  = setting.min..setting.max,
-                    modifier    = Modifier.height(24.dp),
-                    colors      = SliderDefaults.colors(
-                        thumbColor        = OxPurple,
-                        activeTrackColor  = OxPurple,
-                        inactiveTrackColor = OxPurple.copy(0.3f)
-                    )
-                )
+                Slider(value = v, onValueChange = { v = it; setting.value = it }, valueRange = setting.min..setting.max,
+                    modifier = Modifier.height(24.dp),
+                    colors = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple, inactiveTrackColor = OxPurple.copy(0.3f)))
             }
         }
-
         is IntSetting -> {
             var v by remember { mutableFloatStateOf(setting.value.toFloat()) }
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(setting.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
                     Text(v.roundToInt().toString(), fontSize = 11.sp, color = OxPurpleLight, fontFamily = FontFamily.Monospace)
                 }
-                Slider(
-                    value       = v,
-                    onValueChange = { v = it; setting.value = it.roundToInt() },
-                    valueRange  = setting.min.toFloat()..setting.max.toFloat(),
-                    steps       = (setting.max - setting.min - 1).coerceAtLeast(0),
-                    modifier    = Modifier.height(24.dp),
-                    colors      = SliderDefaults.colors(
-                        thumbColor        = OxPurple,
-                        activeTrackColor  = OxPurple
-                    )
-                )
+                Slider(value = v, onValueChange = { v = it; setting.value = it.roundToInt() },
+                    valueRange = setting.min.toFloat()..setting.max.toFloat(),
+                    steps = (setting.max - setting.min - 1).coerceAtLeast(0), modifier = Modifier.height(24.dp),
+                    colors = SliderDefaults.colors(thumbColor = OxPurple, activeTrackColor = OxPurple))
             }
         }
-
         is BoolSetting -> {
             var v by remember { mutableStateOf(setting.value) }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically
-            ) {
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(setting.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                Switch(
-                    checked = v,
-                    onCheckedChange = {
-                        v = it; setting.value = it
-                        if (setting.name == "Shortcut") onShortcutChanged()
-                    },
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = OxPurple,
-                        checkedThumbColor = Color.White
-                    )
-                )
+                Switch(checked = v, onCheckedChange = { v = it; setting.value = it; if (setting.name == "Shortcut") onShortcutChanged() },
+                    colors = SwitchDefaults.colors(checkedTrackColor = OxPurple, checkedThumbColor = Color.White))
             }
         }
-
         is EnumSetting<*> -> {
             @Suppress("UNCHECKED_CAST")
             val es = setting as EnumSetting<Enum<*>>
             var sel by remember { mutableStateOf(es.value) }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(es.name, fontSize = 11.sp, color = OxOnSurface, fontFamily = FontFamily.Monospace)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier             = Modifier.horizontalScroll(rememberScrollState())
-                ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                     es.values.forEach { opt ->
                         val isSel = sel == opt
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (isSel) OxPurple else OxSurfaceVar)
-                                .border(
-                                    1.dp,
-                                    if (isSel) OxPurple.copy(0.5f) else OxOutline.copy(0.3f),
-                                    RoundedCornerShape(12.dp)
-                                )
-                                .clickable {
-                                    sel = opt; es.value = opt
-                                }
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                opt.name.lowercase().replaceFirstChar { it.uppercase() },
-                                fontSize   = 10.sp,
-                                color      = if (isSel) Color.White else OxOnSurface,
-                                fontFamily = FontFamily.Monospace
-                            )
+                        Box(modifier = Modifier.clip(RoundedCornerShape(12.dp))
+                            .background(if (isSel) OxPurple else OxSurfaceVar)
+                            .border(1.dp, if (isSel) OxPurple.copy(0.5f) else OxOutline.copy(0.3f), RoundedCornerShape(12.dp))
+                            .clickable { sel = opt; es.value = opt }.padding(horizontal = 8.dp, vertical = 3.dp)) {
+                            Text(opt.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 10.sp,
+                                color = if (isSel) Color.White else OxOnSurface, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
             }
         }
-
         else -> {}
     }
 }
