@@ -5,8 +5,10 @@
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
-    <!-- VPN -->
+    <!-- VPN (protect() için gerekli — tünel açmadan da kullanılabilir) -->
     <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
 
     <!-- Foreground Services -->
@@ -17,7 +19,7 @@
     <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- Wake Lock -->
+    <!-- Wake Lock — proxy arka planda çalışırken uyumasın -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Android 11+ Paket Görünürlüğü -->
@@ -56,7 +58,7 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- VPN Servisi -->
+        <!-- OxRelay Proxy Servisi (VpnService'ten miras — tünel açmıyor) -->
         <service
             android:name=".core.vpn.OxVpnService"
             android:exported="false"
@@ -67,7 +69,7 @@
             </intent-filter>
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="VPN_tunnel_for_Minecraft_Bedrock_proxy" />
+                android:value="UDP_proxy_relay_for_Minecraft_Bedrock" />
         </service>
 
         <!-- Oyun içi Overlay -->
