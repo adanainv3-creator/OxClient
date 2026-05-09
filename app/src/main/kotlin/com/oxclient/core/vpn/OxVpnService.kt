@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.widget.Toast
@@ -26,7 +25,7 @@ class OxVpnService : VpnService() {
 
         private const val NOTIF_ID   = 1337
         private const val CHANNEL_ID = "oxclient_vpn"
-        private const val PROXY_PORT = 19132   // 19133 → 19132: Minecraft LAN discovery sadece bu portu tarar
+        private const val PROXY_PORT = 19132
         private const val TUN_ADDR   = "10.233.0.1"
         private const val TUN_MTU    = 1500
     }
@@ -49,7 +48,6 @@ class OxVpnService : VpnService() {
 
     private fun handleStart() {
         Log.i(TAG, "VPN başlatılıyor…")
-
         try {
             startForeground(NOTIF_ID, buildNotification())
             Log.i(TAG, "Foreground OK")
@@ -63,22 +61,30 @@ class OxVpnService : VpnService() {
                 val targetPort = ServerConfig.getPortBlocking()
                 Log.i(TAG, "Hedef: $targetHost:$targetPort")
 
+                // VPN tüneli açılmadan ÖNCE DNS çöz (tünel açıkken döngüye girer)
+                val targetIp = resolveHost(targetHost)
+                Log.i(TAG, "Hedef IP: $targetIp")
+
                 // ÖNCE proxy başlat
                 val proxy = MITMProxy(targetHost, targetPort, PROXY_PORT)
                 proxy.start()
                 mitmProxy = proxy
-                delay(300)
-                Log.i(TAG, "Proxy: ${proxy.isRunning}")
+                delay(400)
+                Log.i(TAG, "Proxy çalışıyor: ${proxy.isRunning}")
 
                 // SONRA VPN tüneli
-                val tun = buildVpnInterface()
+                val tun = if (targetIp.isNotBlank()) buildVpnInterface(targetIp) else null
                 if (tun == null) {
-                    Log.e(TAG, "VPN NULL — 2. yöntem deneniyor…")
+                    Log.e(TAG, "Spesifik route başarısız — fallback deneniyor…")
                     val tun2 = buildVpnInterfaceFallback()
                     if (tun2 == null) {
                         Log.e(TAG, "VPN tamamen başarısız")
                         withContext(Dispatchers.Main) {
-                            Toast.makeText(this@OxVpnService, "❌ VPN kurulamadı! Lütfen diğer VPN'leri kapatıp tekrar deneyin.", Toast.LENGTH_LONG).show()
+                            Toast.makeText(
+                                this@OxVpnService,
+                                "❌ VPN kurulamadı! Diğer VPN'leri kapatıp tekrar deneyin.",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                         proxy.stop()
                         stopSelf()
@@ -91,17 +97,22 @@ class OxVpnService : VpnService() {
                     Log.i(TAG, "VPN OK")
                 }
 
-                // Socket'leri koru
-                proxy.getListenSocket()?.let { s -> runCatching { protect(s) }.onSuccess { Log.i(TAG, "ListenSocket korundu") } }
-                proxy.getServerSocket()?.let { s -> runCatching { protect(s) }.onSuccess { Log.i(TAG, "ServerSocket korundu") } }
+                // Proxy socket'lerini tünelin DIŞINDA tut — döngü oluşmaz
+                proxy.getListenSocket()?.let { s ->
+                    runCatching { protect(s) }.onSuccess { Log.i(TAG, "ListenSocket korundu") }
+                }
+                proxy.getServerSocket()?.let { s ->
+                    runCatching { protect(s) }.onSuccess { Log.i(TAG, "ServerSocket korundu") }
+                }
 
                 SessionManager.onSessionStart(targetHost, targetPort)
-                Log.i(TAG, "✓ VPN AKTIF")
+                Log.i(TAG, "✓ VPN AKTİF — $targetHost:$targetPort → proxy :$PROXY_PORT")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@OxVpnService, "✓ VPN aktif!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@OxVpnService, "✓ OxRelay aktif!", Toast.LENGTH_SHORT).show()
                 }
+
             } catch (e: CancellationException) {
-                Log.w(TAG, "İptal")
+                Log.w(TAG, "İptal edildi")
             } catch (e: Exception) {
                 Log.e(TAG, "VPN HATA", e)
                 handleStop()
@@ -109,24 +120,31 @@ class OxVpnService : VpnService() {
         }
     }
 
-    /** Birincil yöntem: addAllowedApplication ile sadece Minecraft */
-    private fun buildVpnInterface(): ParcelFileDescriptor? {
+    /**
+     * Birincil yöntem:
+     * Sadece hedef sunucu IP'sine /32 route ekler.
+     * Minecraft bu IP'ye gitmeye çalışır → tünele girer → proxy karşılar.
+     * Proxy'nin kendi soketi protect() ile tünelin dışındadır → döngü oluşmaz.
+     */
+    private fun buildVpnInterface(targetIp: String): ParcelFileDescriptor? {
         return try {
             Builder().apply {
                 setMtu(TUN_MTU)
                 addAddress(TUN_ADDR, 32)
                 addDnsServer("8.8.8.8")
                 addDnsServer("1.1.1.1")
-                // SADECE addAllowed — route YOK
+                addRoute(targetIp, 32)  // Sadece hedef IP tünelden geçer
                 addAllowedApplication("com.mojang.minecraftpe")
                 runCatching { addAllowedApplication("com.netease.mc") }
                 runCatching { addAllowedApplication("com.mojang.minecrafttrialpe") }
                 setSession("OxClient")
-                setConfigureIntent(PendingIntent.getActivity(
-                    this@OxVpnService, 0,
-                    Intent(this@OxVpnService, DashboardActivity::class.java),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                ))
+                setConfigureIntent(
+                    PendingIntent.getActivity(
+                        this@OxVpnService, 0,
+                        Intent(this@OxVpnService, DashboardActivity::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
             }.establish()
         } catch (e: Exception) {
             Log.e(TAG, "Birincil VPN hatası: ${e.message}")
@@ -134,24 +152,45 @@ class OxVpnService : VpnService() {
         }
     }
 
-    /** Yedek yöntem: Tüm trafiği yakala, filtre yok */
+    /**
+     * Yedek yöntem: Tüm trafiği tünele al.
+     * IP çözülemezse veya spesifik route başarısız olursa devreye girer.
+     */
     private fun buildVpnInterfaceFallback(): ParcelFileDescriptor? {
         return try {
             Builder().apply {
                 setMtu(TUN_MTU)
                 addAddress(TUN_ADDR, 32)
                 addRoute("0.0.0.0", 0)
-                // addAllowedApplication YOK — tüm trafik VPN'den geçer
+                addDnsServer("8.8.8.8")
+                addDnsServer("1.1.1.1")
                 setSession("OxClient")
-                setConfigureIntent(PendingIntent.getActivity(
-                    this@OxVpnService, 0,
-                    Intent(this@OxVpnService, DashboardActivity::class.java),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                ))
+                setConfigureIntent(
+                    PendingIntent.getActivity(
+                        this@OxVpnService, 0,
+                        Intent(this@OxVpnService, DashboardActivity::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
             }.establish()
         } catch (e: Exception) {
             Log.e(TAG, "Fallback VPN hatası: ${e.message}")
             null
+        }
+    }
+
+    /**
+     * VPN tüneli açılmadan ÖNCE çağrılmalı.
+     * Tünel açıkken DNS sorgusu tünele girer → döngü → timeout.
+     */
+    private suspend fun resolveHost(host: String): String {
+        return withContext(Dispatchers.IO) {
+            try {
+                java.net.InetAddress.getByName(host).hostAddress ?: ""
+            } catch (e: Exception) {
+                Log.w(TAG, "DNS çözümlenemedi: $host — ${e.message}")
+                ""
+            }
         }
     }
 
@@ -168,13 +207,16 @@ class OxVpnService : VpnService() {
 
     private fun buildNotification(): Notification {
         createChannel()
-        val pi = PendingIntent.getActivity(this, 0,
+        val pi = PendingIntent.getActivity(
+            this, 0,
             Intent(this, DashboardActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val stopPi = PendingIntent.getService(this, 1,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val stopPi = PendingIntent.getService(
+            this, 1,
             Intent(this, OxVpnService::class.java).apply { action = ACTION_STOP },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("OxClient VPN Aktif")
             .setContentText("Minecraft trafiği yönlendiriliyor")
@@ -190,12 +232,12 @@ class OxVpnService : VpnService() {
         try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-            nm.createNotificationChannel(NotificationChannel(
-                CHANNEL_ID, "OxClient VPN", NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "VPN bağlantı durumu"
-                setShowBadge(false)
-            })
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "OxClient VPN", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "VPN bağlantı durumu"
+                    setShowBadge(false)
+                }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Kanal hatası", e)
         }
