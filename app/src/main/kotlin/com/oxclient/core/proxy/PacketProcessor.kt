@@ -5,156 +5,208 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
+/**
+ * PacketProcessor
+ *
+ * Bedrock batch (0xFE payload) içindeki paketleri işler.
+ *
+ * Batch format:
+ *   [varint(len)][packet_data] × N
+ *
+ * NOT: Protokol 748'de varsayılan olarak sıkıştırma KAPALIDIR.
+ * NetworkSettings paketi gönderilene kadar batch body sıkıştırılmaz.
+ * NetworkSettings sonrası sıkıştırma açılır ama bu proxy bunu
+ * pass-through yapar (sıkıştırılmış içeriği çözmez, sadece EventBus'a bildirir).
+ *
+ * Bu yaklaşım neden doğru:
+ * - Login/Handshake aşamasında sıkıştırma YOK → parse edilebilir
+ * - Oyun başladıktan sonra NetworkSettings paketi gelir → sıkıştırma açılır
+ * - Sıkıştırma açılınca batch içini parse etmek için zlib inflate gerekir
+ * - Biz sadece paket ID'yi okuyup EventBus'a bildiriyoruz
+ * - Eğer modül cancel/modify etmezse orijinal veriyi iletiyoruz
+ *
+ * Zaman aşımı sorununun düzeltilmesi:
+ * - processFrameSet MITMProxy'ye taşındı
+ * - Burası sadece batch body işler
+ * - Hata olursa orijinal veri döner (null/crash değil)
+ */
 object PacketProcessor {
 
     private const val TAG = "PacketProcessor"
 
-    fun process(raw: ByteArray, direction: PacketEvent.Direction): ByteArray? {
-        if (raw.isEmpty()) return raw
+    // NetworkSettings paketinden sonra sıkıştırma açılır
+    @Volatile var compressionEnabled = false
+    @Volatile var compressionAlgorithm = 0  // 0=zlib, 1=snappy
 
-        val firstByte = raw[0].toInt() and 0xFF
+    /**
+     * Bedrock batch body'sini işle (0xFE'nin arkasındaki baytlar).
+     *
+     * @param body      0xFE sonrası ham baytlar
+     * @param direction Paketin yönü
+     * @return          Güncellenmiş body veya null (hiçbir paket kalmadı)
+     *                  Hata durumunda orijinal body döner.
+     */
+    fun processBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
+        if (body.isEmpty()) return body
 
-        return when {
-            firstByte == BedrockPacketIds.RAKNET_ACK ||
-            firstByte == BedrockPacketIds.RAKNET_NACK -> raw
-
-            firstByte in 0x80..0x8F -> processFrameSet(raw, direction)
-
-            else -> raw
-        }
-    }
-
-    private fun processFrameSet(raw: ByteArray, direction: PacketEvent.Direction): ByteArray? {
-        if (raw.size < 4) return raw
-
-        val flags       = raw[0]
-        val seqNumBytes = raw.copyOfRange(1, 4)
-        val buf         = ByteBuffer.wrap(raw, 4, raw.size - 4).order(ByteOrder.BIG_ENDIAN)
-
-        val newFrames = mutableListOf<ByteArray>()
-        var anyChanged = false
-
-        while (buf.hasRemaining()) {
-            if (buf.remaining() < 3) break
-
-            val frameStart   = buf.position()
-            val reliability  = buf.get().toInt() and 0xFF
-            val oldBits      = ((buf.get().toInt() and 0xFF) shl 8) or (buf.get().toInt() and 0xFF)
-            val oldLen       = oldBits / 8
-            val headerPos    = buf.position()
-            skipReliabilityHeaders(buf, reliability)
-            val headerLen    = buf.position() - frameStart
-
-            if (buf.remaining() < oldLen) { buf.position(frameStart); break }
-
-            val payload = ByteArray(oldLen)
-            buf.get(payload)
-
-            // === ENTITY TRACKER === sunucudan gelen veriyi işle
-            if (direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
-                processForTracker(payload, direction)
+        return try {
+            if (compressionEnabled) {
+                // Sıkıştırılmış → decompress + işle + compress
+                processCompressedBatch(body, direction)
+            } else {
+                // Sıkıştırılmamış → direkt işle
+                processRawBatch(body, direction)
             }
-
-            val processed = processBatchPayload(payload, direction)
-            if (processed == null) { anyChanged = true; continue }
-
-            val newBits = processed.size * 8
-            if (!processed.contentEquals(payload) || newBits != oldBits) anyChanged = true
-
-            val out = ByteArrayOutputStream()
-            out.write(reliability)
-            out.write((newBits shr 8) and 0xFF)
-            out.write(newBits and 0xFF)
-            if (headerLen > 3) out.write(raw, 4 + frameStart + 3, headerLen - 3)
-            out.write(processed)
-            newFrames.add(out.toByteArray())
-        }
-
-        if (newFrames.isEmpty()) return null
-        if (!anyChanged) return raw
-
-        val out = ByteArrayOutputStream()
-        out.write(flags.toInt())
-        out.write(seqNumBytes)
-        newFrames.forEach { out.write(it) }
-        return out.toByteArray()
-    }
-
-    /** Sadece EntityTracker için batch payload'u işler (publish etmez) */
-    private fun processForTracker(payload: ByteArray, direction: PacketEvent.Direction) {
-        if (payload.isEmpty() || payload[0] != 0xFE.toByte()) return
-        val inner  = payload.copyOfRange(1, payload.size)
-        val stream = ByteArrayInputStream(inner)
-        while (stream.available() > 0) {
-            val len = readVarInt(stream)
-            if (len <= 0 || stream.available() < len) break
-            val data = ByteArray(len); stream.read(data)
-            val idStream = ByteArrayInputStream(data)
-            val pktId = readVarInt(idStream)
-            // EntityTracker'a bildir
-            try {
-                EntityTracker.onPacket(PacketEvent(pktId, data, direction))
-            } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Batch işleme hatası, orijinal veri iletiliyor: ${e.message}")
+            body  // Hata → orijinal ilet, bağlantıyı kesme
         }
     }
 
-    private fun skipReliabilityHeaders(buf: ByteBuffer, reliability: Int) {
-        val rt = reliability shr 5
-        if (rt in intArrayOf(2,3,4,6,7) && buf.remaining()>=3) buf.position(buf.position()+3)
-        if (rt in intArrayOf(1,4) && buf.remaining()>=3) buf.position(buf.position()+3)
-        if (rt in intArrayOf(3,4,5,6,7) && buf.remaining()>=4) buf.position(buf.position()+4)
-        if ((reliability and 0x10)!=0 && buf.remaining()>=10) buf.position(buf.position()+10)
-    }
+    // ─────────────────────────────────────────────────────────────────────
+    //  SIKIŞTIRMASIZ BATCH
+    // ─────────────────────────────────────────────────────────────────────
 
-    private fun processBatchPayload(payload: ByteArray, direction: PacketEvent.Direction): ByteArray? {
-        if (payload.isEmpty() || payload[0] != 0xFE.toByte()) return payload
-
-        val inner  = payload.copyOfRange(1, payload.size)
-        val stream = ByteArrayInputStream(inner)
-        val parts  = mutableListOf<ByteArray>()
+    private fun processRawBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
+        val stream  = ByteArrayInputStream(body)
+        val packets = mutableListOf<ByteArray>()
         var changed = false
 
         while (stream.available() > 0) {
             val len = readVarInt(stream)
             if (len <= 0 || stream.available() < len) break
-            val data = ByteArray(len); stream.read(data)
-            val pktId = readVarInt(ByteArrayInputStream(data))
-            val event = PacketEvent(pktId, data, direction)
 
-            try { PacketEventBus.publish(event) } catch (e: Exception) { Log.e(TAG, "Bus: ${e.message}") }
+            val data = ByteArray(len)
+            stream.read(data)
+
+            val result = processSinglePacket(data, direction)
 
             when {
-                event.isCancelled        -> changed = true
-                event.modifiedData != null -> { changed = true; parts.add(enc(event.modifiedData!!)) }
-                else                     -> parts.add(enc(data))
+                result == null       -> { changed = true /* cancel */ }
+                !result.contentEquals(data) -> { changed = true; packets.add(result) }
+                else                 -> packets.add(data)
             }
         }
 
-        if (parts.isEmpty()) return null
-        if (!changed) return payload
+        if (packets.isEmpty()) return null
+        if (!changed) return body
 
-        val merged = parts.fold(ByteArray(0)) { a, b -> a + b }
-        return byteArrayOf(0xFE.toByte()) + merged
+        // Yeniden birleştir
+        val out = ByteArrayOutputStream(body.size)
+        for (pkt in packets) {
+            writeVarInt(out, pkt.size)
+            out.write(pkt)
+        }
+        return out.toByteArray()
     }
 
-    private fun enc(data: ByteArray) = writeVarInt(data.size) + data
+    // ─────────────────────────────────────────────────────────────────────
+    //  SIKIŞTIRMALI BATCH (NetworkSettings sonrası)
+    // ─────────────────────────────────────────────────────────────────────
+
+    private fun processCompressedBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
+        return try {
+            // zlib inflate
+            val inflater   = java.util.zip.Inflater()
+            inflater.setInput(body)
+            val inflated   = ByteArrayOutputStream()
+            val ibuf       = ByteArray(4096)
+            while (!inflater.finished()) {
+                val n = inflater.inflate(ibuf)
+                if (n == 0) break
+                inflated.write(ibuf, 0, n)
+            }
+            inflater.end()
+
+            val decompressed = inflated.toByteArray()
+            val processed    = processRawBatch(decompressed, direction) ?: return null
+
+            // zlib deflate
+            val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
+            deflater.setInput(processed)
+            deflater.finish()
+            val deflated = ByteArrayOutputStream()
+            val dbuf     = ByteArray(4096)
+            while (!deflater.finished()) {
+                val n = deflater.deflate(dbuf)
+                if (n > 0) deflated.write(dbuf, 0, n)
+            }
+            deflater.end()
+            deflated.toByteArray()
+
+        } catch (e: Exception) {
+            Log.w(TAG, "Sıkıştırma hatası: ${e.message}")
+            body  // orijinali ilet
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  TEK PAKET İŞLEME
+    // ─────────────────────────────────────────────────────────────────────
+
+    private fun processSinglePacket(data: ByteArray, direction: PacketEvent.Direction): ByteArray? {
+        if (data.isEmpty()) return data
+
+        val packetId = readVarInt(ByteArrayInputStream(data))
+
+        // NetworkSettings gelince sıkıştırmayı aç
+        if (packetId == 0x8F && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
+            Log.i(TAG, "NetworkSettings alındı → sıkıştırma aktif")
+            compressionEnabled  = true
+            compressionAlgorithm = if (data.size > 4) data[4].toInt() and 0xFF else 0
+        }
+
+        // EntityTracker'a bildir (S→C paketleri için)
+        if (direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
+            try { EntityTracker.onPacket(PacketEvent(packetId, data, direction)) }
+            catch (_: Exception) {}
+        }
+
+        // Event bus
+        val event = PacketEvent(packetId, data, direction)
+        try {
+            PacketEventBus.publish(event)
+        } catch (e: Exception) {
+            Log.e(TAG, "EventBus hatası pkt=${packetId.toString(16)}: ${e.message}")
+        }
+
+        return when {
+            event.isCancelled         -> null
+            event.modifiedData != null -> event.modifiedData
+            else                      -> data
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  YARDIMCILAR
+    // ─────────────────────────────────────────────────────────────────────
 
     fun readVarInt(stream: ByteArrayInputStream): Int {
-        var r = 0; var s = 0
-        for (i in 0 until 5) {
-            val b = stream.read(); if (b == -1) break
-            r = r or ((b and 0x7F) shl s)
-            if ((b and 0x80) == 0) return r; s += 7
+        var result = 0; var shift = 0
+        repeat(5) {
+            val b = stream.read()
+            if (b == -1) return result
+            result = result or ((b and 0x7F) shl shift)
+            if (b and 0x80 == 0) return result
+            shift += 7
         }
-        return r
+        return result
     }
 
-    fun writeVarInt(v: Int): ByteArray {
-        val b = mutableListOf<Byte>(); var x = v
-        do { var t = (x and 0x7F); x = x ushr 7; if (x != 0) t = t or 0x80; b.add(t.toByte()) } while (x != 0)
-        return b.toByteArray()
+    fun writeVarInt(out: ByteArrayOutputStream, value: Int) {
+        var v = value
+        do {
+            var b = v and 0x7F
+            v = v ushr 7
+            if (v != 0) b = b or 0x80
+            out.write(b)
+        } while (v != 0)
+    }
+
+    fun writeVarInt(value: Int): ByteArray {
+        val out = ByteArrayOutputStream(4)
+        writeVarInt(out, value)
+        return out.toByteArray()
     }
 }
