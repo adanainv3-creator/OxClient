@@ -9,23 +9,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ox_server")
 
-/**
- * ServerConfig
- *
- * Kullanıcının seçtiği sunucu adresini ve portunu DataStore'da saklar.
- * Varsayılan değerler: host = "2b2tpe.org", port = 19132.
- *
- * Kullanım:
- *   ServerConfig.init(context)        — uygulama başlangıcında
- *   ServerConfig.host / .port         — anlık değerleri okur (Flow)
- *   ServerConfig.getHostBlocking()    — VPN servisinden eşzamanlı okuma
- *   ServerConfig.save(host, port)     — yeni sunucu kaydet
- */
 object ServerConfig {
 
     const val DEFAULT_HOST       = "2b2tpe.org"
@@ -35,47 +24,55 @@ object ServerConfig {
     private val KEY_HOST = stringPreferencesKey("server_host")
     private val KEY_PORT = intPreferencesKey("server_port")
 
-    private lateinit var ctx: Context
+    @Volatile private var appContext: Context? = null
 
     fun init(context: Context) {
-        ctx = context.applicationContext
+        appContext = context.applicationContext
     }
 
-    /** Sunucu adresini akış olarak gözlemle */
+    private fun safeCtx(): Context = appContext ?: throw IllegalStateException("ServerConfig.init() çağrılmamış!")
+
     val host: Flow<String>
-        get() = ctx.dataStore.data.map { prefs ->
-            prefs[KEY_HOST] ?: DEFAULT_HOST
+        get() = try {
+            safeCtx().dataStore.data.map { it[KEY_HOST] ?: DEFAULT_HOST }
+        } catch (e: Exception) {
+            flowOf(DEFAULT_HOST)
         }
 
-    /** Sunucu portunu akış olarak gözlemle */
     val port: Flow<Int>
-        get() = ctx.dataStore.data.map { prefs ->
-            prefs[KEY_PORT] ?: DEFAULT_PORT
+        get() = try {
+            safeCtx().dataStore.data.map { it[KEY_PORT] ?: DEFAULT_PORT }
+        } catch (e: Exception) {
+            flowOf(DEFAULT_PORT)
         }
 
-    /** Eşzamanlı host okuma — VPN servisinin onCreate içinden kullanılır */
-    fun getHostBlocking(): String = runBlocking {
-        ctx.dataStore.data.map { it[KEY_HOST] ?: DEFAULT_HOST }.first()
+    fun getHostBlocking(): String = try {
+        runBlocking { safeCtx().dataStore.data.map { it[KEY_HOST] ?: DEFAULT_HOST }.first() }
+    } catch (e: Exception) {
+        DEFAULT_HOST
     }
 
-    /** Eşzamanlı port okuma — VPN servisinin onCreate içinden kullanılır */
-    fun getPortBlocking(): Int = runBlocking {
-        ctx.dataStore.data.map { it[KEY_PORT] ?: DEFAULT_PORT }.first()
+    fun getPortBlocking(): Int = try {
+        runBlocking { safeCtx().dataStore.data.map { it[KEY_PORT] ?: DEFAULT_PORT }.first() }
+    } catch (e: Exception) {
+        DEFAULT_PORT
     }
 
-    /** Yeni sunucu adresini kaydet */
     suspend fun save(host: String, port: Int) {
-        ctx.dataStore.edit { prefs ->
-            prefs[KEY_HOST] = host.trim()
-            prefs[KEY_PORT] = port
-        }
+        try {
+            safeCtx().dataStore.edit { prefs ->
+                prefs[KEY_HOST] = host.trim()
+                prefs[KEY_PORT] = port
+            }
+        } catch (_: Exception) {}
     }
 
-    /** Varsayılana dön */
     suspend fun reset() {
-        ctx.dataStore.edit { prefs ->
-            prefs[KEY_HOST] = DEFAULT_HOST
-            prefs[KEY_PORT] = DEFAULT_PORT
-        }
+        try {
+            safeCtx().dataStore.edit { prefs ->
+                prefs[KEY_HOST] = DEFAULT_HOST
+                prefs[KEY_PORT] = DEFAULT_PORT
+            }
+        } catch (_: Exception) {}
     }
 }
