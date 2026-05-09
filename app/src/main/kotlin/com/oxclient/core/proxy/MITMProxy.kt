@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  *   - FrameSet (0x80..0x8F) içindeki paketler: eğer iç paket ID handshake ise direkt ilet
  *   - 0xFE (GamePacket) olan iç paketler PacketProcessor'a gönderilir
  *   - Sunucu soketi ilk pakette sunucuya bağlanır
+ *   - [FIX] İstemci bağlanınca bindInjectionQueue() artık çağrılıyor
  */
 class MITMProxy(
     private val targetHost : String,
@@ -131,10 +132,7 @@ class MITMProxy(
                 return@launch
             }
 
-            // 3. InjectionQueue bağla (sunucu adresi biliniyor ama client henüz yok,
-            //    istemci bağlanınca rebind yapılacak)
-
-            Log.i(TAG, "✓ Proxy aktif")
+            Log.i(TAG, "✓ Relay aktif")
 
             val cJob = launch { clientLoop() }
             val sJob = launch { serverLoop() }
@@ -157,7 +155,7 @@ class MITMProxy(
         clientAddress         = null
         resolvedServerAddress = null
         serverConnected       = false
-        Log.i(TAG, "Proxy durduruldu")
+        Log.i(TAG, "Relay durduruldu")
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -197,10 +195,11 @@ class MITMProxy(
                     clientAddress = senderAddr
                     clientPort    = senderPort
                     Log.i(TAG, "İstemci bağlandı: ${senderAddr.hostAddress}:$senderPort")
+                    // ✅ FIX: InjectionQueue'yu bağla — hileler artık çalışır
+                    bindInjectionQueue()
                 }
 
                 // ── Her paketi sunucuya ilet ──────────────────────────────
-                // (işleme aşağıda)
                 routeClientPacket(raw)
 
             } catch (e: CancellationException) { break }
@@ -243,23 +242,12 @@ class MITMProxy(
         val id = raw[0].toInt() and 0xFF
 
         when {
-            // Offline handshake paketleri (OCR1, OCR2, vb.) → direkt ilet
-            id in OFFLINE_IDS -> {
-                sendToServer(raw)
-            }
-
-            // ACK / NACK → direkt ilet
-            id == ID_ACK || id == ID_NACK -> {
-                sendToServer(raw)
-            }
-
-            // FrameSet paketleri → içini incele
+            id in OFFLINE_IDS -> sendToServer(raw)
+            id == ID_ACK || id == ID_NACK -> sendToServer(raw)
             id in FRAMESET_MIN..FRAMESET_MAX -> {
                 val processed = processFrameSet(raw, PacketEvent.Direction.CLIENT_TO_SERVER)
                 if (processed != null) sendToServer(processed)
             }
-
-            // Bilinmeyenler → direkt ilet
             else -> sendToServer(raw)
         }
     }
@@ -272,49 +260,18 @@ class MITMProxy(
         val id = raw[0].toInt() and 0xFF
 
         when {
-            // Offline cevaplar (OCR Reply1, OCR Reply2, IncompatibleProtocol vb.) → direkt ilet
-            id in OFFLINE_IDS -> {
-                sendToClient(raw)
-            }
-
-            // ACK / NACK → direkt ilet
-            id == ID_ACK || id == ID_NACK -> {
-                sendToClient(raw)
-            }
-
-            // FrameSet paketleri → içini incele
+            id in OFFLINE_IDS -> sendToClient(raw)
+            id == ID_ACK || id == ID_NACK -> sendToClient(raw)
             id in FRAMESET_MIN..FRAMESET_MAX -> {
                 val processed = processFrameSet(raw, PacketEvent.Direction.SERVER_TO_CLIENT)
                 if (processed != null) sendToClient(processed)
             }
-
-            // Bilinmeyenler → direkt ilet
             else -> sendToClient(raw)
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────
     //  FRAMESET İŞLEME
-    //
-    //  RakNet FrameSet binary format:
-    //    [0]      : flags byte (0x80..0x8F)
-    //    [1..3]   : sequence number (3 byte Little Endian)
-    //    [4..]    : bir veya daha fazla Frame
-    //
-    //  Her Frame:
-    //    [0]      : reliability flags byte
-    //              bit7-5 = reliability type
-    //              bit4   = isSplit (fragment)
-    //    [1..2]   : payload length in BITS (Big Endian)
-    //    [3..5]   : reliableMessageIndex (if reliable, 3 bytes LE)  — opsiyonel
-    //    [3..5]   : sequencingIndex (if sequenced, 3 bytes LE)      — opsiyonel
-    //    [3..6]   : orderingIndex (if ordered, 3 bytes LE) + channel (1 byte) — opsiyonel
-    //    [...]    : split frame header (10 bytes) if isSplit         — opsiyonel
-    //    [...]    : payload (length/8 bytes)
-    //
-    //  Payload'un ilk byte'ı inner packet ID'dir.
-    //  Eğer inner ID 0xFE ise → Bedrock GamePacket (batch)
-    //  Eğer inner ID handshake ise → değiştirilmeden bırak
     // ─────────────────────────────────────────────────────────────────────
 
     private fun processFrameSet(raw: ByteArray, direction: PacketEvent.Direction): ByteArray? {
@@ -323,7 +280,7 @@ class MITMProxy(
         val frameSetId  = raw[0]
         val seqNum0     = raw[1]; val seqNum1 = raw[2]; val seqNum2 = raw[3]
 
-        var pos     = 4          // Frame'lerin başlangıcı
+        var pos     = 4
         val output  = java.io.ByteArrayOutputStream()
         output.write(frameSetId.toInt())
         output.write(seqNum0.toInt())
@@ -336,54 +293,43 @@ class MITMProxy(
             val frameStart = pos
             if (pos >= raw.size) break
 
-            // Reliability byte
             val reliabilityByte = raw[pos].toInt() and 0xFF; pos++
             val reliability     = (reliabilityByte shr 5) and 0x07
             val isSplit         = (reliabilityByte and 0x10) != 0
 
-            // Payload bit length → byte length
             if (pos + 2 > raw.size) { output.write(raw, frameStart, raw.size - frameStart); break }
             val bitLen  = ((raw[pos].toInt() and 0xFF) shl 8) or (raw[pos + 1].toInt() and 0xFF); pos += 2
             val byteLen = (bitLen + 7) / 8
 
-            // Reliability-specific headers
             val headerStart = pos
-            if (reliability in intArrayOf(2,3,4,6,7)) { if (pos + 3 <= raw.size) pos += 3 }  // reliableMessageIndex
-            if (reliability in intArrayOf(1,4))        { if (pos + 3 <= raw.size) pos += 3 }  // sequencingIndex
-            if (reliability in intArrayOf(3,4,7))      { if (pos + 4 <= raw.size) pos += 4 }  // orderingIndex + channel
+            if (reliability in intArrayOf(2,3,4,6,7)) { if (pos + 3 <= raw.size) pos += 3 }
+            if (reliability in intArrayOf(1,4))        { if (pos + 3 <= raw.size) pos += 3 }
+            if (reliability in intArrayOf(3,4,7))      { if (pos + 4 <= raw.size) pos += 4 }
             val headerExtra = pos - headerStart
 
-            // Split header
             var splitHeaderBytes: ByteArray? = null
             if (isSplit) {
                 if (pos + 10 > raw.size) { output.write(raw, frameStart, raw.size - frameStart); break }
                 splitHeaderBytes = raw.copyOfRange(pos, pos + 10); pos += 10
             }
 
-            // Payload
             if (pos + byteLen > raw.size) {
-                // Eksik veri — güvenli tarafta direkt yaz
                 output.write(raw, frameStart, raw.size - frameStart)
                 break
             }
             val payload = raw.copyOfRange(pos, pos + byteLen); pos += byteLen
 
-            // Payload'u işle
             val processedPayload = processInnerPayload(payload, direction, isSplit)
-            val finalPayload     = processedPayload ?: payload   // null = cancel, yine de ilet (handshake güvenliği)
+            val finalPayload     = processedPayload ?: payload
 
             if (!finalPayload.contentEquals(payload)) anyChanged = true
 
-            // Frame'i yeniden yaz
             val newBitLen = finalPayload.size * 8
             output.write(reliabilityByte)
             output.write((newBitLen shr 8) and 0xFF)
             output.write(newBitLen and 0xFF)
-            // Reliability headers (tekrar kopyala)
             if (headerExtra > 0) output.write(raw, headerStart, headerExtra)
-            // Split header
             splitHeaderBytes?.let { output.write(it) }
-            // Payload
             output.write(finalPayload)
         }
 
@@ -403,36 +349,25 @@ class MITMProxy(
 
         val innerId = payload[0].toInt() and 0xFF
 
-        // Fragment parçası — henüz tam değil, direkt ilet
         if (isSplit) return payload
 
-        // ── RakNet connected handshake paketleri: DOKUNMA ─────────────────
-        // ConnectionRequest, ConnectionRequestAccepted, NewIncomingConnection,
-        // ConnectedPing, ConnectedPong, DisconnectNotification
         if (innerId in INNER_HANDSHAKE_IDS) {
             Log.v(TAG, "Handshake inner ${innerId.toString(16)} → direkt ilet")
             return payload
         }
 
-        // ── Bedrock GamePacket (0xFE) — işle ─────────────────────────────
         if (innerId == 0xFE) {
             return processGamePacket(payload, direction)
         }
 
-        // Diğerleri → direkt ilet
         return payload
     }
 
     // ─────────────────────────────────────────────────────────────────────
     //  BEDROCK GAME PACKET (0xFE) İŞLEME
-    //  Format: [0xFE][varint_len][packet_data] × N
-    //  (sıkıştırma YOKTUR — Bedrock raw mode, NetworkSettings paketinden sonra
-    //   sıkıştırma açılabilir ama varsayılan kapalı)
     // ─────────────────────────────────────────────────────────────────────
 
     private fun processGamePacket(payload: ByteArray, direction: PacketEvent.Direction): ByteArray? {
-        // payload[0] = 0xFE
-        // payload[1..] = batch body
         val body   = payload.copyOfRange(1, payload.size)
         val result = PacketProcessor.processBatch(body, direction)
 
@@ -484,16 +419,15 @@ class MITMProxy(
     // ─────────────────────────────────────────────────────────────────────
 
     private fun buildUnconnectedPong(pingTime: Long): ByteArray {
-        // MOTD formatı: MCPE;Server Name;Protocol;Version;Players;MaxPlayers;GUID;SubMOTD;GameMode;GameModeId;PortV4;PortV6;
         val motd      = "MCPE;OxRelay;748;1.21.60;0;20;${SERVER_GUID};OxClient;Survival;1;$listenPort;$listenPort;"
         val motdBytes = motd.toByteArray(Charsets.UTF_8)
         val out       = java.io.ByteArrayOutputStream(32 + motdBytes.size)
 
-        out.write(0x1C)                              // UnconnectedPong ID
-        writeInt64BE(out, pingTime)                  // pong time
-        writeInt64BE(out, SERVER_GUID)               // server GUID
-        out.write(RAKNET_MAGIC)                      // 16-byte magic
-        out.write((motdBytes.size shr 8) and 0xFF)   // string length BE
+        out.write(0x1C)
+        writeInt64BE(out, pingTime)
+        writeInt64BE(out, SERVER_GUID)
+        out.write(RAKNET_MAGIC)
+        out.write((motdBytes.size shr 8) and 0xFF)
         out.write(motdBytes.size and 0xFF)
         out.write(motdBytes)
 

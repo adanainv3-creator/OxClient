@@ -29,13 +29,13 @@ import kotlinx.coroutines.*
  * - VPN tüneli açılırsa Minecraft'ın Xbox auth trafiği (TCP/443) tünele girer
  *   → "Çok Oyunculu Bağlantı Başarısız" / zaman aşımı hatası
  * - addRoute sadece UDP değil tüm trafiği yakalar
- * - Loopback proxy bu sorunu yaşamaz
+ * - Loopback relay bu sorunu yaşamaz
  *
  * Kullanım adımları:
  * 1. OxVpnService başlat (ACTION_START)
  * 2. Minecraft aç
  * 3. Oyun → Arkadaşlar → LAN Oyunları → "OxRelay" görünür
- * 4. Bağlan → proxy gerçek sunucuya yönlendirir
+ * 4. Bağlan → relay gerçek sunucuya yönlendirir
  */
 class OxVpnService : VpnService() {
 
@@ -44,12 +44,12 @@ class OxVpnService : VpnService() {
         const val ACTION_START       = "com.oxclient.vpn.START"
         const val ACTION_STOP        = "com.oxclient.vpn.STOP"
         private const val NOTIF_ID   = 1337
-        private const val CHANNEL_ID = "oxclient_vpn"
+        private const val CHANNEL_ID = "oxclient_relay"
         const val PROXY_PORT         = 19132
     }
 
-    private var mitmProxy    : MITMProxy?            = null
-    private var dummyVpnFd  : ParcelFileDescriptor?  = null  // tünel açılmaz, null kalır
+    private var mitmProxy   : MITMProxy?           = null
+    private var dummyVpnFd  : ParcelFileDescriptor? = null
     private val scope        = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -81,7 +81,6 @@ class OxVpnService : VpnService() {
                 val targetPort = ServerConfig.getPortBlocking()
                 Log.i(TAG, "Hedef: $targetHost:$targetPort")
 
-                // Proxy oluştur
                 val proxy = MITMProxy(
                     targetHost = targetHost,
                     targetPort = targetPort,
@@ -90,18 +89,16 @@ class OxVpnService : VpnService() {
                 proxy.start()
                 mitmProxy = proxy
 
-                // Proxy'nin soketlerin açılmasını bekle
                 delay(300)
 
                 if (!proxy.isRunning) {
-                    Log.e(TAG, "Proxy başlatılamadı!")
+                    Log.e(TAG, "Relay başlatılamadı!")
                     showToast("❌ Port $PROXY_PORT meşgul! Minecraft açıksa kapat ve tekrar dene.")
                     stopSelf()
                     return@launch
                 }
 
                 // Soketleri VPN bypass için koru
-                // (Eğer cihazda başka bir VPN varsa bu önemli, yoksa harmless)
                 proxy.getListenSocket()?.let { sock ->
                     runCatching { protect(sock) }
                         .onSuccess { Log.d(TAG, "ListenSocket korundu") }
@@ -116,7 +113,7 @@ class OxVpnService : VpnService() {
                 SessionManager.onSessionStart(targetHost, targetPort)
                 updateNotification("Aktif → $targetHost:$targetPort")
 
-                Log.i(TAG, "✓ OxRelay AKTİF — $targetHost:$targetPort ← proxy :$PROXY_PORT")
+                Log.i(TAG, "✓ OxRelay AKTİF — $targetHost:$targetPort ← relay :$PROXY_PORT")
                 showToast("✓ OxRelay aktif! Minecraft → Arkadaşlar → LAN → OxRelay'e bağlan")
 
             } catch (e: CancellationException) {
