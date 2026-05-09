@@ -14,37 +14,29 @@ import java.io.ByteArrayOutputStream
  * Batch format:
  *   [varint(len)][packet_data] × N
  *
- * NOT: Protokol 748'de varsayılan olarak sıkıştırma KAPALIDIR.
- * NetworkSettings paketi gönderilene kadar batch body sıkıştırılmaz.
- * NetworkSettings sonrası sıkıştırma açılır ama bu proxy bunu
- * pass-through yapar (sıkıştırılmış içeriği çözmez, sadece EventBus'a bildirir).
+ * Sıkıştırma:
+ *   NetworkSettings paketi (0xC7) gelene kadar sıkıştırma KAPALIDIR.
+ *   NetworkSettings içindeki algorithm byte'ı:
+ *     0 = zlib (deflate)
+ *     1 = Snappy
+ *   2b2tpe ve benzeri sunucular genellikle Snappy kullanır.
  *
- * Bu yaklaşım neden doğru:
- * - Login/Handshake aşamasında sıkıştırma YOK → parse edilebilir
- * - Oyun başladıktan sonra NetworkSettings paketi gelir → sıkıştırma açılır
- * - Sıkıştırma açılınca batch içini parse etmek için zlib inflate gerekir
- * - Biz sadece paket ID'yi okuyup EventBus'a bildiriyoruz
- * - Eğer modül cancel/modify etmezse orijinal veriyi iletiyoruz
- *
- * Zaman aşımı sorununun düzeltilmesi:
- * - processFrameSet MITMProxy'ye taşındı
- * - Burası sadece batch body işler
- * - Hata olursa orijinal veri döner (null/crash değil)
+ * ✅ FIX: NetworkSettings ID 0x8F → 0xC7 (Bedrock 1.20.10+ protokol 748)
+ *         Snappy decompression/compression desteği eklendi.
  */
 object PacketProcessor {
 
     private const val TAG = "PacketProcessor"
 
-    // NetworkSettings paketinden sonra sıkıştırma açılır
-    @Volatile var compressionEnabled = false
-    @Volatile var compressionAlgorithm = 0  // 0=zlib, 1=snappy
+    @Volatile var compressionEnabled   = false
+    @Volatile var compressionAlgorithm = 0     // 0 = zlib, 1 = snappy
 
     /**
      * Bedrock batch body'sini işle (0xFE'nin arkasındaki baytlar).
      *
      * @param body      0xFE sonrası ham baytlar
      * @param direction Paketin yönü
-     * @return          Güncellenmiş body veya null (hiçbir paket kalmadı)
+     * @return          Güncellenmiş body veya null (hiçbir paket kalmadı).
      *                  Hata durumunda orijinal body döner.
      */
     fun processBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
@@ -52,15 +44,13 @@ object PacketProcessor {
 
         return try {
             if (compressionEnabled) {
-                // Sıkıştırılmış → decompress + işle + compress
                 processCompressedBatch(body, direction)
             } else {
-                // Sıkıştırılmamış → direkt işle
                 processRawBatch(body, direction)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Batch işleme hatası, orijinal veri iletiliyor: ${e.message}")
-            body  // Hata → orijinal ilet, bağlantıyı kesme
+            body
         }
     }
 
@@ -83,16 +73,15 @@ object PacketProcessor {
             val result = processSinglePacket(data, direction)
 
             when {
-                result == null       -> { changed = true /* cancel */ }
-                !result.contentEquals(data) -> { changed = true; packets.add(result) }
-                else                 -> packets.add(data)
+                result == null                  -> { changed = true }
+                !result.contentEquals(data)     -> { changed = true; packets.add(result) }
+                else                            -> packets.add(data)
             }
         }
 
         if (packets.isEmpty()) return null
         if (!changed) return body
 
-        // Yeniden birleştir
         val out = ByteArrayOutputStream(body.size)
         for (pkt in packets) {
             writeVarInt(out, pkt.size)
@@ -102,42 +91,103 @@ object PacketProcessor {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    //  SIKIŞTIRMALI BATCH (NetworkSettings sonrası)
+    //  SIKIŞTIRMALI BATCH
     // ─────────────────────────────────────────────────────────────────────
 
     private fun processCompressedBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         return try {
-            // zlib inflate
-            val inflater   = java.util.zip.Inflater()
-            inflater.setInput(body)
-            val inflated   = ByteArrayOutputStream()
-            val ibuf       = ByteArray(4096)
-            while (!inflater.finished()) {
-                val n = inflater.inflate(ibuf)
-                if (n == 0) break
-                inflated.write(ibuf, 0, n)
+            // ── Decompress ────────────────────────────────────────────────
+            val decompressed: ByteArray = when (compressionAlgorithm) {
+                1 -> {
+                    // ✅ FIX: Snappy desteği (2b2tpe algoritması)
+                    decompressSnappy(body)
+                }
+                else -> {
+                    // zlib inflate
+                    val inflater = java.util.zip.Inflater()
+                    inflater.setInput(body)
+                    val inflated = ByteArrayOutputStream()
+                    val ibuf     = ByteArray(4096)
+                    while (!inflater.finished()) {
+                        val n = inflater.inflate(ibuf)
+                        if (n == 0) break
+                        inflated.write(ibuf, 0, n)
+                    }
+                    inflater.end()
+                    inflated.toByteArray()
+                }
             }
-            inflater.end()
 
-            val decompressed = inflated.toByteArray()
-            val processed    = processRawBatch(decompressed, direction) ?: return null
+            // ── İşle ─────────────────────────────────────────────────────
+            val processed = processRawBatch(decompressed, direction) ?: return null
 
-            // zlib deflate
-            val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
-            deflater.setInput(processed)
-            deflater.finish()
-            val deflated = ByteArrayOutputStream()
-            val dbuf     = ByteArray(4096)
-            while (!deflater.finished()) {
-                val n = deflater.deflate(dbuf)
-                if (n > 0) deflated.write(dbuf, 0, n)
+            // ── Compress ─────────────────────────────────────────────────
+            when (compressionAlgorithm) {
+                1 -> {
+                    // ✅ FIX: Snappy compress
+                    compressSnappy(processed)
+                }
+                else -> {
+                    val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
+                    deflater.setInput(processed)
+                    deflater.finish()
+                    val deflated = ByteArrayOutputStream()
+                    val dbuf     = ByteArray(4096)
+                    while (!deflater.finished()) {
+                        val n = deflater.deflate(dbuf)
+                        if (n > 0) deflated.write(dbuf, 0, n)
+                    }
+                    deflater.end()
+                    deflated.toByteArray()
+                }
             }
-            deflater.end()
-            deflated.toByteArray()
 
         } catch (e: Exception) {
             Log.w(TAG, "Sıkıştırma hatası: ${e.message}")
-            body  // orijinali ilet
+            body
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  SNAPPY YARDIMCILARI
+    //  build.gradle: implementation 'org.iq80.snappy:snappy:0.4'
+    // ─────────────────────────────────────────────────────────────────────
+
+    private fun decompressSnappy(input: ByteArray): ByteArray {
+        return try {
+            org.iq80.snappy.Snappy.uncompress(input, 0, input.size)
+        } catch (e: Exception) {
+            Log.w(TAG, "Snappy decompress başarısız, zlib deneniyor: ${e.message}")
+            // Snappy başarısız olursa zlib ile dene (sunucu uyumsuzluğu)
+            val inflater = java.util.zip.Inflater()
+            inflater.setInput(input)
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            while (!inflater.finished()) {
+                val n = inflater.inflate(buf)
+                if (n == 0) break
+                out.write(buf, 0, n)
+            }
+            inflater.end()
+            out.toByteArray()
+        }
+    }
+
+    private fun compressSnappy(input: ByteArray): ByteArray {
+        return try {
+            org.iq80.snappy.Snappy.compress(input)
+        } catch (e: Exception) {
+            Log.w(TAG, "Snappy compress başarısız, zlib kullanılıyor: ${e.message}")
+            val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
+            deflater.setInput(input); deflater.finish()
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            while (!deflater.finished()) {
+                val n = deflater.deflate(buf)
+                if (n > 0) out.write(buf, 0, n)
+            }
+            deflater.end()
+            out.toByteArray()
         }
     }
 
@@ -150,11 +200,18 @@ object PacketProcessor {
 
         val packetId = readVarInt(ByteArrayInputStream(data))
 
-        // NetworkSettings gelince sıkıştırmayı aç
-        if (packetId == 0x8F && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
-            Log.i(TAG, "NetworkSettings alındı → sıkıştırma aktif")
-            compressionEnabled  = true
+        // ✅ FIX: NetworkSettings paket ID'si 0x8F DEĞİL 0xC7'dir.
+        //         Bedrock protokol 748 (1.20.10+) itibarıyla NetworkSettings = 0xC7.
+        //         0x8F hiç gelmez → compressionEnabled asla true olmazdı,
+        //         bu yüzden sıkıştırmalı paketler hiç işlenmiyordu.
+        //         Algoritma byte'ı: data[2] (varint paketId + 1 byte sonrası)
+        if (packetId == 0xC7 && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
+            Log.i(TAG, "NetworkSettings alındı (0xC7) → sıkıştırma aktif")
+            compressionEnabled = true
+            // NetworkSettings format: [packetId varint][threshold short LE][algorithm byte]
+            // varint(0xC7) = 2 byte → algorithm byte index = 4
             compressionAlgorithm = if (data.size > 4) data[4].toInt() and 0xFF else 0
+            Log.i(TAG, "Sıkıştırma algoritması: ${if (compressionAlgorithm == 1) "Snappy" else "zlib"}")
         }
 
         // EntityTracker'a bildir (S→C paketleri için)
@@ -172,9 +229,9 @@ object PacketProcessor {
         }
 
         return when {
-            event.isCancelled         -> null
+            event.isCancelled          -> null
             event.modifiedData != null -> event.modifiedData
-            else                      -> data
+            else                       -> data
         }
     }
 

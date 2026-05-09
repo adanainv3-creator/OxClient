@@ -56,27 +56,29 @@ object EntityTracker : PacketListener {
     override fun onPacket(event: PacketEvent) {
         try {
             when (event.packetId) {
-                BedrockPacketIds.START_GAME            -> parseStartGame(event.data)
-                BedrockPacketIds.ADD_PLAYER            -> parseAddPlayer(event.data)
-                BedrockPacketIds.ADD_ENTITY            -> parseAddEntity(event.data)
-                BedrockPacketIds.MOVE_PLAYER           -> parseMovePlayer(event.data)
-                BedrockPacketIds.MOVE_ENTITY_ABSOLUTE  -> parseMoveEntity(event.data)
-                BedrockPacketIds.REMOVE_ENTITY         -> parseRemoveEntity(event.data)
-                BedrockPacketIds.PLAYER_AUTH_INPUT     -> parseAuthInput(event.data)
+                BedrockPacketIds.START_GAME           -> parseStartGame(event.data)
+                BedrockPacketIds.ADD_PLAYER           -> parseAddPlayer(event.data)
+                BedrockPacketIds.ADD_ENTITY           -> parseAddEntity(event.data)
+                BedrockPacketIds.MOVE_PLAYER          -> parseMovePlayer(event.data)
+                BedrockPacketIds.MOVE_ENTITY_ABSOLUTE -> parseMoveEntity(event.data)
+                BedrockPacketIds.REMOVE_ENTITY        -> parseRemoveEntity(event.data)
+                BedrockPacketIds.PLAYER_AUTH_INPUT    -> parseAuthInput(event.data)
             }
         } catch (_: Exception) {}
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+
     private fun parseStartGame(d: ByteArray) {
         try {
-            // Packet ID'yi varint olarak doğru şekilde atla
-            val (_, posAfterPktId) = PacketHelper.readVarInt(d, 0)
-            var pos = posAfterPktId
+            // Paket ID'yi varint olarak atla (zaten parseStartGame çağrıldığında
+            // d[0] paket ID baytı, ama paket ID varint olduğundan readVarInt ile atlanmalı)
+            val (_, p1) = PacketHelper.readVarInt(d, 0); var pos = p1
 
-            // unique entity id (zigzag varint) — atla
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
+            // uniqueEntityId (zigzag encoded varlong) → atla
+            val (_, p2) = PacketHelper.readVarInt(d, pos); pos = p2
 
-            // runtimeEntityId (varlong)
+            // runtimeEntityId (varlong) → selfRuntimeId buradan okunur
             val (rid, _) = PacketHelper.readVarLong(d, pos)
             selfRuntimeId = rid
             Log.i("EntityTracker", "selfRuntimeId = $rid")
@@ -85,13 +87,22 @@ object EntityTracker : PacketListener {
         }
     }
 
+    // ✅ FIX: Tüm aşağıdaki parse fonksiyonlarında "pos = 1" vardı.
+    //         Paket ID'si varint formatında olduğu için 1 byte OLMAYABILIR.
+    //         0x0B (START_GAME) varint olarak 1 byte, 0x90 (PLAYER_AUTH_INPUT)
+    //         varint olarak 2 byte sürer. pos=1 ile sabit atlamak offset'i
+    //         kaydırır → runtimeId yanlış okunur → entity tracker çalışmaz
+    //         → KillAura, CrystalAura hedef bulamaz.
+    //         Çözüm: her fonksiyon readVarInt(d, 0) ile gerçek varint boyutu
+    //         kadar atlar.
+
     private fun parseAddPlayer(d: ByteArray) {
         try {
-            var pos = 1  // skip packetId
-            pos += 16    // UUID
-            val (_, p2) = PacketHelper.readString(d, pos); pos = p2
-            val (rid, p3) = PacketHelper.readVarLong(d, pos); pos = p3
-            val (_, p4) = PacketHelper.readVarLong(d, pos); pos = p4
+            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0  // ✅ FIX
+            pos += 16    // UUID (16 byte sabit)
+            val (_, p2) = PacketHelper.readString(d, pos); pos = p2     // username
+            val (rid, p3) = PacketHelper.readVarLong(d, pos); pos = p3  // runtimeId
+            val (_, p4) = PacketHelper.readVarLong(d, pos); pos = p4    // uniqueId
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
@@ -102,10 +113,10 @@ object EntityTracker : PacketListener {
 
     private fun parseAddEntity(d: ByteArray) {
         try {
-            var pos = 1  // skip packetId
-            val (_, p1) = PacketHelper.readVarLong(d, pos); pos = p1
-            val (rid, p2) = PacketHelper.readVarLong(d, pos); pos = p2
-            val (_, p3) = PacketHelper.readString(d, pos); pos = p3
+            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0   // ✅ FIX
+            val (_, p1) = PacketHelper.readVarLong(d, pos); pos = p1    // uniqueId
+            val (rid, p2) = PacketHelper.readVarLong(d, pos); pos = p2  // runtimeId
+            val (_, p3) = PacketHelper.readString(d, pos); pos = p3     // entity type string
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
@@ -115,11 +126,11 @@ object EntityTracker : PacketListener {
 
     private fun parseMovePlayer(d: ByteArray) {
         try {
-            var pos = 1
+            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0   // ✅ FIX
             val (rid, p1) = PacketHelper.readVarLong(d, pos); pos = p1
-            val x = PacketHelper.readFloatLE(d, pos); pos += 4
-            val y = PacketHelper.readFloatLE(d, pos); pos += 4
-            val z = PacketHelper.readFloatLE(d, pos); pos += 4
+            val x     = PacketHelper.readFloatLE(d, pos); pos += 4
+            val y     = PacketHelper.readFloatLE(d, pos); pos += 4
+            val z     = PacketHelper.readFloatLE(d, pos); pos += 4
             val pitch = PacketHelper.readFloatLE(d, pos); pos += 4
             val yaw   = PacketHelper.readFloatLE(d, pos)
             if (rid == selfRuntimeId) {
@@ -133,9 +144,9 @@ object EntityTracker : PacketListener {
 
     private fun parseMoveEntity(d: ByteArray) {
         try {
-            var pos = 1
+            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0   // ✅ FIX
             val (rid, p1) = PacketHelper.readVarLong(d, pos); pos = p1
-            pos += 1  // flags
+            pos += 1  // flags byte
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
@@ -145,14 +156,17 @@ object EntityTracker : PacketListener {
 
     private fun parseRemoveEntity(d: ByteArray) {
         try {
-            val (rid, _) = PacketHelper.readVarLong(d, 1)
+            val (_, p0) = PacketHelper.readVarInt(d, 0)                 // ✅ FIX
+            val (rid, _) = PacketHelper.readVarLong(d, p0)
             entities.remove(rid)
         } catch (_: Exception) {}
     }
 
     private fun parseAuthInput(d: ByteArray) {
         try {
-            var pos = 1
+            // ✅ FIX: PLAYER_AUTH_INPUT = 0x90 → varint olarak 2 byte sürer (0x90 0x01)
+            //         pos=1 ile atlamak 1 byte eksik atlıyor, tüm offset'ler kayıyor.
+            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
             val pitch = PacketHelper.readFloatLE(d, pos); pos += 4
             val yaw   = PacketHelper.readFloatLE(d, pos); pos += 4
             val x     = PacketHelper.readFloatLE(d, pos); pos += 4

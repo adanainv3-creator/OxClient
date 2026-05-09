@@ -16,35 +16,16 @@ object PacketHelper {
 
     // ── Injection ─────────────────────────────────────────────────────────
 
-    /**
-     * Sunucuya sahte paket gönder (client → server yönü).
-     * Paket MITMProxy'nin serverSocket'inden sunucuya iletilir.
-     */
     fun injectToServer(data: ByteArray) {
         InjectionQueue.enqueueToServer(data)
     }
 
-    /**
-     * İstemciye sahte paket gönder (server → client yönü).
-     * Paket MITMProxy'nin listenSocket'inden istemciye iletilir.
-     */
     fun injectToClient(data: ByteArray) {
         InjectionQueue.enqueueToClient(data)
     }
 
     // ── MovePlayer ────────────────────────────────────────────────────────
 
-    /**
-     * MovePlayer paketi (0x13)
-     *
-     * @param runtimeId  Oyuncunun runtime entity ID'si
-     * @param x, y, z   Konum
-     * @param yaw        Yatay bakış açısı (derece)
-     * @param pitch      Dikey bakış açısı (derece)
-     * @param headYaw    Kafa yaw'ı (genelde yaw ile aynı)
-     * @param onGround   Yerde mi?
-     * @param teleport   Anlık ışınlanma mı?
-     */
     fun buildMovePlayer(
         runtimeId : Long,
         x         : Float,
@@ -65,19 +46,14 @@ object PacketHelper {
         writeFloatLE(out, pitch)
         writeFloatLE(out, yaw)
         writeFloatLE(out, headYaw)
-        out.write(if (teleport) 1 else 0)  // mode: 0=normal, 1=teleport
+        out.write(if (teleport) 1 else 0)
         out.write(if (onGround) 1 else 0)
-        writeVarLong(out, 0L) // ridingRuntimeId
+        writeVarLong(out, 0L)
         return wrapBatch(out.toByteArray())
     }
 
-    // ── Animate (Swing) ───────────────────────────────────────────────────
+    // ── Animate ───────────────────────────────────────────────────────────
 
-    /**
-     * Animate paketi (0x2C) — el sallaması / swing
-     *
-     * @param action  4 = swing arm, 128 = wake up
-     */
     fun buildAnimate(runtimeId: Long, action: Int = 4): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.ANIMATE)
@@ -86,35 +62,25 @@ object PacketHelper {
         return wrapBatch(out.toByteArray())
     }
 
-    // ── Attack (InventoryTransaction USE_ITEM_ON_ENTITY) ──────────────────
+    // ── Attack ────────────────────────────────────────────────────────────
 
-    /**
-     * Saldırı paketi (0x1E — InventoryTransaction, txType=2)
-     *
-     * @param targetRuntimeId  Hedef entity runtime ID
-     * @param attackerRuntimeId Saldıran oyuncu runtime ID
-     */
     fun buildAttack(targetRuntimeId: Long, attackerRuntimeId: Long): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.INVENTORY_TRANSACTION)
-        writeVarInt(out, 0)   // legacyRequestId
-        writeVarInt(out, 0)   // legacySlots count
-        writeVarInt(out, 2)   // txType = USE_ITEM_ON_ENTITY
+        writeVarInt(out, 0)
+        writeVarInt(out, 0)
+        writeVarInt(out, 2)
         writeVarLong(out, targetRuntimeId)
-        writeVarInt(out, 1)   // actionType = 1 = attack
-        writeVarInt(out, 0)   // hotbarSlot
-        writeItem(out)        // heldItem (air)
-        writeVec3(out, 0f, 0f, 0f) // playerPos
-        writeVec3(out, 0f, 0f, 0f) // clickPos
+        writeVarInt(out, 1)
+        writeVarInt(out, 0)
+        writeItem(out)
+        writeVec3(out, 0f, 0f, 0f)
+        writeVec3(out, 0f, 0f, 0f)
         return wrapBatch(out.toByteArray())
     }
 
-    // ── InteractPacket ────────────────────────────────────────────────────
+    // ── Interact ──────────────────────────────────────────────────────────
 
-    /**
-     * Interact paketi (0x21)
-     * actionId: 1=interact, 2=attack, 3=leaveVehicle, 4=mouseover, 7=openInventory
-     */
     fun buildInteract(targetRuntimeId: Long, actionId: Int = 2): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.INTERACT)
@@ -124,7 +90,7 @@ object PacketHelper {
         return wrapBatch(out.toByteArray())
     }
 
-    // ── SetHealth (client injection) ──────────────────────────────────────
+    // ── SetHealth ─────────────────────────────────────────────────────────
 
     fun buildSetHealth(health: Int): ByteArray {
         val out = ByteArrayOutputStream()
@@ -133,7 +99,7 @@ object PacketHelper {
         return wrapBatch(out.toByteArray())
     }
 
-    // ── ContainerOpen / ContainerClose ────────────────────────────────────
+    // ── ContainerClose ────────────────────────────────────────────────────
 
     fun buildContainerClose(windowId: Int): ByteArray {
         val out = ByteArrayOutputStream()
@@ -144,18 +110,13 @@ object PacketHelper {
 
     // ── MobEffect ─────────────────────────────────────────────────────────
 
-    /**
-     * MobEffect paketi (0x1C) — İstemciye efekt enjekte et
-     * eventId: 1=add, 2=modify, 3=remove
-     * effectId: 16=NightVision, 11=Speed, 1=Speed, 5=Strength...
-     */
     fun buildMobEffect(
         runtimeId : Long,
         eventId   : Int,
         effectId  : Int,
-        amplifier : Int   = 0,
+        amplifier : Int     = 0,
         particles : Boolean = false,
-        duration  : Int   = 1000000
+        duration  : Int     = 1000000
     ): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.MOB_EFFECT)
@@ -168,12 +129,8 @@ object PacketHelper {
         return wrapBatch(out.toByteArray())
     }
 
-    // ── BlockEntityData (Crystal Place helper) ────────────────────────────
+    // ── UseItem ───────────────────────────────────────────────────────────
 
-    /**
-     * UseItem paketi (0x1F) — Blok üzerine item kullanma (kristal yerleştirme)
-     * actionType: 0=clickBlock, 1=clickAir, 2=breakBlock
-     */
     fun buildUseItem(
         actionType : Int,
         blockX: Int, blockY: Int, blockZ: Int,
@@ -186,29 +143,23 @@ object PacketHelper {
         writeVarInt(out, actionType)
         writeBlockPos(out, blockX, blockY, blockZ)
         writeVarInt(out, face)
-        writeVarInt(out, 0)   // hotbarSlot
-        writeItem(out)        // heldItem
-        writeVec3(out, x, y, z)   // playerPos
-        writeVec3(out, 0.5f, 0.5f, 0.5f) // clickPos
+        writeVarInt(out, 0)
+        writeItem(out)
+        writeVec3(out, x, y, z)
+        writeVec3(out, 0.5f, 0.5f, 0.5f)
         return wrapBatch(out.toByteArray())
     }
 
-    // ── PlayerAuthInput ───────────────────────────────────────────────────
+    // ── PlayerAuthInput patch ─────────────────────────────────────────────
 
-    /**
-     * Mevcut bir PlayerAuthInput paketinin x,y,z değerlerini patch'ler.
-     * Jetpack/TPAura konum değiştirmesi için.
-     */
     fun patchPlayerAuthInputPosition(
         original: ByteArray,
         x: Float, y: Float, z: Float
     ): ByteArray {
         if (original.size < 13) return original
         val copy = original.copyOf()
-        // PlayerAuthInput: [packetId varint] [pitch float32LE] [yaw float32LE] [x float32LE] [y float32LE] [z float32LE]
-        // varint(0x90) = 1 byte, sonra pitch(4)+yaw(4)+x(4)+y(4)+z(4)
         val baseOffset = varIntSize(BedrockPacketIds.PLAYER_AUTH_INPUT)
-        val xOff = baseOffset + 8   // pitch(4) + yaw(4)
+        val xOff = baseOffset + 8
         if (copy.size < xOff + 12) return original
         writeFloatLEInto(copy, xOff,     x)
         writeFloatLEInto(copy, xOff + 4, y)
@@ -216,11 +167,8 @@ object PacketHelper {
         return copy
     }
 
-    // ── Paket Wrap ────────────────────────────────────────────────────────
+    // ── Batch Wrap ────────────────────────────────────────────────────────
 
-    /**
-     * Ham paket verisini Bedrock batch formatına sarar: 0xFE + [varint(len) + data]
-     */
     fun wrapBatch(packetData: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         out.write(0xFE)
@@ -229,7 +177,7 @@ object PacketHelper {
         return out.toByteArray()
     }
 
-    // ── Düşük seviye yazıcılar ────────────────────────────────────────────
+    // ── Yazıcılar ─────────────────────────────────────────────────────────
 
     fun writeVarInt(out: ByteArrayOutputStream, value: Int) {
         var v = value
@@ -278,7 +226,7 @@ object PacketHelper {
     }
 
     private fun writeItem(out: ByteArrayOutputStream) {
-        writeVarInt(out, 0)  // itemId = 0 (air)
+        writeVarInt(out, 0)
     }
 
     private fun varIntSize(value: Int): Int {
@@ -300,11 +248,14 @@ object PacketHelper {
         return result to pos
     }
 
+    // ✅ FIX: (b and 0x7F) → (b and 0x7FL) — Long mask zorunlu, yoksa 32 bitten
+    //         büyük runtimeId değerlerinde Int'e truncate olur ve selfRuntimeId
+    //         hep yanlış kalır → tüm combat modülleri hedef bulamaz.
     fun readVarLong(data: ByteArray, offset: Int = 0): Pair<Long, Int> {
         var result = 0L; var shift = 0; var pos = offset
         while (pos < data.size) {
             val b = data[pos++].toLong() and 0xFF
-            result = result or ((b and 0x7F) shl shift)
+            result = result or ((b and 0x7FL) shl shift)   // ✅ 0x7FL — Long bit mask
             if (b and 0x80L == 0L) break
             shift += 7
         }
