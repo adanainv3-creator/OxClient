@@ -37,11 +37,10 @@ class OxVpnService : VpnService() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i(TAG, "onStartCommand: ${intent?.action}")
         when (intent?.action) {
             ACTION_START -> handleStart()
             ACTION_STOP  -> handleStop()
-            else -> { Log.w(TAG, "Bilinmeyen action"); stopSelf() }
+            else -> stopSelf()
         }
         return START_STICKY
     }
@@ -50,15 +49,13 @@ class OxVpnService : VpnService() {
     override fun onDestroy() { handleStop(); scope.cancel(); super.onDestroy() }
 
     private fun handleStart() {
-        Log.i(TAG, "========== VPN BAŞLATILIYOR ==========")
+        Log.i(TAG, "VPN başlatılıyor…")
         Toast.makeText(this, "OxClient VPN başlatılıyor...", Toast.LENGTH_SHORT).show()
 
-        // ÖNCE bildirimi göster
         try {
             startForeground(NOTIF_ID, buildNotification())
-            Log.i(TAG, "Foreground OK")
         } catch (e: Exception) {
-            Log.e(TAG, "Foreground HATA", e)
+            Log.e(TAG, "Foreground hata", e)
         }
 
         scope.launch {
@@ -67,28 +64,34 @@ class OxVpnService : VpnService() {
                 val targetPort = ServerConfig.getPortBlocking()
                 Log.i(TAG, "Hedef: $targetHost:$targetPort")
 
-                // Proxy başlat
-                val proxy = MITMProxy(targetHost, targetPort, PROXY_PORT)
-                proxy.start()
-                mitmProxy = proxy
-                delay(300)
-
-                // VPN tüneli
+                // ÖNCE VPN tünelini kur (proxy'den önce)
                 val tun = buildVpnInterface()
                 if (tun == null) {
-                    Log.e(TAG, "VPN arayüzü NULL")
-                    proxy.stop()
+                    Log.e(TAG, "VPN arayüzü NULL — cihaz desteklemiyor olabilir")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@OxVpnService, "VPN kurulamadı! Cihaz desteklemiyor.", Toast.LENGTH_LONG).show()
+                    }
                     stopSelf()
                     return@launch
                 }
                 vpnInterface = tun
+                Log.i(TAG, "VPN arayüzü OK")
+
+                // Sonra proxy'yi başlat
+                val proxy = MITMProxy(targetHost, targetPort, PROXY_PORT)
+                proxy.start()
+                mitmProxy = proxy
+                delay(300)
 
                 // Socket'leri koru
                 proxy.getListenSocket()?.let { runCatching { protect(it) } }
                 proxy.getServerSocket()?.let { runCatching { protect(it) } }
 
                 SessionManager.onSessionStart(targetHost, targetPort)
-                Log.i(TAG, "========== VPN AKTIF ==========")
+                Log.i(TAG, "VPN AKTİF ✓")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@OxVpnService, "OxClient VPN aktif!", Toast.LENGTH_SHORT).show()
+                }
             } catch (e: CancellationException) {
                 Log.w(TAG, "İptal")
             } catch (e: Exception) {
@@ -103,22 +106,21 @@ class OxVpnService : VpnService() {
             Builder().apply {
                 setMtu(TUN_MTU)
                 addAddress(TUN_ADDR, 32)
-                addDnsServer("8.8.8.8")
-                addDnsServer("1.1.1.1")
+                // Sadece Minecraft'ı yakala — tüm trafiği değil
                 addRoute("0.0.0.0", 0)
+                addAllowedApplication("com.mojang.minecraftpe")
+                runCatching { addAllowedApplication("com.netease.mc") }
+                runCatching { addAllowedApplication("com.mojang.minecrafttrialpe") }
+                addDisallowedApplication(packageName)
                 setSession("OxClient")
                 setConfigureIntent(
                     PendingIntent.getActivity(this@OxVpnService, 0,
                         Intent(this@OxVpnService, DashboardActivity::class.java),
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 )
-                addAllowedApplication("com.mojang.minecraftpe")
-                runCatching { addAllowedApplication("com.netease.mc") }
-                runCatching { addAllowedApplication("com.mojang.minecrafttrialpe") }
-                addDisallowedApplication(packageName)
             }.establish()
         } catch (e: Exception) {
-            Log.e(TAG, "buildVpnInterface HATA", e)
+            Log.e(TAG, "buildVpnInterface HATA: ${e.message}", e)
             null
         }
     }
@@ -132,7 +134,6 @@ class OxVpnService : VpnService() {
         SessionManager.onSessionStop()
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
         stopSelf()
-        Log.i(TAG, "VPN durduruldu")
     }
 
     private fun buildNotification(): Notification {
@@ -160,11 +161,8 @@ class OxVpnService : VpnService() {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (nm.getNotificationChannel(CHANNEL_ID) != null) return
             nm.createNotificationChannel(NotificationChannel(CHANNEL_ID, "OxClient VPN", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "VPN bağlantı durumu"
-                setShowBadge(false)
+                description = "VPN bağlantı durumu"; setShowBadge(false)
             })
-        } catch (e: Exception) {
-            Log.e(TAG, "Kanal hatası", e)
-        }
+        } catch (e: Exception) { Log.e(TAG, "Kanal hatası", e) }
     }
 }

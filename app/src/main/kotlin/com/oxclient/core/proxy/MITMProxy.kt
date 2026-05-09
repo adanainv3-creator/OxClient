@@ -64,6 +64,8 @@ class MITMProxy(
         true
     } catch (e: Exception) { Log.e(TAG, "Socket hatası", e); false }
 
+    // ── İstemci → Sunucu ──────────────────────────────────────────────────
+
     private suspend fun clientToServerLoop() {
         val sock = listenSocket ?: return
         val buf  = ByteArray(BUFFER_SIZE)
@@ -94,6 +96,8 @@ class MITMProxy(
         Log.d(TAG, "C→S bitti")
     }
 
+    // ── Sunucu → İstemci ──────────────────────────────────────────────────
+
     private suspend fun serverToClientLoop() {
         val sock = serverSocket ?: return
         val buf  = ByteArray(BUFFER_SIZE)
@@ -104,6 +108,13 @@ class MITMProxy(
             try {
                 sock.receive(pkt)
                 val raw = pkt.data.copyOf(pkt.length)
+
+                // === OxRelay: Sunucu listesine sahte sunucu ekle ===
+                if (isUnconnectedPong(raw)) {
+                    forwardToClient(injectOxRelay(raw))
+                    continue
+                }
+
                 if (isHandshake(raw)) { forwardToClient(raw); continue }
                 val result = withContext(Dispatchers.Default) {
                     PacketProcessor.process(raw, PacketEvent.Direction.SERVER_TO_CLIENT)
@@ -114,6 +125,8 @@ class MITMProxy(
         }
         Log.d(TAG, "S→C bitti")
     }
+
+    // ── İletim ────────────────────────────────────────────────────────────
 
     private fun forwardToServer(data: ByteArray) {
         try { serverSocket?.send(DatagramPacket(data, data.size, serverAddress, targetPort)) }
@@ -126,10 +139,48 @@ class MITMProxy(
         catch (e: Exception) { Log.w(TAG, "Cli iletme: ${e.message}") }
     }
 
+    // ── Handshake ─────────────────────────────────────────────────────────
+
     private fun isHandshake(raw: ByteArray): Boolean {
         if (raw.isEmpty()) return false
-        return (raw[0].toInt() and 0xFF) in listOf(0x00,0x01,0x02,0x03,0x05,0x06,0x07,0x08,0x09,0x10,0x13,0x15,0x1C,0xC0,0xA0)
+        return (raw[0].toInt() and 0xFF) in listOf(
+            0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x10, 0x13, 0x15, 0xC0, 0xA0
+        )
     }
+
+    private fun isUnconnectedPong(raw: ByteArray): Boolean {
+        return raw.isNotEmpty() && (raw[0].toInt() and 0xFF) == 0x1C
+    }
+
+    // ── OxRelay Enjeksiyonu ───────────────────────────────────────────────
+
+    /**
+     * UnconnectedPong (0x1C) paketini değiştirerek
+     * Minecraft sunucu listesine "OxRelay" adında bir sunucu ekler.
+     *
+     * WClient'teki WRelay mantığının aynısı.
+     * Oyuncu OxRelay'e tıklayınca proxy localhost:19133'e bağlanır.
+     */
+    private fun injectOxRelay(data: ByteArray): ByteArray {
+        try {
+            val rawStr = String(data, Charsets.UTF_8)
+            // Orijinal pong string'ini parse et ve sonuna OxRelay ekle
+            val parts = rawStr.split(";")
+            if (parts.size < 8) return data
+
+            // Format: MCPE;motd;port;version;players;maxPlayers;serverId;subMotd;gamemode;...
+            val newEntry = "MCPE;§5⚡ §dOxRelay §5⚡;$listenPort;1.21.0;0;1;oxclient-relay;§bProxy aktif;Survival;1;19132;19133"
+            val combined = "$rawStr\n$newEntry"
+            Log.d(TAG, "OxRelay enjekte edildi")
+            return combined.toByteArray(Charsets.UTF_8)
+        } catch (e: Exception) {
+            Log.w(TAG, "OxRelay enjeksiyon hatası: ${e.message}")
+            return data
+        }
+    }
+
+    // ── Yardımcı ──────────────────────────────────────────────────────────
 
     private fun close(s: DatagramSocket?) { try { s?.close() } catch (_: Exception) {} }
 }
