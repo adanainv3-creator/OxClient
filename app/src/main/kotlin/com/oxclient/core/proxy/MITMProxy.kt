@@ -11,11 +11,22 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MITMProxy(
     private val targetHost: String,
     private val targetPort: Int,
-    private val listenPort: Int = 19133
+    private val listenPort: Int = 19132
 ) {
     companion object {
         private const val TAG = "MITMProxy"
         private const val BUFFER_SIZE = 65535
+
+        // RakNet UnconnectedPong magic bytes (sabit, değiştirme)
+        private val RAKNET_MAGIC = byteArrayOf(
+            0x00, 0xFF.toByte(), 0xFF.toByte(), 0x00,
+            0xFE.toByte(), 0xFE.toByte(), 0xFE.toByte(), 0xFE.toByte(),
+            0xFD.toByte(), 0xFD.toByte(), 0xFD.toByte(), 0xFD.toByte(),
+            0x12, 0x34, 0x56, 0x78
+        )
+
+        // Sabit GUID — OxClient için benzersiz bir değer
+        private const val SERVER_GUID = 0x4F78436C69656E74L  // "OxClient" ascii
     }
 
     private val running = AtomicBoolean(false)
@@ -86,12 +97,12 @@ class MITMProxy(
                 }
                 val raw = pkt.data.copyOf(pkt.length)
 
-                // === OxRelay LAN Broadcast ===
                 // UnconnectedPing (0x01) → sahte UnconnectedPong ile cevap ver
                 if (isUnconnectedPing(raw)) {
-                    val pong = buildOxRelayPong()
+                    val pingTime = readInt64BE(raw, 1)
+                    val pong = buildUnconnectedPong(pingTime)
                     forwardToClient(pong)
-                    Log.d(TAG, "OxRelay LAN pong gönderildi")
+                    Log.d(TAG, "LAN pong gönderildi (${pong.size}B)")
                     continue  // Sunucuya iletme
                 }
 
@@ -118,12 +129,6 @@ class MITMProxy(
             try {
                 sock.receive(pkt)
                 val raw = pkt.data.copyOf(pkt.length)
-
-                // UnconnectedPong (0x1C) → OxRelay'i de ekle
-                if (isUnconnectedPong(raw)) {
-                    forwardToClient(injectOxRelay(raw))
-                    continue
-                }
 
                 if (isHandshake(raw)) { forwardToClient(raw); continue }
                 val result = withContext(Dispatchers.Default) {
@@ -160,45 +165,66 @@ class MITMProxy(
     }
 
     private fun isUnconnectedPing(raw: ByteArray): Boolean {
-        return raw.isNotEmpty() && (raw[0].toInt() and 0xFF) == 0x01
+        return raw.size >= 2 && (raw[0].toInt() and 0xFF) == 0x01
     }
 
-    private fun isUnconnectedPong(raw: ByteArray): Boolean {
-        return raw.isNotEmpty() && (raw[0].toInt() and 0xFF) == 0x1C
-    }
-
-    // ── OxRelay LAN Broadcast ─────────────────────────────────────────────
+    // ── RakNet UnconnectedPong Builder ────────────────────────────────────
 
     /**
-     * Minecraft LAN broadcast'ine cevap olarak OxRelay sunucusunu tanıtır.
-     * Format: MCPE;motd;port;version;players;maxPlayers;serverId;subMotd;gamemode
+     * Gerçek RakNet UnconnectedPong binary formatı:
+     *
+     * [0x1C]            1 byte   - Packet ID
+     * [pingTime]        8 bytes  - Int64 BE (ping'den gelen zaman)
+     * [serverGUID]      8 bytes  - Int64 BE (sunucu kimliği)
+     * [MAGIC]           16 bytes - RakNet sabit magic
+     * [stringLen]       2 bytes  - Int16 BE (MOTD uzunluğu)
+     * [motdString]      N bytes  - UTF-8
+     *
+     * MOTD format: MCPE;title;port;version;players;maxPlayers;serverId;subTitle;gamemode;gamemodeid;portv4;portv6;
      */
-    private fun buildOxRelayPong(): ByteArray {
-        val pongStr = "MCPE;§5⚡ §dOxRelay §5⚡;$listenPort;1.21.0;0;1;oxclient-relay;§bProxy aktif - Bağlan;Survival;1;19132;19133"
-        val pongData = pongStr.toByteArray(Charsets.UTF_8)
+    private fun buildUnconnectedPong(pingTime: Long): ByteArray {
+        val motd = "MCPE;OxRelay;$listenPort;1.21.0;0;20;${SERVER_GUID};OxClient Proxy;Survival;1;$listenPort;$listenPort;"
+        val motdBytes = motd.toByteArray(Charsets.UTF_8)
+
         val out = java.io.ByteArrayOutputStream()
-        out.write(0x1C)  // UnconnectedPong ID
-        out.write(System.currentTimeMillis().toInt() ushr 8)  // ping ID (fake)
-        out.write(0x00)   // magic
-        out.write(pongData)
+
+        // Packet ID
+        out.write(0x1C)
+
+        // pingTime — 8 bytes Int64 BE
+        writeInt64BE(out, pingTime)
+
+        // serverGUID — 8 bytes Int64 BE
+        writeInt64BE(out, SERVER_GUID)
+
+        // RakNet magic — 16 bytes
+        out.write(RAKNET_MAGIC)
+
+        // MOTD string length — 2 bytes Int16 BE
+        out.write((motdBytes.size shr 8) and 0xFF)
+        out.write(motdBytes.size and 0xFF)
+
+        // MOTD string
+        out.write(motdBytes)
+
         return out.toByteArray()
     }
 
-    /**
-     * Mevcut UnconnectedPong'a OxRelay girişini ekler.
-     */
-    private fun injectOxRelay(data: ByteArray): ByteArray {
-        try {
-            val rawStr = String(data, Charsets.UTF_8)
-            if (rawStr.contains("OxRelay")) return data  // Zaten eklenmiş
+    // ── Yardımcı: Int64 BE okuma/yazma ───────────────────────────────────
 
-            val newEntry = "MCPE;§5⚡ §dOxRelay §5⚡;$listenPort;1.21.0;0;1;oxclient-relay;§bProxy aktif;Survival;1;19132;19133"
-            val combined = "$rawStr\n$newEntry"
-            Log.d(TAG, "OxRelay sunucu listesine eklendi")
-            return combined.toByteArray(Charsets.UTF_8)
-        } catch (e: Exception) {
-            return data
+    private fun writeInt64BE(out: java.io.ByteArrayOutputStream, value: Long) {
+        for (i in 7 downTo 0) {
+            out.write(((value shr (i * 8)) and 0xFF).toInt())
         }
+    }
+
+    private fun readInt64BE(data: ByteArray, offset: Int): Long {
+        if (data.size < offset + 8) return System.currentTimeMillis()
+        var result = 0L
+        for (i in 0 until 8) {
+            result = (result shl 8) or (data[offset + i].toLong() and 0xFF)
+        }
+        return result
     }
 
     // ── Yardımcı ──────────────────────────────────────────────────────────

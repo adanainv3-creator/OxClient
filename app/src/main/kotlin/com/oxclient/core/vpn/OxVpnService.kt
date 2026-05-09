@@ -26,7 +26,7 @@ class OxVpnService : VpnService() {
 
         private const val NOTIF_ID   = 1337
         private const val CHANNEL_ID = "oxclient_vpn"
-        private const val PROXY_PORT = 19133
+        private const val PROXY_PORT = 19132   // 19133 → 19132: Minecraft LAN discovery sadece bu portu tarar
         private const val TUN_ADDR   = "10.233.0.1"
         private const val TUN_MTU    = 1500
     }
@@ -142,7 +142,6 @@ class OxVpnService : VpnService() {
                 addAddress(TUN_ADDR, 32)
                 addRoute("0.0.0.0", 0)
                 // addAllowedApplication YOK — tüm trafik VPN'den geçer
-                // addDisallowedApplication YOK
                 setSession("OxClient")
                 setConfigureIntent(PendingIntent.getActivity(
                     this@OxVpnService, 0,

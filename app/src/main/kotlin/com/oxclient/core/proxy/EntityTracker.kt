@@ -69,21 +69,19 @@ object EntityTracker : PacketListener {
 
     private fun parseStartGame(d: ByteArray) {
         try {
-            var pos = 1  // skip packetId (0x0B = 1 byte)
-            // zigzag entityId
-            var raw = 0L; var s = 0
-            while (pos < d.size && s < 63) {
-                val b = d[pos++].toLong() and 0xFF
-                raw = raw or ((b and 0x7F) shl s)
-                if ((b and 0x80) == 0L) break
-                s += 7
-            }
-            // runtimeEntityId
+            // Packet ID'yi varint olarak doğru şekilde atla
+            val (_, posAfterPktId) = PacketHelper.readVarInt(d, 0)
+            var pos = posAfterPktId
+
+            // unique entity id (zigzag varint) — atla
+            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
+
+            // runtimeEntityId (varlong)
             val (rid, _) = PacketHelper.readVarLong(d, pos)
             selfRuntimeId = rid
             Log.i("EntityTracker", "selfRuntimeId = $rid")
         } catch (e: Exception) {
-            Log.w("EntityTracker", "StartGame: ${e.message}")
+            Log.w("EntityTracker", "StartGame parse hatası: ${e.message}")
         }
     }
 
