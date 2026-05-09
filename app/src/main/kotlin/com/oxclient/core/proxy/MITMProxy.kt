@@ -85,6 +85,16 @@ class MITMProxy(
                     )
                 }
                 val raw = pkt.data.copyOf(pkt.length)
+
+                // === OxRelay LAN Broadcast ===
+                // UnconnectedPing (0x01) → sahte UnconnectedPong ile cevap ver
+                if (isUnconnectedPing(raw)) {
+                    val pong = buildOxRelayPong()
+                    forwardToClient(pong)
+                    Log.d(TAG, "OxRelay LAN pong gönderildi")
+                    continue  // Sunucuya iletme
+                }
+
                 if (isHandshake(raw)) { forwardToServer(raw); continue }
                 val result = withContext(Dispatchers.Default) {
                     PacketProcessor.process(raw, PacketEvent.Direction.CLIENT_TO_SERVER)
@@ -109,7 +119,7 @@ class MITMProxy(
                 sock.receive(pkt)
                 val raw = pkt.data.copyOf(pkt.length)
 
-                // === OxRelay: Sunucu listesine sahte sunucu ekle ===
+                // UnconnectedPong (0x1C) → OxRelay'i de ekle
                 if (isUnconnectedPong(raw)) {
                     forwardToClient(injectOxRelay(raw))
                     continue
@@ -144,38 +154,49 @@ class MITMProxy(
     private fun isHandshake(raw: ByteArray): Boolean {
         if (raw.isEmpty()) return false
         return (raw[0].toInt() and 0xFF) in listOf(
-            0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08,
+            0x00, 0x03, 0x05, 0x06, 0x07, 0x08,
             0x09, 0x10, 0x13, 0x15, 0xC0, 0xA0
         )
+    }
+
+    private fun isUnconnectedPing(raw: ByteArray): Boolean {
+        return raw.isNotEmpty() && (raw[0].toInt() and 0xFF) == 0x01
     }
 
     private fun isUnconnectedPong(raw: ByteArray): Boolean {
         return raw.isNotEmpty() && (raw[0].toInt() and 0xFF) == 0x1C
     }
 
-    // ── OxRelay Enjeksiyonu ───────────────────────────────────────────────
+    // ── OxRelay LAN Broadcast ─────────────────────────────────────────────
 
     /**
-     * UnconnectedPong (0x1C) paketini değiştirerek
-     * Minecraft sunucu listesine "OxRelay" adında bir sunucu ekler.
-     *
-     * WClient'teki WRelay mantığının aynısı.
-     * Oyuncu OxRelay'e tıklayınca proxy localhost:19133'e bağlanır.
+     * Minecraft LAN broadcast'ine cevap olarak OxRelay sunucusunu tanıtır.
+     * Format: MCPE;motd;port;version;players;maxPlayers;serverId;subMotd;gamemode
+     */
+    private fun buildOxRelayPong(): ByteArray {
+        val pongStr = "MCPE;§5⚡ §dOxRelay §5⚡;$listenPort;1.21.0;0;1;oxclient-relay;§bProxy aktif - Bağlan;Survival;1;19132;19133"
+        val pongData = pongStr.toByteArray(Charsets.UTF_8)
+        val out = java.io.ByteArrayOutputStream()
+        out.write(0x1C)  // UnconnectedPong ID
+        out.write(System.currentTimeMillis().toInt() ushr 8)  // ping ID (fake)
+        out.write(0x00)   // magic
+        out.write(pongData)
+        return out.toByteArray()
+    }
+
+    /**
+     * Mevcut UnconnectedPong'a OxRelay girişini ekler.
      */
     private fun injectOxRelay(data: ByteArray): ByteArray {
         try {
             val rawStr = String(data, Charsets.UTF_8)
-            // Orijinal pong string'ini parse et ve sonuna OxRelay ekle
-            val parts = rawStr.split(";")
-            if (parts.size < 8) return data
+            if (rawStr.contains("OxRelay")) return data  // Zaten eklenmiş
 
-            // Format: MCPE;motd;port;version;players;maxPlayers;serverId;subMotd;gamemode;...
             val newEntry = "MCPE;§5⚡ §dOxRelay §5⚡;$listenPort;1.21.0;0;1;oxclient-relay;§bProxy aktif;Survival;1;19132;19133"
             val combined = "$rawStr\n$newEntry"
-            Log.d(TAG, "OxRelay enjekte edildi")
+            Log.d(TAG, "OxRelay sunucu listesine eklendi")
             return combined.toByteArray(Charsets.UTF_8)
         } catch (e: Exception) {
-            Log.w(TAG, "OxRelay enjeksiyon hatası: ${e.message}")
             return data
         }
     }

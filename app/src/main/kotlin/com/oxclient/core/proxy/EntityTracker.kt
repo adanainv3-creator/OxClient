@@ -1,20 +1,14 @@
 package com.oxclient.core.proxy
 
+import android.util.Log
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.events.PacketListener
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * EntityTracker
- *
- * Tüm modüllerin ortak kullandığı entity pozisyon takipçisi.
- * PacketEventBus'a kaydolur, kendi başına çalışır.
- * Modüller getEntities() ile anlık listeyi okur.
- */
 object EntityTracker : PacketListener {
 
-    override val priority: Int = 10  // İlk çalışsın
+    override val priority: Int = 10
 
     data class TrackedEntity(
         val runtimeId : Long,
@@ -60,37 +54,46 @@ object EntityTracker : PacketListener {
     }
 
     override fun onPacket(event: PacketEvent) {
-        val d = event.data
-        if (d.isEmpty()) return
-
-        when (event.packetId) {
-            BedrockPacketIds.START_GAME          -> parseStartGame(d)
-            BedrockPacketIds.ADD_PLAYER          -> parseAddPlayer(d)
-            BedrockPacketIds.ADD_ENTITY          -> parseAddEntity(d)
-            BedrockPacketIds.MOVE_PLAYER         -> parseMovePlayer(d)
-            BedrockPacketIds.MOVE_ENTITY_ABSOLUTE-> parseMoveEntity(d)
-            BedrockPacketIds.REMOVE_ENTITY       -> parseRemoveEntity(d)
-            BedrockPacketIds.SET_ENTITY_DATA     -> parseEntityData(d)
-            BedrockPacketIds.PLAYER_AUTH_INPUT   -> parseAuthInput(d)
-        }
+        try {
+            when (event.packetId) {
+                BedrockPacketIds.START_GAME            -> parseStartGame(event.data)
+                BedrockPacketIds.ADD_PLAYER            -> parseAddPlayer(event.data)
+                BedrockPacketIds.ADD_ENTITY            -> parseAddEntity(event.data)
+                BedrockPacketIds.MOVE_PLAYER           -> parseMovePlayer(event.data)
+                BedrockPacketIds.MOVE_ENTITY_ABSOLUTE  -> parseMoveEntity(event.data)
+                BedrockPacketIds.REMOVE_ENTITY         -> parseRemoveEntity(event.data)
+                BedrockPacketIds.PLAYER_AUTH_INPUT     -> parseAuthInput(event.data)
+            }
+        } catch (_: Exception) {}
     }
 
     private fun parseStartGame(d: ByteArray) {
         try {
-            val (_, p1) = PacketHelper.readVarInt(d, 0)
-            val (rid, _) = PacketHelper.readVarLong(d, p1)
+            var pos = 1  // skip packetId (0x0B = 1 byte)
+            // zigzag entityId
+            var raw = 0L; var s = 0
+            while (pos < d.size && s < 63) {
+                val b = d[pos++].toLong() and 0xFF
+                raw = raw or ((b and 0x7F) shl s)
+                if ((b and 0x80) == 0L) break
+                s += 7
+            }
+            // runtimeEntityId
+            val (rid, _) = PacketHelper.readVarLong(d, pos)
             selfRuntimeId = rid
-        } catch (_: Exception) {}
+            Log.i("EntityTracker", "selfRuntimeId = $rid")
+        } catch (e: Exception) {
+            Log.w("EntityTracker", "StartGame: ${e.message}")
+        }
     }
 
     private fun parseAddPlayer(d: ByteArray) {
         try {
-            var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1  // packetId
-            pos += 16  // UUID (16 bytes)
-            val (_, p2) = PacketHelper.readString(d, pos).let { pos = it.second; 0 to pos } // username
+            var pos = 1  // skip packetId
+            pos += 16    // UUID
+            val (_, p2) = PacketHelper.readString(d, pos); pos = p2
             val (rid, p3) = PacketHelper.readVarLong(d, pos); pos = p3
-            val (_, p4) = PacketHelper.readVarLong(d, pos); pos = p4 // uniqueId
+            val (_, p4) = PacketHelper.readVarLong(d, pos); pos = p4
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
@@ -101,11 +104,10 @@ object EntityTracker : PacketListener {
 
     private fun parseAddEntity(d: ByteArray) {
         try {
-            var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
-            val (_, p2) = PacketHelper.readVarLong(d, pos); pos = p2 // uniqueId
-            val (rid, p3) = PacketHelper.readVarLong(d, pos); pos = p3
-            val (_, p4) = PacketHelper.readString(d, pos); pos = p4  // type string
+            var pos = 1  // skip packetId
+            val (_, p1) = PacketHelper.readVarLong(d, pos); pos = p1
+            val (rid, p2) = PacketHelper.readVarLong(d, pos); pos = p2
+            val (_, p3) = PacketHelper.readString(d, pos); pos = p3
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
@@ -115,9 +117,8 @@ object EntityTracker : PacketListener {
 
     private fun parseMovePlayer(d: ByteArray) {
         try {
-            var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
-            val (rid, p2) = PacketHelper.readVarLong(d, pos); pos = p2
+            var pos = 1
+            val (rid, p1) = PacketHelper.readVarLong(d, pos); pos = p1
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos); pos += 4
@@ -134,10 +135,9 @@ object EntityTracker : PacketListener {
 
     private fun parseMoveEntity(d: ByteArray) {
         try {
-            var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
-            val (rid, p2) = PacketHelper.readVarLong(d, pos); pos = p2
-            pos += 1 // flags
+            var pos = 1
+            val (rid, p1) = PacketHelper.readVarLong(d, pos); pos = p1
+            pos += 1  // flags
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
@@ -147,21 +147,14 @@ object EntityTracker : PacketListener {
 
     private fun parseRemoveEntity(d: ByteArray) {
         try {
-            val (_, p1) = PacketHelper.readVarInt(d, 0)
-            val (rid, _) = PacketHelper.readVarLong(d, p1)
+            val (rid, _) = PacketHelper.readVarLong(d, 1)
             entities.remove(rid)
         } catch (_: Exception) {}
     }
 
-    private fun parseEntityData(d: ByteArray) {
-        // İleride health tracking için
-    }
-
     private fun parseAuthInput(d: ByteArray) {
-        // PlayerAuthInput server-bound → kendi konumumuzu güncelle
         try {
-            var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
+            var pos = 1
             val pitch = PacketHelper.readFloatLE(d, pos); pos += 4
             val yaw   = PacketHelper.readFloatLE(d, pos); pos += 4
             val x     = PacketHelper.readFloatLE(d, pos); pos += 4
