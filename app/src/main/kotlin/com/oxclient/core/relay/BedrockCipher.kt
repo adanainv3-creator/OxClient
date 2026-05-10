@@ -49,7 +49,7 @@ class BedrockCipher(secretKey: ByteArray) {
         fun deriveSecretKey(sharedSecret: ByteArray, salt: ByteArray): ByteArray {
             val digest = MessageDigest.getInstance("SHA-256")
             // counter = 1, big-endian 8 bytes
-            digest.update(byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1))
+            digest.update(byteArrayOf(0, 0, 0, 0, 0, 0, 0, 2))
             digest.update(sharedSecret)
             digest.update(salt)
             return digest.digest() // 32 bytes
