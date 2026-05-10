@@ -3,6 +3,7 @@ package com.oxclient.module.visual
 import android.util.Log
 import com.oxclient.core.proxy.BedrockPacketIds
 import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.core.proxy.InjectionQueue
 import com.oxclient.core.proxy.PacketHelper
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
