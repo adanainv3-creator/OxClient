@@ -147,7 +147,7 @@ object PacketHelper {
         x: Float = 0f, y: Float = 0f, z: Float = 0f
     ): ByteArray {
         val out = ByteArrayOutputStream()
-        writeVarInt(out, BedrockPacketIds.USE_ITEM)
+        writeVarInt(out, BedrockPacketIds.INVENTORY_TRANSACTION)  // ✅ FIX: USE_ITEM alias kaldırıldı, doğru paket 0x1E
         writeVarInt(out, actionType)
         writeBlockPos(out, blockX, blockY, blockZ)
         writeVarInt(out, face)
