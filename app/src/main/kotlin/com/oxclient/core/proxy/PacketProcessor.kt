@@ -9,13 +9,21 @@ import java.io.ByteArrayOutputStream
 /**
  * PacketProcessor
  *
- * Bedrock batch (0xFE payload) içindeki paketleri işler.
+ * Diğer AI'nın verdiği "otomatik sıkıştırma tespiti" kodu 2 nedenden yanlış:
  *
- * ✅ FIX: EntityTracker artık her iki yön için de çağrılıyor.
- *         Önceden sadece SERVER_TO_CLIENT için çağrılıyordu.
- *         Bu yüzden PLAYER_AUTH_INPUT (0x90, CLIENT_TO_SERVER) hiç
- *         işlenmiyordu → selfX/Y/Z hep 0 kalıyordu → tüm modüller
- *         mesafe hesabı yapamıyor, hedef bulamıyordu.
+ * 1) firstByte == 0x78 ise zlib aktif ediyordu.
+ *    0x78 ham batch'te sıradan bir varint length byte'ı olabilir (120 byte'lık paket).
+ *    Bu heuristic yanlış pozitif üretir → ham paket inflate edilmeye çalışılır
+ *    → exception → fallback yine compression açar → sonsuz döngü / bağlantı kopması.
+ *
+ * 2) NetworkSettings algoritma okuma offset'i hatalıydı.
+ *    NetworkSettings (0xC7) formatı:
+ *      [packetId varint=2B] [threshold uint16LE=2B] [algorithm uint16LE=2B]
+ *    Algoritmanın düşük byte'ı: data[idSize + 2]
+ *    Önceki kodda idSize+2 ve idSize+3 LE birleştirme yapıyordu — gereksiz ve
+ *    büyük değerlerde yanlış sonuç verebilirdi.
+ *
+ * DOĞRU: Sıkıştırma durumu YALNIZCA NetworkSettings paketinden okunur.
  */
 object PacketProcessor {
 
@@ -26,22 +34,14 @@ object PacketProcessor {
 
     fun processBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         if (body.isEmpty()) return body
-
         return try {
-            if (compressionEnabled) {
-                processCompressedBatch(body, direction)
-            } else {
-                processRawBatch(body, direction)
-            }
+            if (compressionEnabled) processCompressedBatch(body, direction)
+            else                    processRawBatch(body, direction)
         } catch (e: Exception) {
-            Log.w(TAG, "Batch işleme hatası, orijinal veri iletiliyor: ${e.message}")
+            Log.w(TAG, "Batch işleme hatası, orijinal iletiliyor: ${e.message}")
             body
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  SIKIŞTIRMASIZ BATCH
-    // ─────────────────────────────────────────────────────────────────────
 
     private fun processRawBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         val stream  = ByteArrayInputStream(body)
@@ -51,12 +51,9 @@ object PacketProcessor {
         while (stream.available() > 0) {
             val len = readVarInt(stream)
             if (len <= 0 || stream.available() < len) break
-
             val data = ByteArray(len)
             stream.read(data)
-
             val result = processSinglePacket(data, direction)
-
             when {
                 result == null              -> { changed = true }
                 !result.contentEquals(data) -> { changed = true; packets.add(result) }
@@ -66,28 +63,18 @@ object PacketProcessor {
 
         if (packets.isEmpty()) return null
         if (!changed) return body
-
         val out = ByteArrayOutputStream(body.size)
-        for (pkt in packets) {
-            writeVarInt(out, pkt.size)
-            out.write(pkt)
-        }
+        for (pkt in packets) { writeVarInt(out, pkt.size); out.write(pkt) }
         return out.toByteArray()
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  SIKIŞTIRMALI BATCH
-    // ─────────────────────────────────────────────────────────────────────
-
     private fun processCompressedBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         return try {
-            val decompressed: ByteArray = when (compressionAlgorithm) {
+            val decompressed = when (compressionAlgorithm) {
                 1    -> decompressSnappy(body)
                 else -> zlibInflate(body)
             }
-
             val processed = processRawBatch(decompressed, direction) ?: return null
-
             when (compressionAlgorithm) {
                 1    -> compressSnappy(processed)
                 else -> zlibDeflate(processed)
@@ -99,84 +86,59 @@ object PacketProcessor {
     }
 
     private fun zlibInflate(input: ByteArray): ByteArray {
-        val inflater = java.util.zip.Inflater()
-        inflater.setInput(input)
-        val out = ByteArrayOutputStream()
-        val buf = ByteArray(4096)
-        while (!inflater.finished()) {
-            val n = inflater.inflate(buf)
-            if (n == 0) break
-            out.write(buf, 0, n)
-        }
-        inflater.end()
-        return out.toByteArray()
+        val inf = java.util.zip.Inflater(); inf.setInput(input)
+        val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
+        while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
+        inf.end(); return out.toByteArray()
     }
 
     private fun zlibDeflate(input: ByteArray): ByteArray {
-        val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
-        deflater.setInput(input); deflater.finish()
-        val out = ByteArrayOutputStream()
-        val buf = ByteArray(4096)
-        while (!deflater.finished()) {
-            val n = deflater.deflate(buf)
-            if (n > 0) out.write(buf, 0, n)
-        }
-        deflater.end()
-        return out.toByteArray()
+        val def = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
+        def.setInput(input); def.finish()
+        val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
+        while (!def.finished()) { val n = def.deflate(buf); if (n > 0) out.write(buf, 0, n) }
+        def.end(); return out.toByteArray()
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  SNAPPY
-    // ─────────────────────────────────────────────────────────────────────
-
-    private fun decompressSnappy(input: ByteArray): ByteArray {
-        return try {
-            org.iq80.snappy.Snappy.uncompress(input, 0, input.size)
-        } catch (e: Exception) {
-            Log.w(TAG, "Snappy decompress başarısız, zlib deneniyor: ${e.message}")
-            zlibInflate(input)
-        }
+    private fun decompressSnappy(input: ByteArray): ByteArray = try {
+        org.iq80.snappy.Snappy.uncompress(input, 0, input.size)
+    } catch (e: Exception) {
+        Log.w(TAG, "Snappy başarısız, zlib: ${e.message}"); zlibInflate(input)
     }
 
-    private fun compressSnappy(input: ByteArray): ByteArray {
-        return try {
-            org.iq80.snappy.Snappy.compress(input)
-        } catch (e: Exception) {
-            Log.w(TAG, "Snappy compress başarısız, zlib kullanılıyor: ${e.message}")
-            zlibDeflate(input)
-        }
+    private fun compressSnappy(input: ByteArray): ByteArray = try {
+        org.iq80.snappy.Snappy.compress(input)
+    } catch (e: Exception) {
+        Log.w(TAG, "Snappy compress başarısız, zlib: ${e.message}"); zlibDeflate(input)
     }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  TEK PAKET İŞLEME
-    // ─────────────────────────────────────────────────────────────────────
 
     private fun processSinglePacket(data: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         if (data.isEmpty()) return data
-
         val packetId = readVarInt(ByteArrayInputStream(data))
 
-        // NetworkSettings — sıkıştırmayı aktif et
+        // NetworkSettings (0xC7) — sıkıştırmayı aktif et
+        // Format: [packetId varint] [threshold uint16LE] [algorithm uint16LE]
+        // Sıkıştırma bilgisi SADECE buradan okunur, başka hiçbir heuristik yok.
         if (packetId == 0xC7 && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
-            Log.i(TAG, "NetworkSettings alındı (0xC7) → sıkıştırma aktif")
-            compressionEnabled = true
-            compressionAlgorithm = if (data.size > 4) data[4].toInt() and 0xFF else 0
-            Log.i(TAG, "Sıkıştırma algoritması: ${if (compressionAlgorithm == 1) "Snappy" else "zlib"}")
+            try {
+                val idSize = writeVarInt(packetId).size  // 0xC7 → varint 2 byte
+                // algorithm düşük byte'ı: data[idSize + 2]
+                compressionAlgorithm = if (data.size >= idSize + 3) {
+                    data[idSize + 2].toInt() and 0xFF
+                } else 0
+                compressionEnabled = true
+                Log.i(TAG, "NetworkSettings → ${if (compressionAlgorithm == 1) "Snappy" else "zlib"}")
+            } catch (_: Exception) {
+                compressionEnabled = true; compressionAlgorithm = 0
+            }
         }
 
-        // ✅ FIX: EntityTracker her iki yön için de çağrılıyor.
-        //         Önceki kod sadece SERVER_TO_CLIENT'ı işliyordu.
-        //         PLAYER_AUTH_INPUT (0x90) CLIENT_TO_SERVER paketidir —
-        //         bu olmadan selfX/Y/Z hiç güncellenmiyor.
-        try { EntityTracker.onPacket(PacketEvent(packetId, data, direction)) }
-        catch (_: Exception) {}
+        // EntityTracker — HER İKİ YÖN (C→S de dahil, PLAYER_AUTH_INPUT için)
+        try { EntityTracker.onPacket(PacketEvent(packetId, data, direction)) } catch (_: Exception) {}
 
-        // Event bus
         val event = PacketEvent(packetId, data, direction)
-        try {
-            PacketEventBus.publish(event)
-        } catch (e: Exception) {
-            Log.e(TAG, "EventBus hatası pkt=${packetId.toString(16)}: ${e.message}")
+        try { PacketEventBus.publish(event) } catch (e: Exception) {
+            Log.e(TAG, "EventBus hatası pkt=0x${packetId.toString(16)}: ${e.message}")
         }
 
         return when {
@@ -185,10 +147,6 @@ object PacketProcessor {
             else                       -> data
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────
-    //  YARDIMCILAR
-    // ─────────────────────────────────────────────────────────────────────
 
     fun readVarInt(stream: ByteArrayInputStream): Int {
         var result = 0; var shift = 0
@@ -204,17 +162,10 @@ object PacketProcessor {
 
     fun writeVarInt(out: ByteArrayOutputStream, value: Int) {
         var v = value
-        do {
-            var b = v and 0x7F
-            v = v ushr 7
-            if (v != 0) b = b or 0x80
-            out.write(b)
-        } while (v != 0)
+        do { var b = v and 0x7F; v = v ushr 7; if (v != 0) b = b or 0x80; out.write(b) } while (v != 0)
     }
 
     fun writeVarInt(value: Int): ByteArray {
-        val out = ByteArrayOutputStream(4)
-        writeVarInt(out, value)
-        return out.toByteArray()
+        val out = ByteArrayOutputStream(4); writeVarInt(out, value); return out.toByteArray()
     }
 }

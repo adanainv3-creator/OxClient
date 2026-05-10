@@ -12,6 +12,10 @@ import android.os.IBinder
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -19,6 +23,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -30,6 +35,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,7 +106,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
         ModuleManager.init()
-        Log.d(TAG, "onCreate - ${ModuleManager.modules.size} modül hazır")
+        OverlayLogger.d(TAG, "onCreate - ${ModuleManager.modules.size} modül hazır")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -173,7 +179,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
             isAttached = true
         } catch (e: Exception) {
-            Log.e(TAG, "Overlay eklenemedi: ${e.message}")
+            OverlayLogger.e(TAG, "Overlay eklenemedi: ${e.message}", e)
         }
     }
 
@@ -208,7 +214,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
                 shortcutViews[mod.name] = view
                 try { wm.addView(view, params) } catch (e: Exception) {
-                    Log.e(TAG, "Shortcut ${mod.name}: ${e.message}")
+                    OverlayLogger.e(TAG, "Shortcut ${mod.name}: ${e.message}", e)
                 }
             }
         }
@@ -244,7 +250,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             wm.addView(menuView, params)
             OverlayState.setMenuOpen(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Menü eklenemedi: ${e.message}")
+            OverlayLogger.e(TAG, "Menü eklenemedi: ${e.message}", e)
             menuView = null
         }
     }
@@ -377,8 +383,11 @@ private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, o
 
 // ── Hile Menüsü ──────────────────────────────────────────────────────────────
 
+private enum class MenuTab { MODULES, DEBUG }
+
 @Composable
 private fun HileMenu(onClose: () -> Unit, moduleVersion: Int, onShortcutChanged: () -> Unit, modifier: Modifier = Modifier) {
+    var activeTab by remember { mutableStateOf(MenuTab.MODULES) }
     var cat by remember { mutableStateOf(ModuleCategory.COMBAT) }
     val mods = remember(moduleVersion, cat) { ModuleManager.byCategory(cat) }
 
@@ -410,36 +419,254 @@ private fun HileMenu(onClose: () -> Unit, moduleVersion: Int, onShortcutChanged:
             DebugInfoBar()
             Spacer(Modifier.height(4.dp))
             HorizontalDivider(color = OxPurple.copy(0.3f))
-            Spacer(Modifier.height(4.dp))
 
-            // Kategoriler
+            // ── Tab Seçici ──────────────────────────────────────────────────
             Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().background(Color(0x220D0D1A)).padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                ModuleCategory.entries.forEach { c ->
-                    val sel = c == cat
+                MenuTab.entries.forEach { tab ->
+                    val sel = tab == activeTab
+                    val label = when (tab) {
+                        MenuTab.MODULES -> "📦 Modüller"
+                        MenuTab.DEBUG   -> "🐛 Debug"
+                    }
                     Box(
-                        modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
                             .background(if (sel) OxPurple else OxSurface)
-                            .border(1.dp, if (sel) OxPurple else OxOutline, RoundedCornerShape(20.dp))
-                            .clickable { cat = c }.padding(horizontal = 12.dp, vertical = 5.dp)
+                            .border(1.dp, if (sel) OxPurple else OxOutline.copy(0.5f), RoundedCornerShape(16.dp))
+                            .clickable { activeTab = tab }
+                            .padding(horizontal = 14.dp, vertical = 5.dp)
                     ) {
-                        Text(c.displayName, fontSize = 11.sp, color = if (sel) Color.White else OxOnSurface,
-                            fontFamily = FontFamily.Monospace, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                        Text(label, fontSize = 11.sp,
+                            color = if (sel) Color.White else OxOnSurface.copy(0.7f),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
                     }
                 }
             }
+            HorizontalDivider(color = OxPurple.copy(0.2f))
 
-            // Modüller
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = PaddingValues(vertical = 6.dp)
-            ) {
-                items(mods) { mod -> ModuleCard(module = mod, onShortcutChanged = onShortcutChanged) }
+            // ── İçerik ──────────────────────────────────────────────────────
+            when (activeTab) {
+                MenuTab.MODULES -> {
+                    // Kategoriler
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ModuleCategory.entries.forEach { c ->
+                            val sel = c == cat
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(20.dp))
+                                    .background(if (sel) OxPurple else OxSurface)
+                                    .border(1.dp, if (sel) OxPurple else OxOutline, RoundedCornerShape(20.dp))
+                                    .clickable { cat = c }.padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
+                                Text(c.displayName, fontSize = 11.sp, color = if (sel) Color.White else OxOnSurface,
+                                    fontFamily = FontFamily.Monospace, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                            }
+                        }
+                    }
+                    // Modüller
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(vertical = 6.dp)
+                    ) {
+                        items(mods) { mod -> ModuleCard(module = mod, onShortcutChanged = onShortcutChanged) }
+                    }
+                }
+                MenuTab.DEBUG -> {
+                    DebugLogConsole(modifier = Modifier.weight(1f))
+                }
             }
         }
+    }
+}
+
+// ── Debug Log Console ─────────────────────────────────────────────────────────
+
+@Composable
+private fun DebugLogConsole(modifier: Modifier = Modifier) {
+    val ctx        = LocalContext.current
+    val entries    by OverlayLogger.entries.collectAsState()
+    val listState  = rememberLazyListState()
+    var autoScroll by remember { mutableStateOf(true) }
+    var filterLevel by remember { mutableStateOf<OverlayLogger.Level?>(null) }
+
+    // Yeni log gelince en alta kaydır
+    LaunchedEffect(entries.size) {
+        if (autoScroll && entries.isNotEmpty()) {
+            listState.animateScrollToItem(entries.size - 1)
+        }
+    }
+
+    val filtered = remember(entries, filterLevel) {
+        if (filterLevel == null) entries else entries.filter { it.level == filterLevel }
+    }
+
+    Column(modifier = modifier.fillMaxWidth().background(Color(0xEE0A0A12))) {
+
+        // ── Toolbar ──────────────────────────────────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0D0D1A))
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Level filtre butonları
+            listOf(null,
+                OverlayLogger.Level.DEBUG,
+                OverlayLogger.Level.INFO,
+                OverlayLogger.Level.WARN,
+                OverlayLogger.Level.ERROR
+            ).forEach { lvl ->
+                val sel = filterLevel == lvl
+                val label = lvl?.label ?: "ALL"
+                val color = when (lvl) {
+                    OverlayLogger.Level.DEBUG -> Color(0xFF888888)
+                    OverlayLogger.Level.INFO  -> Color(0xFF4FC3F7)
+                    OverlayLogger.Level.WARN  -> Color(0xFFFFB74D)
+                    OverlayLogger.Level.ERROR -> Color(0xFFEF5350)
+                    null                      -> Color(0xFFBBBBBB)
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (sel) color.copy(0.25f) else Color.Transparent)
+                        .border(1.dp, if (sel) color else color.copy(0.3f), RoundedCornerShape(8.dp))
+                        .clickable { filterLevel = lvl }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(label, fontSize = 9.sp, color = color,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                }
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            // Auto-scroll toggle
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (autoScroll) OxPurple.copy(0.3f) else Color.Transparent)
+                    .border(1.dp, if (autoScroll) OxPurple else OxOutline.copy(0.4f), RoundedCornerShape(8.dp))
+                    .clickable { autoScroll = !autoScroll }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text("↓", fontSize = 9.sp,
+                    color = if (autoScroll) OxPurpleLight else OxOnSurface.copy(0.5f),
+                    fontFamily = FontFamily.Monospace)
+            }
+
+            // Kopyala butonu
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0x22FFFFFF))
+                    .border(1.dp, OxOutline.copy(0.4f), RoundedCornerShape(8.dp))
+                    .clickable {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val text = if (filterLevel == null)
+                            OverlayLogger.allAsText()
+                        else
+                            filtered.joinToString("\n") { it.toPlainString() }
+                        cm.setPrimaryClip(ClipData.newPlainText("OxClient Logs", text))
+                        Toast.makeText(ctx, "Loglar kopyalandı (${filtered.size} satır)", Toast.LENGTH_SHORT).show()
+                    }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text("📋", fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+            }
+
+            // Temizle butonu
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(OxError.copy(0.15f))
+                    .border(1.dp, OxError.copy(0.4f), RoundedCornerShape(8.dp))
+                    .clickable { OverlayLogger.clear() }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text("🗑", fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+            }
+        }
+
+        HorizontalDivider(color = OxPurple.copy(0.2f))
+
+        // ── Log Listesi ───────────────────────────────────────────────────
+        if (filtered.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Henüz log yok...",
+                    fontSize = 11.sp,
+                    color = OxOnSurface.copy(0.3f),
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+                contentPadding = PaddingValues(vertical = 4.dp)
+            ) {
+                items(filtered, key = { it.id }) { entry ->
+                    LogEntryRow(entry = entry)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LogEntryRow(entry: OverlayLogger.LogEntry) {
+    val levelColor = when (entry.level) {
+        OverlayLogger.Level.DEBUG -> Color(0xFF777777)
+        OverlayLogger.Level.INFO  -> Color(0xFF4FC3F7)
+        OverlayLogger.Level.WARN  -> Color(0xFFFFB74D)
+        OverlayLogger.Level.ERROR -> Color(0xFFEF5350)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(3.dp))
+            .background(levelColor.copy(if (entry.level == OverlayLogger.Level.ERROR) 0.08f else 0.03f))
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            entry.timestamp,
+            fontSize = 7.sp,
+            color = OxOnSurface.copy(0.35f),
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.alignByBaseline()
+        )
+        Text(
+            "${entry.level.label}/${entry.tag}",
+            fontSize = 8.sp,
+            color = levelColor.copy(0.85f),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.alignByBaseline()
+        )
+        Text(
+            entry.message,
+            fontSize = 8.sp,
+            color = OxOnSurface.copy(0.85f),
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(1f).alignByBaseline(),
+            overflow = TextOverflow.Ellipsis,
+            maxLines = 3
+        )
     }
 }
 

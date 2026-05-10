@@ -6,11 +6,19 @@ import java.io.ByteArrayOutputStream
  * PacketHelper
  *
  * Tüm modüllerin ortak kullandığı Bedrock paket builder'ları.
- * PacketProcessor üzerinden modüllere enjeksiyon sağlar.
  *
- * Kullanım:
- *   PacketHelper.injectToServer(PacketHelper.buildMovePlayer(...))
- *   PacketHelper.injectToClient(PacketHelper.buildSetHealth(...))
+ * ✅ FIX (KRİTİK): wrapBatch() artık PacketProcessor.compressionEnabled
+ *    durumuna göre sıkıştırma yapıyor.
+ *
+ *    Önceki hata: NetworkSettings geldikten sonra sunucu SIKIŞTIRILMIŞ
+ *    paket bekliyor. Ama enjekte edilen paketler ham (sıkıştırılmamış)
+ *    gönderiliyordu → sunucu çöp veri alıyor → drop → hiçbir modül
+ *    sunucuda efekt yaratmıyor (KillAura vuruyor ama hasar gitmiyor,
+ *    TPAura teleport etmiyor, Criticals çalışmıyor vb.)
+ *
+ *    Çözüm: wrapBatch() içinde, compression aktifse paketi sıkıştır.
+ *    Bu fonksiyon tüm builder'lar (buildAttack, buildMovePlayer vb.)
+ *    tarafından çağrıldığından tek noktadan düzeltme yeterli.
  */
 object PacketHelper {
 
@@ -67,15 +75,15 @@ object PacketHelper {
     fun buildAttack(targetRuntimeId: Long, attackerRuntimeId: Long): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.INVENTORY_TRANSACTION)
-        writeVarInt(out, 0)
-        writeVarInt(out, 0)
-        writeVarInt(out, 2)
+        writeVarInt(out, 0)   // legacyRequestId
+        writeVarInt(out, 0)   // legacySlots count
+        writeVarInt(out, 2)   // transaction type: ItemUseOnEntityTransaction
         writeVarLong(out, targetRuntimeId)
-        writeVarInt(out, 1)
-        writeVarInt(out, 0)
-        writeItem(out)
-        writeVec3(out, 0f, 0f, 0f)
-        writeVec3(out, 0f, 0f, 0f)
+        writeVarInt(out, 1)   // action: Attack
+        writeVarInt(out, 0)   // hotbar slot
+        writeItem(out)        // held item (air)
+        writeItem(out)        // clicked item (air) — ✅ FIX: eksik 2. item eklendi
+        writeVec3(out, 0f, 0f, 0f)  // click pos
         return wrapBatch(out.toByteArray())
     }
 
@@ -169,12 +177,67 @@ object PacketHelper {
 
     // ── Batch Wrap ────────────────────────────────────────────────────────
 
+    /**
+     * ✅ FIX (KRİTİK): Sıkıştırma durumuna göre batch oluştur.
+     *
+     * Önceki kod: her zaman ham (sıkıştırılmamış) batch üretiyordu.
+     * NetworkSettings sonrası sunucu sıkıştırılmış paket bekler.
+     * Ham paket gönderilince sunucu RakNet seviyesinde iyi alıyor ama
+     * Bedrock decode aşamasında sıkıştırılmış bekleyip şifreli veri
+     * görüyor → paketi tamamen ignore ediyor.
+     *
+     * Batch format (sıkıştırmasız):
+     *   [0xFE] [varint(packetLen)] [packetData]
+     *
+     * Batch format (sıkıştırmalı):
+     *   [0xFE] [compress([varint(packetLen)] [packetData])]
+     *   NOT: 0xFE'den SONRAKI kısım sıkıştırılır, 0xFE sıkıştırılmaz.
+     */
     fun wrapBatch(packetData: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream()
+        // İç batch body: varint(len) + packetData
+        val batchBody = ByteArrayOutputStream().also { buf ->
+            writeVarInt(buf, packetData.size)
+            buf.write(packetData)
+        }.toByteArray()
+
+        // Sıkıştırma gerekiyorsa uygula
+        val finalBody = if (PacketProcessor.compressionEnabled) {
+            when (PacketProcessor.compressionAlgorithm) {
+                1    -> compressSnappy(batchBody)
+                else -> zlibDeflate(batchBody)
+            }
+        } else {
+            batchBody
+        }
+
+        // 0xFE başlığı ile sar
+        val out = ByteArrayOutputStream(1 + finalBody.size)
         out.write(0xFE)
-        writeVarInt(out, packetData.size)
-        out.write(packetData)
+        out.write(finalBody)
         return out.toByteArray()
+    }
+
+    // ── Sıkıştırma yardımcıları ───────────────────────────────────────────
+
+    private fun zlibDeflate(input: ByteArray): ByteArray {
+        val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
+        deflater.setInput(input); deflater.finish()
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        while (!deflater.finished()) {
+            val n = deflater.deflate(buf)
+            if (n > 0) out.write(buf, 0, n)
+        }
+        deflater.end()
+        return out.toByteArray()
+    }
+
+    private fun compressSnappy(input: ByteArray): ByteArray {
+        return try {
+            org.iq80.snappy.Snappy.compress(input)
+        } catch (e: Exception) {
+            zlibDeflate(input)
+        }
     }
 
     // ── Yazıcılar ─────────────────────────────────────────────────────────
@@ -226,7 +289,7 @@ object PacketHelper {
     }
 
     private fun writeItem(out: ByteArrayOutputStream) {
-        writeVarInt(out, 0)
+        writeVarInt(out, 0)  // runtime ID 0 = air
     }
 
     private fun varIntSize(value: Int): Int {
@@ -248,18 +311,26 @@ object PacketHelper {
         return result to pos
     }
 
-    // ✅ FIX: (b and 0x7F) → (b and 0x7FL) — Long mask zorunlu, yoksa 32 bitten
-    //         büyük runtimeId değerlerinde Int'e truncate olur ve selfRuntimeId
-    //         hep yanlış kalır → tüm combat modülleri hedef bulamaz.
     fun readVarLong(data: ByteArray, offset: Int = 0): Pair<Long, Int> {
         var result = 0L; var shift = 0; var pos = offset
         while (pos < data.size) {
             val b = data[pos++].toLong() and 0xFF
-            result = result or ((b and 0x7FL) shl shift)   // ✅ 0x7FL — Long bit mask
+            result = result or ((b and 0x7FL) shl shift)
             if (b and 0x80L == 0L) break
             shift += 7
         }
         return result to pos
+    }
+
+    /**
+     * Zigzag encoded signed varlong okur (uniqueEntityId için).
+     * Bedrock START_GAME ve ADD_PLAYER'da uniqueEntityId zigzag encode'ludur.
+     */
+    fun readZigzagVarLong(data: ByteArray, offset: Int = 0): Pair<Long, Int> {
+        val (raw, pos) = readVarLong(data, offset)
+        // zigzag decode: (raw >>> 1) XOR -(raw AND 1)
+        val decoded = (raw ushr 1) xor -(raw and 1L)
+        return decoded to pos
     }
 
     fun readFloatLE(data: ByteArray, offset: Int): Float {
