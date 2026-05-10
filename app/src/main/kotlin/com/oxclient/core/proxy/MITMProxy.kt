@@ -370,21 +370,22 @@ class MITMProxy(
     // ─────────────────────────────────────────────────────────────────────
 
     private fun processGamePacket(payload: ByteArray, direction: PacketEvent.Direction): ByteArray? {
-        val body   = payload.copyOfRange(1, payload.size)
+        val body = payload.copyOfRange(1, payload.size)
 
-        // ✅ FIX: ServerToClientHandshake (0x03) paketi şifrelemeyi başlatır.
-        // Bu noktadan sonra sunucudan gelen TÜM paketler AES-256-CFB8 ile şifreli.
-        // Bu paketi istemciye iletmeden önce şifrelemeyi aktif et.
+        // ✅ FIX: ServerToClientHandshake (0x03) tespiti.
+        // Şifreleme henüz aktif değilken gelen paketin ID'sini kontrol et.
+        // Decompress gerekiyorsa önce uygula, sonra paket ID'sini oku.
         if (direction == PacketEvent.Direction.SERVER_TO_CLIENT && !PacketProcessor.encryptionEnabled) {
             try {
-                val (_, p0) = readVarIntFromBytes(body, 0)
-                // Decompress eğer aktifse
                 val rawBody = if (PacketProcessor.compressionEnabled) {
                     try { zlibInflateSimple(body) } catch (_: Exception) { body }
                 } else body
                 val (packetId, _) = readVarIntFromBytes(rawBody, 0)
-                if (packetId == 0x03) { // SERVER_TO_CLIENT_HANDSHAKE
+                if (packetId == BedrockPacketIds.SERVER_TO_CLIENT_HANDSHAKE) {
                     handleHandshake(rawBody)
+                    // Handshake paketini istemciye ilet (şifreleme aktif olmadan önce)
+                    // processBatch'ten ÖNCE döndür — şifreleme şimdi aktif,
+                    // ama bu paketi şifrelemeden iletmeye devam et
                 }
             } catch (_: Exception) {}
         }

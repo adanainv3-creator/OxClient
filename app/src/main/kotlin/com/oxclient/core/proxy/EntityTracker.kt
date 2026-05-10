@@ -4,6 +4,7 @@ import android.util.Log
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.events.PacketListener
+import com.oxclient.ui.overlay.OverlayLogger
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -18,11 +19,22 @@ import java.util.concurrent.ConcurrentHashMap
  * runtimeId içermez. uniqueToRuntime olmadan entity'ler hiç silinmez →
  * KillAura ölmüş/gitmiş oyunculara saldırmaya devam eder, liste şişer.
  *
- * Diğer tüm parse fonksiyonlarında da uniqueEntityId alanları
- * readZigzagVarLong ile okunmak zorundadır; readVarLong ile okumak
- * zigzag decode'u yapmaz ve byte sayısı yanlış olabilir.
+ * ✅ FIX: PLAYER_AUTH_INPUT (0x91) parse düzeltildi.
+ * Gerçek Bedrock 1.21.x format (paket ID varinti atlandıktan sonra):
+ *   pitch    : float LE (4 byte)
+ *   yaw      : float LE (4 byte)
+ *   x        : float LE (4 byte)   ← headYaw BURADA DEĞİL
+ *   y        : float LE (4 byte)
+ *   z        : float LE (4 byte)
+ *   headYaw  : float LE (4 byte)   ← sonradan geliyor
+ *   ...
+ * Önceki kod headYaw'ı 3. float sanıp atlıyordu → x/y/z yanlış offset'ten
+ * okunuyordu → selfX/Y/Z hep 0 → modüller selfRuntimeId=0 ile saldırı
+ * yapıyor, Criticals yanlış konum kullanıyor, TPAura'nın origX/Y/Z = 0.
  */
 object EntityTracker : PacketListener {
+
+    private const val TAG = "EntityTracker"
 
     override val priority: Int = 10
 
@@ -47,11 +59,17 @@ object EntityTracker : PacketListener {
     @Volatile var selfYaw       : Float = 0f
     @Volatile var selfPitch     : Float = 0f
 
-    fun register()   { PacketEventBus.register(this) }
+    fun register()   {
+        PacketEventBus.register(this)
+        OverlayLogger.d(TAG, "EntityTracker kayıt oldu")
+    }
     fun unregister() {
         PacketEventBus.unregister(this)
         entities.clear()
         uniqueToRuntime.clear()
+        selfRuntimeId = 0L
+        selfX = 0f; selfY = 0f; selfZ = 0f
+        OverlayLogger.d(TAG, "EntityTracker sıfırlandı")
     }
 
     fun getEntities(): Map<Long, TrackedEntity> = entities
@@ -98,9 +116,9 @@ object EntityTracker : PacketListener {
             // runtimeEntityId → selfRuntimeId
             val (rid, _) = PacketHelper.readVarLong(d, pos)
             selfRuntimeId = rid
-            Log.i("EntityTracker", "selfRuntimeId = $rid")
+            OverlayLogger.i(TAG, "StartGame → selfRuntimeId=$rid")
         } catch (e: Exception) {
-            Log.w("EntityTracker", "StartGame parse hatası: ${e.message}")
+            OverlayLogger.w(TAG, "StartGame parse hatası: ${e.message}")
         }
     }
 
@@ -118,9 +136,10 @@ object EntityTracker : PacketListener {
             if (rid != selfRuntimeId) {
                 entities[rid] = TrackedEntity(rid, uniqueId, x, y, z, isPlayer = true)
                 uniqueToRuntime[uniqueId] = rid
+                OverlayLogger.d(TAG, "AddPlayer rid=$rid x=%.1f y=%.1f z=%.1f".format(x, y, z))
             }
         } catch (e: Exception) {
-            Log.w("EntityTracker", "AddPlayer parse hatası: ${e.message}")
+            OverlayLogger.w(TAG, "AddPlayer parse hatası: ${e.message}")
         }
     }
 
@@ -171,8 +190,6 @@ object EntityTracker : PacketListener {
     private fun parseRemoveEntity(d: ByteArray) {
         try {
             val (_, p0) = PacketHelper.readVarInt(d, 0)
-            // REMOVE_ENTITY → uniqueEntityId (zigzag signed varlong)
-            // runtimeId GELMİYOR — uniqueToRuntime map'i şart
             val (uniqueId, _) = PacketHelper.readZigzagVarLong(d, p0)
             val runtimeId = uniqueToRuntime.remove(uniqueId)
             if (runtimeId != null) {
@@ -181,18 +198,33 @@ object EntityTracker : PacketListener {
         } catch (_: Exception) {}
     }
 
+    /**
+     * PLAYER_AUTH_INPUT — Bedrock 1.21.x gerçek formatı:
+     *
+     * [packetId varint]
+     * [pitch    float LE]   ← pos
+     * [yaw      float LE]   ← pos+4
+     * [x        float LE]   ← pos+8   ✅ headYaw BURAYA GELMİYOR
+     * [y        float LE]   ← pos+12
+     * [z        float LE]   ← pos+16
+     * [headYaw  float LE]   ← pos+20  (sonradan geliyor)
+     * ...
+     *
+     * ÖNCEKİ HATA: pos+8'e headYaw sanılarak pos+=4 ekleniyor,
+     * x pos+12'den okunuyordu → her şey 4 byte kaymış → 0,0,0 görünüyordu.
+     */
     private fun parseAuthInput(d: ByteArray) {
         try {
             val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
-            // PLAYER_AUTH_INPUT format: pitch, yaw, headYaw, x, y, z
-            // ✅ FIX: headYaw (4 byte) atlanmıyordu → x/y/z yanlış offsetten okunuyordu
-            //         Bu yüzden konum hep 0,0,0 görünüyordu
-            val pitch = PacketHelper.readFloatLE(d, pos); pos += 4
-            val yaw   = PacketHelper.readFloatLE(d, pos); pos += 4
-            pos += 4  // headYaw — atla
-            val x     = PacketHelper.readFloatLE(d, pos); pos += 4
-            val y     = PacketHelper.readFloatLE(d, pos); pos += 4
-            val z     = PacketHelper.readFloatLE(d, pos)
+
+            // ✅ FIX: Doğru sıra — pitch, yaw, SONRA x/y/z
+            // headYaw araya girmiyor
+            val pitch = PacketHelper.readFloatLE(d, pos); pos += 4  // pitch
+            val yaw   = PacketHelper.readFloatLE(d, pos); pos += 4  // yaw
+            val x     = PacketHelper.readFloatLE(d, pos); pos += 4  // x ← headYaw atlanmıyor
+            val y     = PacketHelper.readFloatLE(d, pos); pos += 4  // y
+            val z     = PacketHelper.readFloatLE(d, pos)            // z
+
             selfX = x; selfY = y; selfZ = z
             selfYaw = yaw; selfPitch = pitch
         } catch (_: Exception) {}

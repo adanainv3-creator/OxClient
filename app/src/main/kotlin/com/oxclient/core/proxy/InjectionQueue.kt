@@ -1,6 +1,7 @@
 package com.oxclient.core.proxy
 
 import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -17,16 +18,12 @@ object InjectionQueue {
     @Volatile private var clientAddr   : InetAddress?   = null
     @Volatile private var clientPort   : Int            = 0
 
-    // ✅ FIX: Sequence counter 0'dan başlamalı.
-    //         0x7000 ile başlamak sunucunun duplicate/flood tespitini tetikliyordu → kick.
-    //         RakNet'te sequence her bağlantıda 0'dan başlar.
-    private val seqCounter      = AtomicInteger(0)  // FrameSet sequence
-    private val reliableCounter = AtomicInteger(0)  // Reliable message index
-    private val orderCounter    = AtomicInteger(0)  // Order index
+    // RakNet sequence sayaçları — her bağlantıda 0'dan başlar
+    private val seqCounter      = AtomicInteger(0)
+    private val reliableCounter = AtomicInteger(0)
+    private val orderCounter    = AtomicInteger(0)
 
-    // ✅ FIX: Inject rate limit — çok fazla paket aynı anda gönderilince sunucu kick atıyor.
-    //         KillAura + Criticals(Vanilla=7 paket) + TPAura aynı tick'te 10+ paket yapıyor.
-    //         Minimum 5ms arayla gönder.
+    // Rate limit — çok sık inject flood olarak algılanıyor
     private var lastInjectMs = 0L
     private const val MIN_INJECT_INTERVAL_MS = 5L
 
@@ -42,7 +39,7 @@ object InjectionQueue {
         serverAddr = sAddr; serverPort = sPort
         clientAddr = cAddr; clientPort = cPort
         isBound = true
-        Log.i(TAG, "✓ Bound → srv=$sAddr:$sPort cli=$cAddr:$cPort")
+        OverlayLogger.i(TAG, "✓ Bound → srv=$sAddr:$sPort cli=$cAddr:$cPort")
     }
 
     fun unbind() {
@@ -55,21 +52,45 @@ object InjectionQueue {
         Log.d(TAG, "Unbound")
     }
 
+    /**
+     * Sunucuya enjeksiyon — ŞİFRELEME UYGULANIYOR.
+     *
+     * ✅ FIX (KRİTİK): Şifreleme aktifken enjekte edilen paketler şifrelenmeden
+     * gönderiliyordu. Sunucu şifreli paket beklediği için bunları tamamen
+     * ignore ediyordu → KillAura, TPAura, Criticals vb. hiçbir etki yaratmıyordu.
+     *
+     * data parametresi: wrapBatch() çıktısı — [0xFE][batch_body]
+     * Şifreleme: 0xFE header'dan SONRA gelen kısma (batch_body) uygulanır.
+     * Akış: data → [0xFE | encrypt(data[1..])] → wrapInFrameSet → UDP
+     */
     fun enqueueToServer(data: ByteArray) {
-        if (!isBound) { Log.w(TAG, "ToServer: UNBOUND — paket atlandı"); return }
+        if (!isBound) { OverlayLogger.w(TAG, "ToServer: UNBOUND — paket atlandı"); return }
         val sock = serverSocket ?: return
         val addr = serverAddr   ?: return
         try {
-            // ✅ FIX: Rate limit — çok sık inject flood olarak algılanıyor
+            // Rate limit
             val now = System.currentTimeMillis()
             if (now - lastInjectMs < MIN_INJECT_INTERVAL_MS) {
                 Thread.sleep(MIN_INJECT_INTERVAL_MS - (now - lastInjectMs))
             }
             lastInjectMs = System.currentTimeMillis()
-            val wrapped = wrapInFrameSet(data)
+
+            // ✅ FIX: Şifreleme aktifse batch_body'yi şifrele
+            // data formatı: [0xFE][batch_body]
+            // Şifreleme sadece 0xFE'den SONRAKİ kısma uygulanır
+            val finalData = if (PacketProcessor.encryptionEnabled && data.isNotEmpty() && data[0] == 0xFE.toByte()) {
+                val body    = data.copyOfRange(1, data.size)
+                val encrypted = PacketProcessor.encrypt(body)
+                byteArrayOf(0xFE.toByte()) + encrypted
+            } else {
+                data
+            }
+
+            val wrapped = wrapInFrameSet(finalData)
             sock.send(DatagramPacket(wrapped, wrapped.size, addr, serverPort))
-            Log.d(TAG, "ToServer: ${wrapped.size}B gönderildi (FrameSet)")
-        } catch (e: Exception) { Log.w(TAG, "ToServer hata: ${e.message}") }
+        } catch (e: Exception) {
+            OverlayLogger.w(TAG, "ToServer hata: ${e.message}")
+        }
     }
 
     fun enqueueToClient(data: ByteArray) {
@@ -79,8 +100,9 @@ object InjectionQueue {
         try {
             val wrapped = wrapInFrameSet(data)
             sock.send(DatagramPacket(wrapped, wrapped.size, addr, clientPort))
-            Log.d(TAG, "ToClient: ${wrapped.size}B gönderildi (FrameSet)")
-        } catch (e: Exception) { Log.w(TAG, "ToClient hata: ${e.message}") }
+        } catch (e: Exception) {
+            Log.w(TAG, "ToClient hata: ${e.message}")
+        }
     }
 
     /**
@@ -88,13 +110,13 @@ object InjectionQueue {
      *
      * Datagram yapısı:
      *   [1B]  FrameSet ID = 0x84
-     *   [3B]  Sequence Number (LE)          ← seqCounter
+     *   [3B]  Sequence Number (LE)
      *   [1B]  Flags = 0x60 (reliability=3, no split)
      *   [2B]  Payload bit length (BE)
-     *   [3B]  Reliable message index (LE)   ← reliableCounter  ✅ AYRI SAYAÇ
-     *   [3B]  Order index (LE)              ← orderCounter      ✅ AYRI SAYAÇ
+     *   [3B]  Reliable message index (LE)
+     *   [3B]  Order index (LE)
      *   [1B]  Order channel = 0
-     *   [N]   Payload (0xFE + batch data)
+     *   [N]   Payload
      */
     private fun wrapInFrameSet(payload: ByteArray): ByteArray {
         val seq      = seqCounter.getAndIncrement()      and 0xFFFFFF
@@ -104,33 +126,26 @@ object InjectionQueue {
 
         val out = java.io.ByteArrayOutputStream(payload.size + 27)
 
-        // ── FrameSet başlığı ──────────────────────────────────────────────
         out.write(0x84)
         out.write(seq and 0xFF)
         out.write((seq shr 8) and 0xFF)
         out.write((seq shr 16) and 0xFF)
 
-        // ── Frame başlığı ─────────────────────────────────────────────────
-        out.write(0x60)                         // RELIABLE_ORDERED flags
+        out.write(0x60)
 
-        // Payload bit uzunluğu (Big Endian)
         out.write((bitLen shr 8) and 0xFF)
         out.write(bitLen and 0xFF)
 
-        // Reliable message index (Little Endian, 3 byte) ✅ reliableCounter
         out.write(reliable and 0xFF)
         out.write((reliable shr 8) and 0xFF)
         out.write((reliable shr 16) and 0xFF)
 
-        // Order index (Little Endian, 3 byte) ✅ orderCounter
         out.write(order and 0xFF)
         out.write((order shr 8) and 0xFF)
         out.write((order shr 16) and 0xFF)
 
-        // Order channel
         out.write(0x00)
 
-        // ── Payload ───────────────────────────────────────────────────────
         out.write(payload)
 
         return out.toByteArray()
