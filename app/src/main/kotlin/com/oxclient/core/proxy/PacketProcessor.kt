@@ -171,49 +171,97 @@ object PacketProcessor {
     }
 
     private fun processCompressedBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
-        return try {
-            // Bedrock 1.20+: sıkıştırılmış batch'in başında 1 byte compression header
-            // 0x00=zlib, 0x01=snappy, 0xFF=none
-            val (hasHeader, dataOffset) = detectCompressionHeader(body)
-            val compressed = if (hasHeader) body.copyOfRange(dataOffset, body.size) else body
+        // Bedrock 1.20+: sıkıştırılmış batch'in başında 1 byte compression header olabilir.
+        // 0x00 = zlib, 0x01 = snappy, 0xFF = sıkıştırma yok (raw batch)
+        //
+        // KRITIK: Bu header'ı algılamak için body[0]'a bakmak yeterli değil;
+        // 0x78 (zlib magic) veya geçerli bir varint ile başlıyorsa header YOK demektir.
+        // En güvenli yol: önce header var mı dene, yoksa direkt dene.
 
-            val decompressed = when (compressionAlgorithm) {
-                1    -> decompressSnappy(compressed)
-                else -> zlibInflate(compressed)
+        val first = if (body.isNotEmpty()) body[0].toInt() and 0xFF else -1
+
+        // 0xFF = "no compression" header → body[1..] raw batch
+        if (first == 0xFF) {
+            val raw = body.copyOfRange(1, body.size)
+            val processed = processRawBatch(raw, direction) ?: return null
+            return byteArrayOf(0xFF.toByte()) + processed
+        }
+
+        // 0x00 veya 0x01 = compression type header → body[1..] sıkıştırılmış
+        // Ama bu byte'lar aynı zamanda varint'in başı da olabilir.
+        // Güvenli yol: eğer 0x00 ya da 0x01 ise ve arkasındaki data decompress edilebiliyorsa header kabul et.
+        val hasAlgorithmHeader = (first == 0x00 || first == 0x01)
+        val headerAlgorithm    = first  // 0=zlib, 1=snappy
+
+        if (hasAlgorithmHeader) {
+            val candidate = body.copyOfRange(1, body.size)
+            val decompressed = tryDecompress(candidate, headerAlgorithm)
+            if (decompressed != null) {
+                val processed = processRawBatch(decompressed, direction) ?: return null
+                val recompressed = recompress(processed, headerAlgorithm)
+                return byteArrayOf(body[0]) + recompressed
             }
+            // Header olmadığı anlaşıldı — tüm body'yi dene
+        }
+
+        // Header yok — tüm body sıkıştırılmış veri
+        val decompressed = tryDecompress(body, compressionAlgorithm)
+        if (decompressed != null) {
             val processed = processRawBatch(decompressed, direction) ?: return null
-            val recompressed = when (compressionAlgorithm) {
-                1    -> compressSnappy(processed)
-                else -> zlibDeflate(processed)
-            }
-            if (hasHeader) byteArrayOf(body[0]) + recompressed else recompressed
-        } catch (e: Exception) {
-            OverlayLogger.w(TAG, "Sıkıştırma hatası: ${e.message}")
-            body
+            return recompress(processed, compressionAlgorithm)
+        }
+
+        // Hiç decompress edilemedi — sıkıştırılmamış raw batch olarak dene (geçiş dönemi)
+        OverlayLogger.w(TAG, "Sıkıştırma başarısız — raw batch olarak işleniyor (${body.size}B)")
+        return processRawBatch(body, direction)
+    }
+
+    /** Verilen algoritmaya göre decompress dener; başarısızsa null döner. */
+    private fun tryDecompress(input: ByteArray, algorithm: Int): ByteArray? {
+        return when (algorithm) {
+            1 -> try { decompressSnappy(input) } catch (_: Exception) { null }
+            else -> zlibInflateSafe(input)
         }
     }
 
-    private fun detectCompressionHeader(body: ByteArray): Pair<Boolean, Int> {
-        if (body.isEmpty()) return false to 0
-        val first = body[0].toInt() and 0xFF
-        return if (first == 0x00 || first == 0x01 || first == 0xFF) true to 1
-        else false to 0
+    /** Verilen algoritmaya göre recompress eder. */
+    private fun recompress(input: ByteArray, algorithm: Int): ByteArray {
+        return when (algorithm) {
+            1 -> try { compressSnappy(input) } catch (_: Exception) { zlibDeflate(input) }
+            else -> zlibDeflate(input)
+        }
     }
 
-    private fun zlibInflate(input: ByteArray): ByteArray {
-        return try {
+    // detectCompressionHeader kaldırıldı — artık processCompressedBatch içinde inline yapılıyor.
+
+    private fun zlibInflateSafe(input: ByteArray): ByteArray? {
+        // Önce zlib wrapper ile dene (0x78 0x9C / 0x78 0xDA header içerir)
+        try {
+            val inf = java.util.zip.Inflater(false)
+            inf.setInput(input)
+            val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
+            while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
+            inf.end()
+            val result = out.toByteArray()
+            if (result.isNotEmpty()) return result
+        } catch (_: Exception) {}
+
+        // Sonra raw deflate ile dene (nowrap=true)
+        try {
             val inf = java.util.zip.Inflater(true)
             inf.setInput(input)
             val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
             while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
-            inf.end(); out.toByteArray()
-        } catch (_: Exception) {
-            val inf2 = java.util.zip.Inflater(false)
-            inf2.setInput(input)
-            val out2 = ByteArrayOutputStream(); val buf = ByteArray(4096)
-            while (!inf2.finished()) { val n = inf2.inflate(buf); if (n == 0) break; out2.write(buf, 0, n) }
-            inf2.end(); out2.toByteArray()
-        }
+            inf.end()
+            val result = out.toByteArray()
+            if (result.isNotEmpty()) return result
+        } catch (_: Exception) {}
+
+        return null
+    }
+
+    private fun zlibInflate(input: ByteArray): ByteArray {
+        return zlibInflateSafe(input) ?: throw java.util.zip.DataFormatException("Tüm zlib stratejileri başarısız")
     }
 
     private fun zlibDeflate(input: ByteArray): ByteArray {
