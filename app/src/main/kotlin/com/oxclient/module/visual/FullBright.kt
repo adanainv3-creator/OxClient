@@ -2,8 +2,8 @@ package com.oxclient.module.visual
 
 import com.oxclient.core.proxy.BedrockPacketIds
 import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.proxy.InjectionQueue
 import com.oxclient.core.proxy.PacketHelper
+import com.oxclient.core.relay.RelayInjectionBridge
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.events.PacketListener
@@ -12,6 +12,18 @@ import com.oxclient.ui.overlay.OverlayLogger
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 
+/**
+ * FullBright
+ *
+ * ── Değişiklikler ─────────────────────────────────────────────────────────
+ * Eski: InjectionQueue.isBound kontrolü
+ * Yeni: RelayInjectionBridge.isBound kontrolü
+ *
+ * Diğer tüm mantık aynı:
+ *  - NightVision: MobEffect (effectId=16) — selfUniqueId kullanır
+ *  - Gamma: SetTime paketi saplanır (time=6000)
+ *  - Lighting: LEVEL_CHUNK paketlerindeki karanlık bölgeler aydınlatılır
+ */
 class FullBright : BaseModule(
     name        = "FullBright",
     category    = ModuleCategory.VISUAL,
@@ -61,7 +73,6 @@ class FullBright : BaseModule(
             while (currentCoroutineContext().isActive && isEnabled) {
                 when (mode.value) {
                     FbMode.NightVision -> {
-                        // ✅ FIX: selfUniqueId kontrolü — runtimeId değil
                         if (EntityTracker.selfUniqueId == 0L) {
                             if (attempts < 20) {
                                 OverlayLogger.d(TAG, "selfUniqueId=0, bekleniyor... ($attempts)")
@@ -125,20 +136,20 @@ class FullBright : BaseModule(
     }
 
     private fun injectNightVision() {
-        // ✅ FIX: uniqueEntityId kullan, runtimeId değil
         val uid = EntityTracker.selfUniqueId
         if (uid == 0L) {
             OverlayLogger.w(TAG, "NV inject atlandı: selfUniqueId=0")
             return
         }
-        if (!InjectionQueue.isBound) {
-            OverlayLogger.w(TAG, "NV inject atlandı: InjectionQueue bağlı değil")
+        // Eski: InjectionQueue.isBound → Yeni: RelayInjectionBridge.isBound
+        if (!RelayInjectionBridge.isBound) {
+            OverlayLogger.w(TAG, "NV inject atlandı: relay bağlı değil")
             return
         }
 
         val pkt = PacketHelper.buildMobEffect(
             uniqueEntityId = uid,
-            eventId        = 1,
+            eventId        = 1,               // ADD
             effectId       = NIGHT_VISION_ID,
             amplifier      = (strength.value / 200f).toInt().coerceIn(0, 255),
             particles      = false,
@@ -150,11 +161,11 @@ class FullBright : BaseModule(
 
     private fun removeNightVision() {
         val uid = EntityTracker.selfUniqueId
-        if (uid == 0L || !InjectionQueue.isBound) return
+        if (uid == 0L || !RelayInjectionBridge.isBound) return
 
         val pkt = PacketHelper.buildMobEffect(
             uniqueEntityId = uid,
-            eventId        = 3,
+            eventId        = 3,               // REMOVE
             effectId       = NIGHT_VISION_ID,
             amplifier      = 0,
             particles      = false,

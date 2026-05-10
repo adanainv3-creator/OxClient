@@ -1,30 +1,43 @@
 package com.oxclient.core.proxy
 
+import com.oxclient.core.relay.RelayInjectionBridge
 import java.io.ByteArrayOutputStream
 
 /**
  * PacketHelper
  *
- * ✅ FIX (KRİTİK): buildMobEffect uniqueEntityId kabul ediyor.
- *    Bedrock 1.20.80+ MobEffect paketinde entity alanı olarak
- *    zigzag-encoded signed varlong (uniqueEntityId) kullanılıyor.
- *    Önceki kod runtimeId (unsigned varlong) gönderiyordu →
- *    Minecraft yanlış/var olmayan entity'ye uygulayıp yoksayıyordu.
+ * ── Mimari Değişikliği ────────────────────────────────────────────────────
+ * Eski: injectToServer/Client() → InjectionQueue
+ * Yeni: injectToServer/Client() → RelayInjectionBridge → BedrockRelay
  *
- * ✅ FIX: eventId artık varint olarak yazılıyor (Bedrock 1.20.10+).
+ * Şifreleme ve sıkıştırma artık RelayInjectionBridge üzerinden
+ * BedrockRelay tarafından otomatik uygulanır.
  *
- * ✅ FIX: wrapBatch() sıkıştırma durumuna göre batch üretiyor.
+ * wrapBatch() içindeki PacketProcessor.compressionEnabled kontrolü kaldırıldı.
+ * Sıkıştırma relay katmanında (BedrockRelay.injectToServer) yapılır.
+ * wrapBatch() sadece [0xFE][varint len][packet] formatında raw batch üretir.
+ *
+ * Modüller bu sınıfı eskisi gibi kullanmaya devam edebilir — API değişmedi.
  */
 object PacketHelper {
 
     // ── Injection ─────────────────────────────────────────────────────────
 
+    /**
+     * Sunucuya paket gönder.
+     * Şifreleme + sıkıştırma BedrockRelay tarafından otomatik uygulanır.
+     * @param data wrapBatch() çıktısı: [0xFE][batch body]
+     */
     fun injectToServer(data: ByteArray) {
-        InjectionQueue.enqueueToServer(data)
+        RelayInjectionBridge.sendToServer(data)
     }
 
+    /**
+     * İstemciye paket gönder (şifreleme yok).
+     * @param data wrapBatch() çıktısı: [0xFE][batch body]
+     */
     fun injectToClient(data: ByteArray) {
-        InjectionQueue.enqueueToClient(data)
+        RelayInjectionBridge.sendToClient(data)
     }
 
     // ── MovePlayer ────────────────────────────────────────────────────────
@@ -65,19 +78,19 @@ object PacketHelper {
         return wrapBatch(out.toByteArray())
     }
 
-    // ── Attack ────────────────────────────────────────────────────────────
+    // ── Attack (InventoryTransaction USE_ITEM_ON_ENTITY) ──────────────────
 
     fun buildAttack(targetRuntimeId: Long, attackerRuntimeId: Long): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.INVENTORY_TRANSACTION)
-        writeVarInt(out, 0)
-        writeVarInt(out, 0)
-        writeVarInt(out, 2)
+        writeVarInt(out, 0)   // legacyRequestId
+        writeVarInt(out, 0)   // legacySlot count
+        writeVarInt(out, 2)   // txType = USE_ITEM_ON_ENTITY
         writeVarLong(out, targetRuntimeId)
-        writeVarInt(out, 1)
-        writeVarInt(out, 0)
-        writeItem(out)
-        writeItem(out)
+        writeVarInt(out, 1)   // actionType = ATTACK
+        writeVarInt(out, 0)   // hotbarSlot
+        writeItem(out)        // held item
+        writeItem(out)        // unused
         writeVec3(out, 0f, 0f, 0f)
         return wrapBatch(out.toByteArray())
     }
@@ -114,19 +127,9 @@ object PacketHelper {
     // ── MobEffect ─────────────────────────────────────────────────────────
 
     /**
-     * ✅ FIX (KRİTİK): uniqueEntityId parametresi eklendi.
-     *
-     * Bedrock 1.20.80+ MobEffect formatı:
-     *   [packetId varint]
-     *   [entityId zigzag-varlong]  ← uniqueEntityId, runtimeId DEĞİL
-     *   [eventId  varint]          ← 1=add, 2=modify, 3=remove
-     *   [effectId varint]
-     *   [amplifier varint]
-     *   [particles byte]
-     *   [duration varint]
-     *
-     * Önceki hata: runtimeId (unsigned varlong) gönderiliyordu.
-     * Minecraft paketi parse edip yanlış entity buluyordu → yoksanıyordu.
+     * MobEffect paketi.
+     * @param uniqueEntityId zigzag-encoded signed varlong (runtimeId değil!)
+     * @param eventId 1=add, 2=modify, 3=remove (varint)
      */
     fun buildMobEffect(
         uniqueEntityId : Long,
@@ -134,12 +137,12 @@ object PacketHelper {
         effectId       : Int,
         amplifier      : Int     = 0,
         particles      : Boolean = false,
-        duration       : Int     = 1000000
+        duration       : Int     = 1_000_000
     ): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.MOB_EFFECT)
-        writeZigzagVarLong(out, uniqueEntityId)   // ✅ zigzag-encoded uniqueEntityId
-        writeVarInt(out, eventId)                  // ✅ varint, byte değil
+        writeZigzagVarLong(out, uniqueEntityId)
+        writeVarInt(out, eventId)
         writeVarInt(out, effectId)
         writeVarInt(out, amplifier)
         out.write(if (particles) 1 else 0)
@@ -147,7 +150,7 @@ object PacketHelper {
         return wrapBatch(out.toByteArray())
     }
 
-    // ── UseItem ───────────────────────────────────────────────────────────
+    // ── UseItem (InventoryTransaction USE_ITEM) ────────────────────────────
 
     fun buildUseItem(
         actionType : Int,
@@ -168,7 +171,7 @@ object PacketHelper {
         return wrapBatch(out.toByteArray())
     }
 
-    // ── PlayerAuthInput patch ─────────────────────────────────────────────
+    // ── PlayerAuthInput pozisyon patch ────────────────────────────────────
 
     fun patchPlayerAuthInputPosition(
         original: ByteArray,
@@ -177,7 +180,8 @@ object PacketHelper {
         if (original.size < 13) return original
         val copy = original.copyOf()
         val baseOffset = varIntSize(BedrockPacketIds.PLAYER_AUTH_INPUT)
-        val xOff = baseOffset + 8
+        // [pitch 4][yaw 4][headYaw 4] = 12 byte atla → x offset
+        val xOff = baseOffset + 12
         if (copy.size < xOff + 12) return original
         writeFloatLEInto(copy, xOff,     x)
         writeFloatLEInto(copy, xOff + 4, y)
@@ -187,48 +191,20 @@ object PacketHelper {
 
     // ── Batch Wrap ────────────────────────────────────────────────────────
 
+    /**
+     * Paketi 0xFE batch formatına sar.
+     *
+     * Format: [0xFE][varint packetLen][packetData]
+     *
+     * Sıkıştırma ve şifreleme relay katmanında uygulanır (BedrockRelay.injectToServer).
+     * Bu metod sadece ham batch üretir — algorithm header eklemez.
+     */
     fun wrapBatch(packetData: ByteArray): ByteArray {
-        val batchBody = ByteArrayOutputStream().also { buf ->
-            writeVarInt(buf, packetData.size)
-            buf.write(packetData)
-        }.toByteArray()
-
-        val finalBody = if (PacketProcessor.compressionEnabled) {
-            when (PacketProcessor.compressionAlgorithm) {
-                1    -> compressSnappy(batchBody)
-                else -> zlibDeflate(batchBody)
-            }
-        } else {
-            batchBody
-        }
-
-        val out = ByteArrayOutputStream(1 + finalBody.size)
+        val out = ByteArrayOutputStream(1 + 5 + packetData.size)
         out.write(0xFE)
-        out.write(finalBody)
+        writeVarInt(out, packetData.size)
+        out.write(packetData)
         return out.toByteArray()
-    }
-
-    // ── Sıkıştırma yardımcıları ───────────────────────────────────────────
-
-    private fun zlibDeflate(input: ByteArray): ByteArray {
-        val deflater = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
-        deflater.setInput(input); deflater.finish()
-        val out = ByteArrayOutputStream()
-        val buf = ByteArray(4096)
-        while (!deflater.finished()) {
-            val n = deflater.deflate(buf)
-            if (n > 0) out.write(buf, 0, n)
-        }
-        deflater.end()
-        return out.toByteArray()
-    }
-
-    private fun compressSnappy(input: ByteArray): ByteArray {
-        return try {
-            org.iq80.snappy.Snappy.compress(input)
-        } catch (e: Exception) {
-            zlibDeflate(input)
-        }
     }
 
     // ── Yazıcılar ─────────────────────────────────────────────────────────
@@ -253,10 +229,6 @@ object PacketHelper {
         } while (v != 0L)
     }
 
-    /**
-     * ✅ YENİ: Zigzag-encoded signed varlong yazar (uniqueEntityId için).
-     * zigzag encode: (value shl 1) XOR (value shr 63)
-     */
     fun writeZigzagVarLong(out: ByteArrayOutputStream, value: Long) {
         val encoded = (value shl 1) xor (value shr 63)
         writeVarLong(out, encoded)
@@ -283,13 +255,11 @@ object PacketHelper {
     }
 
     private fun writeBlockPos(out: ByteArrayOutputStream, x: Int, y: Int, z: Int) {
-        writeVarInt(out, x)
-        writeVarInt(out, y)
-        writeVarInt(out, z)
+        writeVarInt(out, x); writeVarInt(out, y); writeVarInt(out, z)
     }
 
     private fun writeItem(out: ByteArrayOutputStream) {
-        writeVarInt(out, 0)
+        writeVarInt(out, 0)  // air item
     }
 
     private fun varIntSize(value: Int): Int {
@@ -324,23 +294,21 @@ object PacketHelper {
 
     fun readZigzagVarLong(data: ByteArray, offset: Int = 0): Pair<Long, Int> {
         val (raw, pos) = readVarLong(data, offset)
-        val decoded = (raw ushr 1) xor -(raw and 1L)
-        return decoded to pos
+        return ((raw ushr 1) xor -(raw and 1L)) to pos
     }
 
     fun readFloatLE(data: ByteArray, offset: Int): Float {
         val bits = (data[offset].toInt() and 0xFF) or
-                   ((data[offset+1].toInt() and 0xFF) shl 8) or
-                   ((data[offset+2].toInt() and 0xFF) shl 16) or
-                   ((data[offset+3].toInt() and 0xFF) shl 24)
+                   ((data[offset + 1].toInt() and 0xFF) shl 8) or
+                   ((data[offset + 2].toInt() and 0xFF) shl 16) or
+                   ((data[offset + 3].toInt() and 0xFF) shl 24)
         return java.lang.Float.intBitsToFloat(bits)
     }
 
     fun readString(data: ByteArray, offset: Int): Pair<String, Int> {
         val (len, pos) = readVarInt(data, offset)
-        if (len < 0) return "" to pos
-        if (len == 0) return "" to pos
-        if (pos + len > data.size) return "" to (pos + len)
+        if (len <= 0) return "" to pos
+        if (pos + len > data.size) return "" to (pos + maxOf(len, 0))
         return String(data, pos, len, Charsets.UTF_8) to pos + len
     }
 }

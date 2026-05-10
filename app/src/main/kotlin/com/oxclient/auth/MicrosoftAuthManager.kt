@@ -91,7 +91,6 @@ object MicrosoftAuthManager {
     fun signOut() {
         AccountManager.selectedAccount?.let { AccountManager.removeAccount(it) }
         AccountManager.clearSelectedAccount()
-        HandshakeKeyHolder.clear()
         _authState.value = AuthState.Idle
     }
 

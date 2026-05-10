@@ -3,7 +3,6 @@ package com.oxclient.ui.dashboard
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -43,14 +42,16 @@ import com.oxclient.auth.AuthState
 import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
-import com.oxclient.core.vpn.OxVpnService
+import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.core.relay.BedrockRelay
+import com.oxclient.core.relay.LoginRelayInterceptor
+import com.oxclient.events.PacketEventBus
 import com.oxclient.module.ModuleManager
 import com.oxclient.session.SessionManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
 import kotlinx.coroutines.launch
 
-/** Desteklenen paketler — öncelik sırasına göre */
 val SUPPORTED_PACKAGES = listOf(
     "com.mojang.minecraftpe"      to "Minecraft",
     "com.netease.mc"              to "Minecraft (Çin)",
@@ -59,31 +60,12 @@ val SUPPORTED_PACKAGES = listOf(
 
 class DashboardActivity : ComponentActivity() {
 
-    // ── Launcher'lar ──────────────────────────────────────────────────────────
-
     private val overlayLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { /* overlay izni sonucu */ }
+    ) { }
 
-    /**
-     * VPN izni launcher'ı.
-     * VpnService.prepare() non-null bir Intent döndürürse bu launcher başlatılır.
-     * Kullanıcı "İzin Ver" derse resultCode == RESULT_OK, launchProxy tekrar çağrılır.
-     */
-    private val vpnLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            Log.i("Dashboard", "VPN izni verildi, proxy başlatılıyor…")
-            startVpnService()
-        } else {
-            Log.w("Dashboard", "VPN izni reddedildi")
-        }
-    }
-
+    private var relay: BedrockRelay? = null
     private var pendingPackage: String = SUPPORTED_PACKAGES.first().first
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,8 +82,8 @@ class DashboardActivity : ComponentActivity() {
 
         setContent {
             OxClientTheme {
-                val authState  by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
-                val vpnActive  by SessionManager.isActive.collectAsStateWithLifecycle()
+                val authState by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
+                val relayActive by SessionManager.isActive.collectAsStateWithLifecycle()
 
                 LaunchedEffect(authState) {
                     if (authState is AuthState.WaitingForUser) {
@@ -111,12 +93,12 @@ class DashboardActivity : ComponentActivity() {
 
                 DashboardScreen(
                     installedApps = getInstalledGames(),
-                    vpnActive     = vpnActive,
+                    relayActive   = relayActive,
                     onConnect     = { pkg ->
                         pendingPackage = pkg
-                        launchProxy(pkg)
+                        startRelay(pkg)
                     },
-                    onDisconnect  = { stopProxy() },
+                    onDisconnect  = { stopRelay() },
                     onSignIn      = { MicrosoftAuthManager.startSignIn() },
                     onSignOut     = { MicrosoftAuthManager.signOut() },
                     onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() }
@@ -125,62 +107,53 @@ class DashboardActivity : ComponentActivity() {
         }
     }
 
-    // ── Proxy Başlatma ────────────────────────────────────────────────────────
+    private fun startRelay(targetPkg: String) {
+        Log.d("Dashboard", "startRelay → $targetPkg")
 
-    private fun launchProxy(targetPkg: String) {
-        Log.d("Dashboard", "launchProxy → $targetPkg")
+        val host = ServerConfig.getHostBlocking()
+        val port = ServerConfig.getPortBlocking()
 
-        // VPN izni kontrol et
-        val vpnIntent = VpnService.prepare(this)
-        if (vpnIntent != null) {
-            // İzin henüz verilmemiş — sistem diyaloğunu aç
-            vpnLauncher.launch(vpnIntent)
-            return
-        }
+        stopRelay()
 
-        // İzin zaten var — direkt başlat
-        startVpnService()
-    }
+        ModuleManager.init()
+        EntityTracker.register()
+        LoginRelayInterceptor.register()
 
-    private fun startVpnService() {
-        val vpnIntent = Intent(this, OxVpnService::class.java).apply {
-            action = OxVpnService.ACTION_START
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(vpnIntent)
-        } else {
-            startService(vpnIntent)
-        }
+        relay = BedrockRelay(targetHost = host, targetPort = port).also { it.start() }
+        SessionManager.onSessionStart(host, port)
 
-        // Overlay'i başlat (VPN'den bağımsız çalışır)
         OverlayService.start(this)
 
-        // Minecraft'ı gecikmeyle başlat (servis oturması için)
         window.decorView.postDelayed({
-            val intent = packageManager.getLaunchIntentForPackage(pendingPackage)
+            val intent = packageManager.getLaunchIntentForPackage(targetPkg)
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 startActivity(intent)
             } else {
                 startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pendingPackage"))
+                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$targetPkg"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             }
-        }, 1000)
+        }, 800)
     }
 
-    // ── Proxy Durdurma ────────────────────────────────────────────────────────
-
-    private fun stopProxy() {
-        startService(Intent(this, OxVpnService::class.java).apply {
-            action = OxVpnService.ACTION_STOP
-        })
-        OverlayService.stop(this)
+    private fun stopRelay() {
         ModuleManager.disableAll()
+        EntityTracker.unregister()
+        LoginRelayInterceptor.unregister()
+        PacketEventBus.clear()
+        relay?.stop()
+        relay = null
+        SessionManager.onSessionStop()
+        OverlayService.stop(this)
     }
 
-    // ── Yardımcı ──────────────────────────────────────────────────────────────
+    override fun onDestroy() {
+        super.onDestroy()
+        relay?.stop()
+        relay = null
+    }
 
     private fun getInstalledGames(): List<Pair<String, String>> {
         return SUPPORTED_PACKAGES.filter { (pkg, _) ->
@@ -197,15 +170,10 @@ class DashboardActivity : ComponentActivity() {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Composable — DashboardScreen
-// vpnActive artık SessionManager'dan geliyor (gerçek durum)
-// ─────────────────────────────────────────────────────────────────────────────
-
 @Composable
 fun DashboardScreen(
     installedApps : List<Pair<String, String>>,
-    vpnActive     : Boolean = false,
+    relayActive   : Boolean = false,
     onConnect     : (String) -> Unit,
     onDisconnect  : () -> Unit,
     onSignIn      : () -> Unit,
@@ -216,9 +184,6 @@ fun DashboardScreen(
     val scope          = rememberCoroutineScope()
     val serverHost     by ServerConfig.host.collectAsState(initial = ServerConfig.DEFAULT_HOST)
     val serverPort     by ServerConfig.port.collectAsState(initial = ServerConfig.DEFAULT_PORT)
-
-    // proxyRunning artık SessionManager.isActive'ten geliyor
-    val proxyRunning   = vpnActive
 
     var showSignIn     by remember { mutableStateOf(false) }
     var showAppPicker  by remember { mutableStateOf(false) }
@@ -288,27 +253,18 @@ fun DashboardScreen(
             LogoSection()
             Spacer(Modifier.height(32.dp))
 
-            ServerCard(
-                host    = serverHost,
-                port    = serverPort,
-                onClick = { showServerEdit = true }
-            )
+            ServerCard(host = serverHost, port = serverPort, onClick = { showServerEdit = true })
             Spacer(Modifier.height(12.dp))
-            AppSelectorCard(
-                selectedName = selectedApp.second,
-                onClick      = { showAppPicker = true }
-            )
+            AppSelectorCard(selectedName = selectedApp.second, onClick = { showAppPicker = true })
             Spacer(Modifier.height(12.dp))
-
-            // StatusCard artık SessionManager.isActive'e bağlı
-            StatusCard(running = proxyRunning)
+            StatusCard(running = relayActive)
             Spacer(Modifier.weight(1f))
 
             ConnectButton(
-                running  = proxyRunning,
+                running  = relayActive,
                 onToggle = {
-                    if (proxyRunning) onDisconnect()
-                    else              onConnect(selectedApp.first)
+                    if (relayActive) onDisconnect()
+                    else             onConnect(selectedApp.first)
                 }
             )
 
@@ -325,8 +281,6 @@ fun DashboardScreen(
     }
 }
 
-// ── Sunucu Düzenleme Dialog ───────────────────────────────────────────────────
-
 @Composable
 private fun ServerEditDialog(
     currentHost : String,
@@ -335,19 +289,13 @@ private fun ServerEditDialog(
     onReset     : () -> Unit,
     onDismiss   : () -> Unit
 ) {
-    var hostInput  by remember { mutableStateOf(currentHost) }
-    var portInput  by remember { mutableStateOf(currentPort.toString()) }
-    var portError  by remember { mutableStateOf(false) }
+    var hostInput by remember { mutableStateOf(currentHost) }
+    var portInput by remember { mutableStateOf(currentPort.toString()) }
+    var portError by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape  = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = OxSurface)
-        ) {
-            Column(
-                modifier            = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+        Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = OxSurface)) {
+            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Sunucu Ayarları", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = OxOnBackground, fontFamily = FontFamily.Monospace)
                 HorizontalDivider(color = OxOutline)
 
@@ -421,8 +369,6 @@ private fun ServerEditDialog(
     }
 }
 
-// ── ServerCard ────────────────────────────────────────────────────────────────
-
 @Composable
 private fun ServerCard(host: String, port: Int, onClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().clickable { onClick() }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = OxSurface), elevation = CardDefaults.cardElevation(2.dp)) {
@@ -439,8 +385,6 @@ private fun ServerCard(host: String, port: Int, onClick: () -> Unit) {
     }
 }
 
-// ── App Selector Card ─────────────────────────────────────────────────────────
-
 @Composable
 private fun AppSelectorCard(selectedName: String, onClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().clickable { onClick() }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = OxSurface), elevation = CardDefaults.cardElevation(2.dp)) {
@@ -453,8 +397,6 @@ private fun AppSelectorCard(selectedName: String, onClick: () -> Unit) {
         }
     }
 }
-
-// ── App Picker Dialog ─────────────────────────────────────────────────────────
 
 @Composable
 private fun AppPickerDialog(
@@ -518,8 +460,6 @@ private fun AppPickerRow(pkg: String, name: String, selectedPkg: String, onSelec
     }
 }
 
-// ── Auth Dialog ───────────────────────────────────────────────────────────────
-
 @Composable
 private fun AuthDialog(
     authState : AuthState,
@@ -568,8 +508,6 @@ private fun AuthDialog(
     }
 }
 
-// ── TopBar ────────────────────────────────────────────────────────────────────
-
 @Composable
 private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
     val isLoggedIn = authState is AuthState.Success
@@ -597,8 +535,6 @@ private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
     }
 }
 
-// ── LogoSection ───────────────────────────────────────────────────────────────
-
 @Composable
 private fun LogoSection() {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -609,8 +545,6 @@ private fun LogoSection() {
         Text("Minecraft Bedrock Client", fontSize = 13.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
     }
 }
-
-// ── StatusCard — SessionManager.isActive'e bağlı ─────────────────────────────
 
 @Composable
 private fun StatusCard(running: Boolean) {
@@ -625,14 +559,12 @@ private fun StatusCard(running: Boolean) {
         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(modifier = Modifier.size(12.dp).scale(pulse).clip(CircleShape).background(statusColor))
             Column {
-                Text(if (running) "VPN Aktif" else "VPN Kapalı", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (running) Color(0xFF1AFF6E) else OxOnBackground, fontFamily = FontFamily.Monospace)
+                Text(if (running) "Relay Aktif" else "Relay Kapalı", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (running) Color(0xFF1AFF6E) else OxOnBackground, fontFamily = FontFamily.Monospace)
                 Text(if (running) "Trafik yönlendiriliyor → proxy" else "Connect'e basarak başlat", fontSize = 11.sp, color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
             }
         }
     }
 }
-
-// ── ConnectButton ─────────────────────────────────────────────────────────────
 
 @Composable
 private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {

@@ -14,9 +14,6 @@ class OxClientApp : Application() {
         // Sunucu konfigürasyonunu başlat
         ServerConfig.init(this)
 
-        // Modül yöneticisini başlat
-        ModuleManager.init()
-
         Log.d("OxClientApp", "Başlatma tamamlandı")
     }
 }

@@ -6,6 +6,17 @@ import com.oxclient.events.PacketListener
 import com.oxclient.ui.overlay.OverlayLogger
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * EntityTracker
+ *
+ * Yakındaki varlıkları ve oyuncunun konumunu takip eder.
+ * PacketEventBus üzerinden S→C paketlerini dinler.
+ *
+ * ── Değişiklikler (eski → yeni) ───────────────────────────────────────────
+ * - PacketHelper importu korundu (okuyucu metotlar buradan gelir)
+ * - BedrockPacketIds aynı pakette (com.oxclient.core.proxy)
+ * - selfUniqueId eklendi (MobEffect için zigzag-varlong uniqueId)
+ */
 object EntityTracker : PacketListener {
 
     private const val TAG = "EntityTracker"
@@ -27,7 +38,7 @@ object EntityTracker : PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
 
     @Volatile var selfRuntimeId : Long  = 0L
-    @Volatile var selfUniqueId  : Long  = 0L   // ✅ FIX: MobEffect için uniqueEntityId eklendi
+    @Volatile var selfUniqueId  : Long  = 0L   // MobEffect için zigzag uniqueEntityId
     @Volatile var selfX         : Float = 0f
     @Volatile var selfY         : Float = 0f
     @Volatile var selfZ         : Float = 0f
@@ -46,6 +57,7 @@ object EntityTracker : PacketListener {
         selfRuntimeId = 0L
         selfUniqueId  = 0L
         selfX = 0f; selfY = 0f; selfZ = 0f
+        selfYaw = 0f; selfPitch = 0f
         OverlayLogger.d(TAG, "EntityTracker sıfırlandı")
     }
 
@@ -83,14 +95,13 @@ object EntityTracker : PacketListener {
         } catch (_: Exception) {}
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Parse metotları ───────────────────────────────────────────────────
 
     private fun parseStartGame(d: ByteArray) {
         try {
-            val (_, p0)        = PacketHelper.readVarInt(d, 0);          var pos = p0
-            // ✅ FIX: uniqueEntityId okunup selfUniqueId'ye kaydediliyor
-            val (uid, p1)      = PacketHelper.readZigzagVarLong(d, pos); pos = p1
-            val (rid, _)       = PacketHelper.readVarLong(d, pos)
+            val (_, p0)   = PacketHelper.readVarInt(d, 0);          var pos = p0
+            val (uid, p1) = PacketHelper.readZigzagVarLong(d, pos); pos = p1
+            val (rid, _)  = PacketHelper.readVarLong(d, pos)
             selfUniqueId  = uid
             selfRuntimeId = rid
             OverlayLogger.i(TAG, "StartGame → selfRuntimeId=$rid selfUniqueId=$uid")
@@ -103,13 +114,13 @@ object EntityTracker : PacketListener {
         try {
             val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
             pos += 16  // UUID (16 byte sabit)
-            val (_, p1)        = PacketHelper.readString(d, pos);          pos = p1  // username
-            val (uniqueId, p2) = PacketHelper.readZigzagVarLong(d, pos);   pos = p2  // uniqueEntityId
-            val (rid, p3)      = PacketHelper.readVarLong(d, pos);         pos = p3  // runtimeEntityId
-            val (_, p4)        = PacketHelper.readString(d, pos);          pos = p4  // platformChatId
-            val (_, p5)        = PacketHelper.readString(d, pos);          pos = p5  // deviceId
-            val (_, p6)        = PacketHelper.readVarInt(d, pos);          pos = p6  // buildPlatform
-            val (_, p7)        = PacketHelper.readVarInt(d, pos);          pos = p7  // gameType
+            val (_, p1)        = PacketHelper.readString(d, pos);         pos = p1  // username
+            val (uniqueId, p2) = PacketHelper.readZigzagVarLong(d, pos); pos = p2  // uniqueEntityId
+            val (rid, p3)      = PacketHelper.readVarLong(d, pos);        pos = p3  // runtimeEntityId
+            val (_, p4)        = PacketHelper.readString(d, pos);         pos = p4  // platformChatId
+            val (_, p5)        = PacketHelper.readString(d, pos);         pos = p5  // deviceId
+            val (_, p6)        = PacketHelper.readVarInt(d, pos);         pos = p6  // buildPlatform
+            val (_, p7)        = PacketHelper.readVarInt(d, pos);         pos = p7  // gameType
 
             if (pos + 12 > d.size) {
                 OverlayLogger.w(TAG, "AddPlayer rid=$rid — yetersiz veri (pos=$pos size=${d.size})")
@@ -120,7 +131,7 @@ object EntityTracker : PacketListener {
             val z = PacketHelper.readFloatLE(d, pos)
 
             if (!x.isFinite() || !y.isFinite() || !z.isFinite() ||
-                Math.abs(x) > 3e7f || Math.abs(y) > 4096f || Math.abs(z) > 3e7f) {
+                kotlin.math.abs(x) > 3e7f || kotlin.math.abs(y) > 4096f || kotlin.math.abs(z) > 3e7f) {
                 OverlayLogger.w(TAG, "AddPlayer rid=$rid — geçersiz koordinat x=$x y=$y z=$z")
                 return
             }
@@ -137,10 +148,10 @@ object EntityTracker : PacketListener {
 
     private fun parseAddEntity(d: ByteArray) {
         try {
-            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
+            val (_, p0)        = PacketHelper.readVarInt(d, 0);           var pos = p0
             val (uniqueId, p1) = PacketHelper.readZigzagVarLong(d, pos); pos = p1
             val (rid, p2)      = PacketHelper.readVarLong(d, pos);        pos = p2
-            val (_, p3)        = PacketHelper.readString(d, pos);         pos = p3
+            val (_, p3)        = PacketHelper.readString(d, pos);         pos = p3  // entity type string
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
@@ -151,13 +162,14 @@ object EntityTracker : PacketListener {
 
     private fun parseMovePlayer(d: ByteArray) {
         try {
-            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
+            val (_, p0)   = PacketHelper.readVarInt(d, 0);  var pos = p0
             val (rid, p1) = PacketHelper.readVarLong(d, pos); pos = p1
             val x     = PacketHelper.readFloatLE(d, pos); pos += 4
             val y     = PacketHelper.readFloatLE(d, pos); pos += 4
             val z     = PacketHelper.readFloatLE(d, pos); pos += 4
             val pitch = PacketHelper.readFloatLE(d, pos); pos += 4
             val yaw   = PacketHelper.readFloatLE(d, pos)
+
             if (rid == selfRuntimeId) {
                 selfX = x; selfY = y; selfZ = z
                 selfPitch = pitch; selfYaw = yaw
@@ -169,7 +181,7 @@ object EntityTracker : PacketListener {
 
     private fun parseMoveEntity(d: ByteArray) {
         try {
-            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
+            val (_, p0)   = PacketHelper.readVarInt(d, 0); var pos = p0
             val (rid, p1) = PacketHelper.readVarLong(d, pos); pos = p1
             pos += 1  // flags byte
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
@@ -181,21 +193,20 @@ object EntityTracker : PacketListener {
 
     private fun parseRemoveEntity(d: ByteArray) {
         try {
-            val (_, p0) = PacketHelper.readVarInt(d, 0)
+            val (_, p0)      = PacketHelper.readVarInt(d, 0)
             val (uniqueId, _) = PacketHelper.readZigzagVarLong(d, p0)
-            val runtimeId = uniqueToRuntime.remove(uniqueId)
+            val runtimeId    = uniqueToRuntime.remove(uniqueId)
             if (runtimeId != null) entities.remove(runtimeId)
         } catch (_: Exception) {}
     }
 
     /**
-     * PLAYER_AUTH_INPUT — Bedrock 1.21.60 formatı:
-     * [packetId varint] [pitch float] [yaw float] [headYaw float] [x float] [y float] [z float]
+     * PlayerAuthInput (C→S) — oyuncunun anlık konumu.
+     * Format (1.21.60): [pitch f32][yaw f32][headYaw f32][x f32][y f32][z f32]...
      */
     private fun parseAuthInput(d: ByteArray) {
         try {
             val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
-
             val pitch   = PacketHelper.readFloatLE(d, pos); pos += 4
             val yaw     = PacketHelper.readFloatLE(d, pos); pos += 4
             /* headYaw */ PacketHelper.readFloatLE(d, pos); pos += 4
