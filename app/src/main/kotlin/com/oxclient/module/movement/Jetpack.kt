@@ -12,16 +12,20 @@ import com.oxclient.module.*
 /**
  * Jetpack
  *
- * PlayerAuthInput veya MovePlayer paketlerini intercept ederek
- * Y ve XZ hızını mod'a göre değiştirir.
+ * ✅ FIX: handleAuthInput PlayerAuthInput formatı düzeltildi.
  *
- * Modlar:
- *  JETPACK   — jump basılıyken yukarı hızlanır (Y += verticalSpeed)
- *  GLIDE     — düşüşü yavaşlatır (Y = -add)
- *  YPORT     — belirli aralıkla yukarı teleport eder
- *  MOTION    — sabit Y motion paketi enjekte eder
- *  TELEPORT  — sürekli yukarı ışınlanma
- *  JUMP      — her tick'te zıplama paketi
+ * Bedrock 1.21.60 PlayerAuthInput formatı (paket ID varint'ten sonra):
+ *   [pitch    float]   ← pos
+ *   [yaw      float]   ← pos+4
+ *   [headYaw  float]   ← pos+8  ← ÖNCEKİ KOD BUNU ATLIYORDU → x/y/z 4 byte gerideydi
+ *   [x        float]   ← pos+12
+ *   [y        float]   ← pos+16
+ *   [z        float]   ← pos+20
+ *   ...
+ *   [inputFlags u64]   ← daha ileride
+ *
+ * Önceki kod: pos+8'den velX/velZ okuyordu (pos+8 aslında headYaw),
+ * sonra pos+8'den inputFlags — tamamen yanlış offset.
  */
 class Jetpack : BaseModule(
     name        = "Jetpack",
@@ -51,12 +55,12 @@ class Jetpack : BaseModule(
     @Volatile private var jumpPressed   = false
     @Volatile private var tickCount     = 0
     @Volatile private var yPortY        = 0f
-    @Volatile private var yPortPhase    = 0  // 0=up, 1=down
+    @Volatile private var yPortPhase    = 0
 
     companion object {
         private const val TAG = "Jetpack"
-        // PlayerAuthInput input flags
-        private const val FLAG_JUMPING  = 1 shl 2   // bit 2
+        // PlayerAuthInput input flags — bit pozisyonları
+        private const val FLAG_JUMPING  = 1 shl 2
         private const val FLAG_SNEAKING = 1 shl 3
     }
 
@@ -82,23 +86,33 @@ class Jetpack : BaseModule(
         }
     }
 
+    /**
+     * PlayerAuthInput Bedrock 1.21.60 formatı:
+     * [packetId varint] [pitch f32] [yaw f32] [headYaw f32] [x f32] [y f32] [z f32]
+     * [velX f32] [velZ f32] [inputFlags varlong] ...
+     *
+     * ✅ FIX: headYaw (4 byte) artık doğru şekilde atlanıyor.
+     * ✅ FIX: inputFlags doğru offset'ten okunuyor (pos+24: velX+velZ sonrası).
+     */
     private fun handleAuthInput(event: PacketEvent) {
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
         val d = event.data
         if (d.size < 30) return
 
         try {
-            // PlayerAuthInput: [packetId] [pitch f32] [yaw f32] [x f32] [y f32] [z f32] [velX f32] [velZ f32] [inputFlags u64 varint]
             var pos = 0
             val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
-            val pitch = PacketHelper.readFloatLE(d, pos); pos += 4
-            val yaw   = PacketHelper.readFloatLE(d, pos); pos += 4
-            val x     = PacketHelper.readFloatLE(d, pos); pos += 4
-            val y     = PacketHelper.readFloatLE(d, pos); pos += 4
-            val z     = PacketHelper.readFloatLE(d, pos); pos += 4
 
-            // inputFlags (2 varint = u64)
-            val (flagsLo, p2) = PacketHelper.readVarInt(d, pos + 8); pos = p2
+            /* pitch   */ PacketHelper.readFloatLE(d, pos); pos += 4
+            /* yaw     */ PacketHelper.readFloatLE(d, pos); pos += 4
+            /* headYaw */ PacketHelper.readFloatLE(d, pos); pos += 4  // ✅ FIX: artık atlanıyor
+            val x = PacketHelper.readFloatLE(d, pos); pos += 4
+            val y = PacketHelper.readFloatLE(d, pos); pos += 4
+            val z = PacketHelper.readFloatLE(d, pos); pos += 4
+            /* velX    */ PacketHelper.readFloatLE(d, pos); pos += 4
+            /* velZ    */ PacketHelper.readFloatLE(d, pos); pos += 4
+            // inputFlags: u64 → iki varint olarak oku (lo word yeterli)
+            val (flagsLo, _) = PacketHelper.readVarInt(d, pos)
             jumpPressed = (flagsLo and FLAG_JUMPING) != 0
 
             tickCount++
@@ -118,7 +132,7 @@ class Jetpack : BaseModule(
 
         try {
             var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
+            val (_, p1)   = PacketHelper.readVarInt(d, pos); pos = p1
             val (rid, p2) = PacketHelper.readVarLong(d, pos); pos = p2
             if (rid != EntityTracker.selfRuntimeId) return
 
@@ -147,35 +161,29 @@ class Jetpack : BaseModule(
         return when (mode.value) {
 
             JetMode.Jetpack -> {
-                // Jump basılıysa yukarı, basılı değilse add (hafif düşüş/yüzme)
                 if (pressJump.value && jumpPressed) currentY + vSpeed * 0.05f
                 else currentY + addVal
             }
 
             JetMode.Glide -> {
-                // Düşüşü yavaşlat — Y'yi sabit tut veya çok yavaş düşür
-                if (currentY > EntityTracker.selfY) currentY  // zaten yüksekteyse tut
-                else currentY - 0.05f  // yavaş düşüş
+                if (currentY > EntityTracker.selfY) currentY
+                else currentY - 0.05f
             }
 
             JetMode.YPort -> {
-                // 10 tick yukarı, 10 tick aşağı (sunucu bypass)
                 if (tickCount % 20 < 10) currentY + vSpeed * 0.1f
                 else currentY - vSpeed * 0.08f
             }
 
             JetMode.Motion -> {
-                // Sabit Y hareketi
                 currentY + vSpeed * 0.05f + addVal
             }
 
             JetMode.Teleport -> {
-                // Her tick teleport ile yukarı
                 currentY + vSpeed * 0.5f
             }
 
             JetMode.Jump -> {
-                // Her 10 tick'te bir zıplama yüksekliği
                 if (tickCount % 10 == 0) currentY + 0.42f
                 else currentY + addVal
             }

@@ -6,31 +6,11 @@ import com.oxclient.events.PacketListener
 import com.oxclient.ui.overlay.OverlayLogger
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * EntityTracker
- *
- * ✅ FIX: parseAuthInput'ta headYaw offset sorunu giderildi.
- *
- * Bedrock 1.21.60 PLAYER_AUTH_INPUT gerçek formatı (paket ID varint atlandıktan sonra):
- *   pitch   : float LE (4 byte)
- *   yaw     : float LE (4 byte)
- *   headYaw : float LE (4 byte)  ← BU ALAN ATLANIYOR
- *   x       : float LE (4 byte)
- *   y       : float LE (4 byte)
- *   z       : float LE (4 byte)
- *
- * Önceki kodda headYaw atlanmıyordu → x/y/z 4 byte geriden okunuyordu
- * → koordinatlar NaN/saçma → koordinat doğrulama yoktu → selfX/Y/Z hep 0.
- *
- * Bedrock protokol değişiklik kaynağı: 1.19.10+ ile headYaw pitch/yaw'dan
- * hemen sonra gelmeye başladı. Eski kodun yorumu ("headYaw araya girmiyor")
- * hatalıydı.
- */
 object EntityTracker : PacketListener {
 
     private const val TAG = "EntityTracker"
 
-    override val priority: Int = 10  // PacketEventBus'ta en önce çalışır
+    override val priority: Int = 10
 
     data class TrackedEntity(
         val runtimeId : Long,
@@ -47,6 +27,7 @@ object EntityTracker : PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
 
     @Volatile var selfRuntimeId : Long  = 0L
+    @Volatile var selfUniqueId  : Long  = 0L   // ✅ FIX: MobEffect için uniqueEntityId eklendi
     @Volatile var selfX         : Float = 0f
     @Volatile var selfY         : Float = 0f
     @Volatile var selfZ         : Float = 0f
@@ -63,6 +44,7 @@ object EntityTracker : PacketListener {
         entities.clear()
         uniqueToRuntime.clear()
         selfRuntimeId = 0L
+        selfUniqueId  = 0L
         selfX = 0f; selfY = 0f; selfZ = 0f
         OverlayLogger.d(TAG, "EntityTracker sıfırlandı")
     }
@@ -105,11 +87,13 @@ object EntityTracker : PacketListener {
 
     private fun parseStartGame(d: ByteArray) {
         try {
-            val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
-            val (_, p1) = PacketHelper.readZigzagVarLong(d, pos); pos = p1
-            val (rid, _) = PacketHelper.readVarLong(d, pos)
+            val (_, p0)        = PacketHelper.readVarInt(d, 0);          var pos = p0
+            // ✅ FIX: uniqueEntityId okunup selfUniqueId'ye kaydediliyor
+            val (uid, p1)      = PacketHelper.readZigzagVarLong(d, pos); pos = p1
+            val (rid, _)       = PacketHelper.readVarLong(d, pos)
+            selfUniqueId  = uid
             selfRuntimeId = rid
-            OverlayLogger.i(TAG, "StartGame → selfRuntimeId=$rid")
+            OverlayLogger.i(TAG, "StartGame → selfRuntimeId=$rid selfUniqueId=$uid")
         } catch (e: Exception) {
             OverlayLogger.w(TAG, "StartGame parse hatası: ${e.message}")
         }
@@ -206,36 +190,24 @@ object EntityTracker : PacketListener {
 
     /**
      * PLAYER_AUTH_INPUT — Bedrock 1.21.60 formatı:
-     *
-     * [packetId varint]  ← atlanır
-     * [pitch    float]   ← pos
-     * [yaw      float]   ← pos+4
-     * [headYaw  float]   ← pos+8  ✅ ATLANMASI GEREKEN ALAN
-     * [x        float]   ← pos+12
-     * [y        float]   ← pos+16
-     * [z        float]   ← pos+20
-     *
-     * Önceki kod headYaw'ı atlamamış → x/y/z 4 byte geriden okunuyordu
-     * → koordinatlar saçma → selfX/Y/Z hep 0 görünüyordu.
+     * [packetId varint] [pitch float] [yaw float] [headYaw float] [x float] [y float] [z float]
      */
     private fun parseAuthInput(d: ByteArray) {
         try {
             val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
 
-            val pitch   = PacketHelper.readFloatLE(d, pos); pos += 4  // pitch
-            val yaw     = PacketHelper.readFloatLE(d, pos); pos += 4  // yaw
-            /* headYaw */ PacketHelper.readFloatLE(d, pos); pos += 4  // headYaw — ATLANIYOR
-            val x       = PacketHelper.readFloatLE(d, pos); pos += 4  // x
-            val y       = PacketHelper.readFloatLE(d, pos); pos += 4  // y
-            val z       = PacketHelper.readFloatLE(d, pos)             // z
+            val pitch   = PacketHelper.readFloatLE(d, pos); pos += 4
+            val yaw     = PacketHelper.readFloatLE(d, pos); pos += 4
+            /* headYaw */ PacketHelper.readFloatLE(d, pos); pos += 4
+            val x       = PacketHelper.readFloatLE(d, pos); pos += 4
+            val y       = PacketHelper.readFloatLE(d, pos); pos += 4
+            val z       = PacketHelper.readFloatLE(d, pos)
 
-            // Koordinat doğrulama — NaN/Inf veya imkansız değerler kabul edilmez
             if (!x.isFinite() || !y.isFinite() || !z.isFinite()) return
 
             selfX = x; selfY = y; selfZ = z
             selfYaw = yaw; selfPitch = pitch
         } catch (e: Exception) {
-            // Sessiz yutma kaldırıldı — parse hatası panelde görünsün
             OverlayLogger.w(TAG, "AuthInput parse hatası: ${e.message}")
         }
     }

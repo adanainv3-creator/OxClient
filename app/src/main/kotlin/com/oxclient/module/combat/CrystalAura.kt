@@ -18,17 +18,15 @@ class CrystalAura : BaseModule(
     description = "End kristallerini otomatik yerleştirir ve patlatır"
 ), PacketListener {
 
-    // FIX: PacketListener.priority ile çakışmayı önlemek için override
     override val priority: Int = 90
 
-    enum class BreakMode    { Instant, Sequential }
-    enum class TargetPriority { Distance, Health }  // FIX: Priority → TargetPriority
+    enum class BreakMode      { Instant, Sequential }
+    enum class TargetPriority { Distance, Health }
 
     // ── Ayarlar ───────────────────────────────────────────────────────────
     private val autoPlace       = BoolSetting("AutoPlace",       true)
     private val autoBreak       = BoolSetting("AutoBreak",       true)
     private val breakMode       = EnumSetting("BreakMode",       BreakMode.Instant,         BreakMode.entries)
-    // FIX: EnumSetting adı "Priority" kalıyor ama tipi TargetPriority
     private val targetPriority  = EnumSetting("Priority",        TargetPriority.Distance,   TargetPriority.entries)
     private val placeRange      = FloatSetting("PlaceRange",     6f,  1f, 12f)
     private val breakRange      = FloatSetting("BreakRange",     6f,  1f, 12f)
@@ -51,7 +49,11 @@ class CrystalAura : BaseModule(
     )
 
     // ── İç durum ──────────────────────────────────────────────────────────
+    // runtimeId → (x, y, z)
     private val activeCrystals  = ConcurrentHashMap<Long, Triple<Float, Float, Float>>()
+    // ✅ FIX: RemoveEntity uniqueId → runtimeId eşlemesi için
+    private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
+
     @Volatile private var lastPlaceMs = 0L
     @Volatile private var lastBreakMs = 0L
     private var seqBreakIndex   = 0
@@ -67,6 +69,7 @@ class CrystalAura : BaseModule(
 
     override fun onEnable() {
         activeCrystals.clear()
+        uniqueToRuntime.clear()
         seqBreakIndex = 0
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
@@ -77,6 +80,7 @@ class CrystalAura : BaseModule(
         tickJob?.cancel()
         PacketEventBus.unregister(this)
         activeCrystals.clear()
+        uniqueToRuntime.clear()
     }
 
     // ── Paket dinleyici ───────────────────────────────────────────────────
@@ -96,16 +100,18 @@ class CrystalAura : BaseModule(
         val d = event.data
         try {
             var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
-            val (_, p2) = PacketHelper.readVarLong(d, pos); pos = p2   // uniqueId
-            val (rid, p3) = PacketHelper.readVarLong(d, pos); pos = p3
-            val (typeStr, p4) = PacketHelper.readString(d, pos); pos = p4
+            val (_, p1)       = PacketHelper.readVarInt(d, pos);           pos = p1
+            // ✅ FIX: AddEntity'de sıra: uniqueId (zigzag) sonra runtimeId
+            val (uid, p2)     = PacketHelper.readZigzagVarLong(d, pos);    pos = p2
+            val (rid, p3)     = PacketHelper.readVarLong(d, pos);          pos = p3
+            val (typeStr, p4) = PacketHelper.readString(d, pos);           pos = p4
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
 
             if (typeStr.contains("crystal", ignoreCase = true)) {
                 activeCrystals[rid] = Triple(x, y, z)
+                uniqueToRuntime[uid] = rid
                 Log.v(TAG, "Kristal eklendi: $rid @ $x,$y,$z")
             }
         } catch (_: Exception) {}
@@ -113,9 +119,11 @@ class CrystalAura : BaseModule(
 
     private fun parseRemoveEntity(data: ByteArray) {
         try {
-            val (_, p1) = PacketHelper.readVarInt(data, 0)
-            val (rid, _) = PacketHelper.readVarLong(data, p1)
-            activeCrystals.remove(rid)
+            val (_, p1)   = PacketHelper.readVarInt(data, 0)
+            // ✅ FIX: RemoveEntity, uniqueId (zigzag varlong) gönderir — runtimeId değil
+            val (uid, _)  = PacketHelper.readZigzagVarLong(data, p1)
+            val rid = uniqueToRuntime.remove(uid)
+            if (rid != null) activeCrystals.remove(rid)
         } catch (_: Exception) {}
     }
 
@@ -148,7 +156,6 @@ class CrystalAura : BaseModule(
     private fun selectTarget(): EntityTracker.TrackedEntity? {
         val r = if (throughWalls.value) wallsRange.value else placeRange.value
         val candidates = EntityTracker.getEntitiesInRange(r)
-        // FIX: targetPriority.value kullanılıyor, when exhaustive
         return when (targetPriority.value) {
             TargetPriority.Distance -> candidates.minByOrNull { EntityTracker.distanceTo(it) }
             TargetPriority.Health   -> candidates.minByOrNull { it.health }

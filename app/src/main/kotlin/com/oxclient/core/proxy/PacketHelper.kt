@@ -5,20 +5,15 @@ import java.io.ByteArrayOutputStream
 /**
  * PacketHelper
  *
- * Tüm modüllerin ortak kullandığı Bedrock paket builder'ları.
+ * ✅ FIX (KRİTİK): buildMobEffect uniqueEntityId kabul ediyor.
+ *    Bedrock 1.20.80+ MobEffect paketinde entity alanı olarak
+ *    zigzag-encoded signed varlong (uniqueEntityId) kullanılıyor.
+ *    Önceki kod runtimeId (unsigned varlong) gönderiyordu →
+ *    Minecraft yanlış/var olmayan entity'ye uygulayıp yoksayıyordu.
  *
- * ✅ FIX (KRİTİK): wrapBatch() artık PacketProcessor.compressionEnabled
- *    durumuna göre sıkıştırma yapıyor.
+ * ✅ FIX: eventId artık varint olarak yazılıyor (Bedrock 1.20.10+).
  *
- *    Önceki hata: NetworkSettings geldikten sonra sunucu SIKIŞTIRILMIŞ
- *    paket bekliyor. Ama enjekte edilen paketler ham (sıkıştırılmamış)
- *    gönderiliyordu → sunucu çöp veri alıyor → drop → hiçbir modül
- *    sunucuda efekt yaratmıyor (KillAura vuruyor ama hasar gitmiyor,
- *    TPAura teleport etmiyor, Criticals çalışmıyor vb.)
- *
- *    Çözüm: wrapBatch() içinde, compression aktifse paketi sıkıştır.
- *    Bu fonksiyon tüm builder'lar (buildAttack, buildMovePlayer vb.)
- *    tarafından çağrıldığından tek noktadan düzeltme yeterli.
+ * ✅ FIX: wrapBatch() sıkıştırma durumuna göre batch üretiyor.
  */
 object PacketHelper {
 
@@ -75,15 +70,15 @@ object PacketHelper {
     fun buildAttack(targetRuntimeId: Long, attackerRuntimeId: Long): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.INVENTORY_TRANSACTION)
-        writeVarInt(out, 0)   // legacyRequestId
-        writeVarInt(out, 0)   // legacySlots count
-        writeVarInt(out, 2)   // transaction type: ItemUseOnEntityTransaction
+        writeVarInt(out, 0)
+        writeVarInt(out, 0)
+        writeVarInt(out, 2)
         writeVarLong(out, targetRuntimeId)
-        writeVarInt(out, 1)   // action: Attack
-        writeVarInt(out, 0)   // hotbar slot
-        writeItem(out)        // held item (air)
-        writeItem(out)        // clicked item (air) — ✅ FIX: eksik 2. item eklendi
-        writeVec3(out, 0f, 0f, 0f)  // click pos
+        writeVarInt(out, 1)
+        writeVarInt(out, 0)
+        writeItem(out)
+        writeItem(out)
+        writeVec3(out, 0f, 0f, 0f)
         return wrapBatch(out.toByteArray())
     }
 
@@ -118,18 +113,33 @@ object PacketHelper {
 
     // ── MobEffect ─────────────────────────────────────────────────────────
 
+    /**
+     * ✅ FIX (KRİTİK): uniqueEntityId parametresi eklendi.
+     *
+     * Bedrock 1.20.80+ MobEffect formatı:
+     *   [packetId varint]
+     *   [entityId zigzag-varlong]  ← uniqueEntityId, runtimeId DEĞİL
+     *   [eventId  varint]          ← 1=add, 2=modify, 3=remove
+     *   [effectId varint]
+     *   [amplifier varint]
+     *   [particles byte]
+     *   [duration varint]
+     *
+     * Önceki hata: runtimeId (unsigned varlong) gönderiliyordu.
+     * Minecraft paketi parse edip yanlış entity buluyordu → yoksanıyordu.
+     */
     fun buildMobEffect(
-        runtimeId : Long,
-        eventId   : Int,
-        effectId  : Int,
-        amplifier : Int     = 0,
-        particles : Boolean = false,
-        duration  : Int     = 1000000
+        uniqueEntityId : Long,
+        eventId        : Int,
+        effectId       : Int,
+        amplifier      : Int     = 0,
+        particles      : Boolean = false,
+        duration       : Int     = 1000000
     ): ByteArray {
         val out = ByteArrayOutputStream()
         writeVarInt(out, BedrockPacketIds.MOB_EFFECT)
-        writeVarLong(out, runtimeId)
-        out.write(eventId)
+        writeZigzagVarLong(out, uniqueEntityId)   // ✅ zigzag-encoded uniqueEntityId
+        writeVarInt(out, eventId)                  // ✅ varint, byte değil
         writeVarInt(out, effectId)
         writeVarInt(out, amplifier)
         out.write(if (particles) 1 else 0)
@@ -147,7 +157,7 @@ object PacketHelper {
         x: Float = 0f, y: Float = 0f, z: Float = 0f
     ): ByteArray {
         val out = ByteArrayOutputStream()
-        writeVarInt(out, BedrockPacketIds.INVENTORY_TRANSACTION)  // ✅ FIX: USE_ITEM alias kaldırıldı, doğru paket 0x1E
+        writeVarInt(out, BedrockPacketIds.INVENTORY_TRANSACTION)
         writeVarInt(out, actionType)
         writeBlockPos(out, blockX, blockY, blockZ)
         writeVarInt(out, face)
@@ -177,30 +187,12 @@ object PacketHelper {
 
     // ── Batch Wrap ────────────────────────────────────────────────────────
 
-    /**
-     * ✅ FIX (KRİTİK): Sıkıştırma durumuna göre batch oluştur.
-     *
-     * Önceki kod: her zaman ham (sıkıştırılmamış) batch üretiyordu.
-     * NetworkSettings sonrası sunucu sıkıştırılmış paket bekler.
-     * Ham paket gönderilince sunucu RakNet seviyesinde iyi alıyor ama
-     * Bedrock decode aşamasında sıkıştırılmış bekleyip şifreli veri
-     * görüyor → paketi tamamen ignore ediyor.
-     *
-     * Batch format (sıkıştırmasız):
-     *   [0xFE] [varint(packetLen)] [packetData]
-     *
-     * Batch format (sıkıştırmalı):
-     *   [0xFE] [compress([varint(packetLen)] [packetData])]
-     *   NOT: 0xFE'den SONRAKI kısım sıkıştırılır, 0xFE sıkıştırılmaz.
-     */
     fun wrapBatch(packetData: ByteArray): ByteArray {
-        // İç batch body: varint(len) + packetData
         val batchBody = ByteArrayOutputStream().also { buf ->
             writeVarInt(buf, packetData.size)
             buf.write(packetData)
         }.toByteArray()
 
-        // Sıkıştırma gerekiyorsa uygula
         val finalBody = if (PacketProcessor.compressionEnabled) {
             when (PacketProcessor.compressionAlgorithm) {
                 1    -> compressSnappy(batchBody)
@@ -210,7 +202,6 @@ object PacketHelper {
             batchBody
         }
 
-        // 0xFE başlığı ile sar
         val out = ByteArrayOutputStream(1 + finalBody.size)
         out.write(0xFE)
         out.write(finalBody)
@@ -262,6 +253,15 @@ object PacketHelper {
         } while (v != 0L)
     }
 
+    /**
+     * ✅ YENİ: Zigzag-encoded signed varlong yazar (uniqueEntityId için).
+     * zigzag encode: (value shl 1) XOR (value shr 63)
+     */
+    fun writeZigzagVarLong(out: ByteArrayOutputStream, value: Long) {
+        val encoded = (value shl 1) xor (value shr 63)
+        writeVarLong(out, encoded)
+    }
+
     fun writeFloatLE(out: ByteArrayOutputStream, value: Float) {
         val bits = java.lang.Float.floatToIntBits(value)
         out.write(bits and 0xFF)
@@ -289,7 +289,7 @@ object PacketHelper {
     }
 
     private fun writeItem(out: ByteArrayOutputStream) {
-        writeVarInt(out, 0)  // runtime ID 0 = air
+        writeVarInt(out, 0)
     }
 
     private fun varIntSize(value: Int): Int {
@@ -322,13 +322,8 @@ object PacketHelper {
         return result to pos
     }
 
-    /**
-     * Zigzag encoded signed varlong okur (uniqueEntityId için).
-     * Bedrock START_GAME ve ADD_PLAYER'da uniqueEntityId zigzag encode'ludur.
-     */
     fun readZigzagVarLong(data: ByteArray, offset: Int = 0): Pair<Long, Int> {
         val (raw, pos) = readVarLong(data, offset)
-        // zigzag decode: (raw >>> 1) XOR -(raw AND 1)
         val decoded = (raw ushr 1) xor -(raw and 1L)
         return decoded to pos
     }
@@ -343,14 +338,8 @@ object PacketHelper {
 
     fun readString(data: ByteArray, offset: Int): Pair<String, Int> {
         val (len, pos) = readVarInt(data, offset)
-        // Negatif uzunluk → veri bozuk, pos'u varint sonrasına bırak
         if (len < 0) return "" to pos
-        // Boş string → pos varint sonrasında, doğru
         if (len == 0) return "" to pos
-        // Bounds aşımı: pos+len > data.size
-        // KRİTİK: exception atmak yerine güvenli dön ama pos'u
-        // doğru konuma (pos+len) ilerlet — cascade hataları önler.
-        // Çağrı kodu zaten catch bloğu içinde, sınır dışı pos kabul edilir.
         if (pos + len > data.size) return "" to (pos + len)
         return String(data, pos, len, Charsets.UTF_8) to pos + len
     }

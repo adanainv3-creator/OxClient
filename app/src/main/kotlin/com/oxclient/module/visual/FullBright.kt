@@ -41,7 +41,6 @@ class FullBright : BaseModule(
     override fun onEnable() {
         PacketEventBus.register(this)
         lastNvInjectMs = 0L
-        // FIX: Log.d → OverlayLogger.d — panelde görünsün
         OverlayLogger.d(TAG, "Açıldı (${mode.value})")
         startLoop()
     }
@@ -59,15 +58,13 @@ class FullBright : BaseModule(
         loop?.cancel()
         loop = scope.launch {
             var attempts = 0
-            // FIX: currentCoroutineContext().isActive — loop job iptal edilince durur
-            // Eski: while (isActive && isEnabled) — scope'un isActive'ini kontrol ediyordu,
-            // loop?.cancel() sonrası scope hâlâ aktif olduğundan loop hiç durmuyordu.
             while (currentCoroutineContext().isActive && isEnabled) {
                 when (mode.value) {
                     FbMode.NightVision -> {
-                        if (EntityTracker.selfRuntimeId == 0L) {
+                        // ✅ FIX: selfUniqueId kontrolü — runtimeId değil
+                        if (EntityTracker.selfUniqueId == 0L) {
                             if (attempts < 20) {
-                                OverlayLogger.d(TAG, "selfRuntimeId=0, bekleniyor... ($attempts)")
+                                OverlayLogger.d(TAG, "selfUniqueId=0, bekleniyor... ($attempts)")
                                 delay(500)
                                 attempts++
                                 continue
@@ -128,9 +125,10 @@ class FullBright : BaseModule(
     }
 
     private fun injectNightVision() {
-        val rid = EntityTracker.selfRuntimeId
-        if (rid == 0L) {
-            OverlayLogger.w(TAG, "NV inject atlandı: selfRuntimeId=0")
+        // ✅ FIX: uniqueEntityId kullan, runtimeId değil
+        val uid = EntityTracker.selfUniqueId
+        if (uid == 0L) {
+            OverlayLogger.w(TAG, "NV inject atlandı: selfUniqueId=0")
             return
         }
         if (!InjectionQueue.isBound) {
@@ -139,28 +137,28 @@ class FullBright : BaseModule(
         }
 
         val pkt = PacketHelper.buildMobEffect(
-            runtimeId = rid,
-            eventId   = 1,
-            effectId  = NIGHT_VISION_ID,
-            amplifier = (strength.value / 200f).toInt().coerceIn(0, 255),
-            particles = false,
-            duration  = 2_000_000
+            uniqueEntityId = uid,
+            eventId        = 1,
+            effectId       = NIGHT_VISION_ID,
+            amplifier      = (strength.value / 200f).toInt().coerceIn(0, 255),
+            particles      = false,
+            duration       = 2_000_000
         )
         PacketHelper.injectToClient(pkt)
-        OverlayLogger.i(TAG, "NV enjekte edildi (rid=$rid)")
+        OverlayLogger.i(TAG, "NV enjekte edildi (uid=$uid)")
     }
 
     private fun removeNightVision() {
-        val rid = EntityTracker.selfRuntimeId
-        if (rid == 0L || !InjectionQueue.isBound) return
+        val uid = EntityTracker.selfUniqueId
+        if (uid == 0L || !InjectionQueue.isBound) return
 
         val pkt = PacketHelper.buildMobEffect(
-            runtimeId = rid,
-            eventId   = 3,
-            effectId  = NIGHT_VISION_ID,
-            amplifier = 0,
-            particles = false,
-            duration  = 0
+            uniqueEntityId = uid,
+            eventId        = 3,
+            effectId       = NIGHT_VISION_ID,
+            amplifier      = 0,
+            particles      = false,
+            duration       = 0
         )
         PacketHelper.injectToClient(pkt)
         OverlayLogger.i(TAG, "NV kaldırıldı")
