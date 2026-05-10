@@ -24,6 +24,12 @@ import java.io.ByteArrayOutputStream
  *    büyük değerlerde yanlış sonuç verebilirdi.
  *
  * DOĞRU: Sıkıştırma durumu YALNIZCA NetworkSettings paketinden okunur.
+ *
+ * ✅ FIX (KRİTİK): Bedrock şifreleme (AES-256-CFB8) desteği eklendi.
+ *    2b2t gibi online sunucularda ServerToClientHandshake (0x03) paketi
+ *    geldikten sonra TÜM paketler şifreli gelir.
+ *    Şifre çözülmeden PacketProcessor ham byte okur → hiçbir şey parse edilemez
+ *    → selfRuntimeId=0, konum=0,0,0 → modüller çalışmaz.
  */
 object PacketProcessor {
 
@@ -32,11 +38,85 @@ object PacketProcessor {
     @Volatile var compressionEnabled   = false
     @Volatile var compressionAlgorithm = 0     // 0 = zlib, 1 = snappy
 
+    // ✅ FIX: AES-256-CFB8 şifreleme state'i
+    // Bedrock şifrelemesi: her yön için ayrı cipher, counter mod (send counter / receive counter)
+    @Volatile var encryptionEnabled    = false
+    private var decryptCipher: javax.crypto.Cipher? = null  // sunucu→biz
+    private var encryptCipher: javax.crypto.Cipher? = null  // biz→sunucu
+    @Volatile private var sendCounter  = 0L
+    @Volatile private var recvCounter  = 0L
+    private lateinit var secretKey: javax.crypto.SecretKey
+
+    /**
+     * ServerToClientHandshake JWT'sinden şifreli oturumu başlat.
+     * WClient'in OnlineLoginPacketListener.beforeServerBound içinde yaptığının aynısı.
+     *
+     * jwt: ServerToClientHandshake paketinin içindeki JWT string
+     * clientPrivateKey: Login sırasında oluşturulan EC private key (Base64)
+     */
+    fun enableEncryption(secretKeyBytes: ByteArray) {
+        try {
+            secretKey = javax.crypto.spec.SecretKeySpec(secretKeyBytes, "AES")
+            // Bedrock CFB8: IV = secretKey'in ilk 16 byte'ı
+            val iv = secretKeyBytes.copyOf(16)
+            val ivSpec = javax.crypto.spec.IvParameterSpec(iv)
+
+            decryptCipher = javax.crypto.Cipher.getInstance("AES/CFB8/NoPadding").apply {
+                init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, ivSpec)
+            }
+            encryptCipher = javax.crypto.Cipher.getInstance("AES/CFB8/NoPadding").apply {
+                init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey, ivSpec)
+            }
+            sendCounter = 0L
+            recvCounter = 0L
+            encryptionEnabled = true
+            Log.i(TAG, "✅ Şifreleme aktif (AES-256-CFB8)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Şifreleme başlatma hatası: ${e.message}")
+        }
+    }
+
+    fun resetEncryption() {
+        encryptionEnabled = false
+        decryptCipher = null
+        encryptCipher = null
+        sendCounter = 0L
+        recvCounter = 0L
+    }
+
+    fun reset() {
+        compressionEnabled = false
+        compressionAlgorithm = 0
+        resetEncryption()
+    }
+
+    /** Sunucudan gelen veriyi çöz (S→C) */
+    private fun decrypt(data: ByteArray): ByteArray {
+        return decryptCipher?.doFinal(data) ?: data
+    }
+
+    /** Sunucuya gönderilecek veriyi şifrele (C→S inject) */
+    fun encrypt(data: ByteArray): ByteArray {
+        return encryptCipher?.doFinal(data) ?: data
+    }
+
     fun processBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         if (body.isEmpty()) return body
         return try {
-            if (compressionEnabled) processCompressedBatch(body, direction)
-            else                    processRawBatch(body, direction)
+            // ✅ FIX: Sunucudan gelen veri şifrelenmiş olabilir — önce çöz
+            val decrypted = if (encryptionEnabled && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
+                decrypt(body)
+            } else {
+                body
+            }
+            val result = if (compressionEnabled) processCompressedBatch(decrypted, direction)
+                         else                    processRawBatch(decrypted, direction)
+            // ✅ FIX: Sunucuya enjekte edilecek paketleri şifrele
+            if (encryptionEnabled && direction == PacketEvent.Direction.CLIENT_TO_SERVER && result != null) {
+                encrypt(result)
+            } else {
+                result
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Batch işleme hatası, orijinal iletiliyor: ${e.message}")
             body

@@ -149,6 +149,7 @@ class MITMProxy(
         Log.i(TAG, "Durduruluyor…")
         EntityTracker.unregister()
         InjectionQueue.unbind()
+        PacketProcessor.reset()  // ✅ Şifreleme + sıkıştırma state'ini temizle
         scope.cancel()
         safeClose(listenSocket); listenSocket = null
         safeClose(serverSocket); serverSocket = null
@@ -369,10 +370,134 @@ class MITMProxy(
 
     private fun processGamePacket(payload: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         val body   = payload.copyOfRange(1, payload.size)
+
+        // ✅ FIX: ServerToClientHandshake (0x03) paketi şifrelemeyi başlatır.
+        // Bu noktadan sonra sunucudan gelen TÜM paketler AES-256-CFB8 ile şifreli.
+        // Bu paketi istemciye iletmeden önce şifrelemeyi aktif et.
+        if (direction == PacketEvent.Direction.SERVER_TO_CLIENT && !PacketProcessor.encryptionEnabled) {
+            try {
+                val (_, p0) = readVarIntFromBytes(body, 0)
+                // Decompress eğer aktifse
+                val rawBody = if (PacketProcessor.compressionEnabled) {
+                    try { zlibInflateSimple(body) } catch (_: Exception) { body }
+                } else body
+                val (packetId, _) = readVarIntFromBytes(rawBody, 0)
+                if (packetId == 0x03) { // SERVER_TO_CLIENT_HANDSHAKE
+                    handleHandshake(rawBody)
+                }
+            } catch (_: Exception) {}
+        }
+
         val result = PacketProcessor.processBatch(body, direction)
 
         return if (result == null) null
         else byteArrayOf(0xFE.toByte()) + result
+    }
+
+    /**
+     * ServerToClientHandshake JWT'sini parse edip AES secret key türet.
+     * JWT payload: { "salt": "<base64>" }
+     * JWT header:  { "x5u": "<server EC public key base64>" }
+     *
+     * Secret key = ECDH(clientPrivateKey, serverPublicKey) + SHA256(sharedSecret + salt)
+     * Bedrock bunu EncryptionUtils.getSecretKey ile yapıyor.
+     */
+    private fun handleHandshake(rawBody: ByteArray) {
+        try {
+            // Paket ID varint'ini atla
+            val (_, p0) = readVarIntFromBytes(rawBody, 0)
+            // JWT string: varint(len) + UTF8 bytes
+            val (jwtLen, p1) = readVarIntFromBytes(rawBody, p0)
+            if (jwtLen <= 0 || p1 + jwtLen > rawBody.size) return
+            val jwt = String(rawBody, p1, jwtLen, Charsets.UTF_8)
+
+            // JWT'yi parse et (header.payload.signature)
+            val parts = jwt.split(".")
+            if (parts.size != 3) return
+
+            val headerJson  = String(java.util.Base64.getUrlDecoder().decode(parts[0]))
+            val payloadJson = String(java.util.Base64.getUrlDecoder().decode(parts[1]))
+
+            // Server public key
+            val headerMap  = parseSimpleJson(headerJson)
+            val payloadMap = parseSimpleJson(payloadJson)
+
+            val x5u       = headerMap["x5u"] ?: return
+            val saltB64   = payloadMap["salt"] ?: return
+            val salt      = java.util.Base64.getDecoder().decode(saltB64)
+
+            // Server EC public key
+            val serverKeyBytes = java.util.Base64.getDecoder().decode(x5u)
+            val keyFactory = java.security.KeyFactory.getInstance("EC")
+            val serverPublicKey = keyFactory.generatePublic(
+                java.security.spec.X509EncodedKeySpec(serverKeyBytes)
+            )
+
+            // Client key pair — login sırasında üretilip kaydedilen
+            val clientPrivateKey = HandshakeKeyHolder.privateKey
+            if (clientPrivateKey == null) {
+                Log.w(TAG, "Handshake: client private key yok — şifreleme atlandı")
+                return
+            }
+
+            // ECDH shared secret
+            val keyAgreement = javax.crypto.KeyAgreement.getInstance("ECDH")
+            keyAgreement.init(clientPrivateKey)
+            keyAgreement.doPhase(serverPublicKey, true)
+            val sharedSecret = keyAgreement.generateSecret()
+
+            // Secret key = SHA256(counter_le(0) + sharedSecret + salt)
+            val sha256 = java.security.MessageDigest.getInstance("SHA-256")
+            sha256.update(byteArrayOf(0,0,0,0,0,0,0,0))  // counter = 0, 8 bytes LE
+            sha256.update(sharedSecret)
+            sha256.update(salt)
+            val secretKeyBytes = sha256.digest()  // 32 bytes
+
+            PacketProcessor.enableEncryption(secretKeyBytes)
+
+            // ClientToServerHandshake (0x04) gönder — sunucuya şifreleme hazır de
+            val handshakeResponse = buildClientToServerHandshake()
+            PacketHelper.injectToServer(handshakeResponse)
+
+            Log.i(TAG, "✅ Handshake tamamlandı — şifreleme aktif")
+        } catch (e: Exception) {
+            Log.e(TAG, "Handshake hatası: ${e.message}", e)
+        }
+    }
+
+    private fun buildClientToServerHandshake(): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        // packetId = 0x04 (CLIENT_TO_SERVER_HANDSHAKE)
+        PacketProcessor.writeVarInt(out, 0x04)
+        return PacketHelper.wrapBatch(out.toByteArray())
+    }
+
+    private fun readVarIntFromBytes(data: ByteArray, offset: Int): Pair<Int, Int> {
+        var result = 0; var shift = 0; var pos = offset
+        while (pos < data.size) {
+            val b = data[pos++].toInt() and 0xFF
+            result = result or ((b and 0x7F) shl shift)
+            if (b and 0x80 == 0) break
+            shift += 7
+        }
+        return result to pos
+    }
+
+    private fun zlibInflateSimple(input: ByteArray): ByteArray {
+        val inf = java.util.zip.Inflater(); inf.setInput(input)
+        val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(4096)
+        while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
+        inf.end(); return out.toByteArray()
+    }
+
+    /** Minimal JSON parser — sadece {"key":"value"} formatı için */
+    private fun parseSimpleJson(json: String): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        val pattern = Regex(""""(\w+)"\s*:\s*"([^"]+)"""")
+        pattern.findAll(json).forEach { match ->
+            map[match.groupValues[1]] = match.groupValues[2]
+        }
+        return map
     }
 
     // ─────────────────────────────────────────────────────────────────────
