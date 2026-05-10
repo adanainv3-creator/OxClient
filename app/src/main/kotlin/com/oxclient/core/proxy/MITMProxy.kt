@@ -99,6 +99,7 @@ class MITMProxy(
         if (running.getAndSet(true)) { Log.w(TAG, "Zaten çalışıyor"); return }
         OverlayLogger.i(TAG, "Başlatılıyor → :$listenPort ↔ $targetHost:$targetPort")
 
+        HandshakeKeyHolder.generate()        // Her bağlantıda taze key pair
         EntityTracker.register()
         LoginPacketInterceptor.register()   // ✅ EKLENDİ
 
@@ -149,6 +150,7 @@ class MITMProxy(
     fun stop() {
         if (!running.getAndSet(false)) return
         OverlayLogger.i(TAG, "Durduruluyor…")
+        HandshakeKeyHolder.clear()
         EntityTracker.unregister()
         LoginPacketInterceptor.unregister() // ✅ EKLENDİ
         InjectionQueue.unbind()
@@ -511,11 +513,11 @@ class MITMProxy(
             val salt      = java.util.Base64.getDecoder().decode(saltB64)
 
             // Server EC public key
-            // x5u iki farklı formatta gelebilir:
-            // 1. 65 byte uncompressed EC point: [0x04][x 32B][y 32B]  (Bedrock genellikle bu)
-            // 2. DER/SubjectPublicKeyInfo (X509EncodedKeySpec)
             val serverKeyBytes = java.util.Base64.getDecoder().decode(x5u)
-            val serverPublicKey = decodeEcPublicKey(serverKeyBytes)
+            val keyFactory = java.security.KeyFactory.getInstance("EC")
+            val serverPublicKey = keyFactory.generatePublic(
+                java.security.spec.X509EncodedKeySpec(serverKeyBytes)
+            )
 
             // Client key pair — login sırasında üretilip kaydedilen
             val clientPrivateKey = HandshakeKeyHolder.privateKey
@@ -565,41 +567,6 @@ class MITMProxy(
             shift += 7
         }
         return result to pos
-    }
-
-    /**
-     * EC public key'i iki formattan yükler:
-     *
-     * Format 1 — Uncompressed EC point (65 byte): [0x04][x 32B][y 32B]
-     *   Bedrock sunucuları x5u alanında bunu gönderir.
-     *   X509EncodedKeySpec KULLANILMAZ — INCOMPATIBLE_OBJECTS hatası verir.
-     *   Çözüm: P-256 SubjectPublicKeyInfo DER prefix ekleyip X509 olarak yükle.
-     *
-     * Format 2 — DER/SubjectPublicKeyInfo (>65 byte veya farklı başlangıç):
-     *   Direkt X509EncodedKeySpec ile yüklenir.
-     *
-     * P-256 SubjectPublicKeyInfo DER prefix (sabit, RFC 5480):
-     *   30 59 30 13 06 07 2a 86 48 ce 3d 02 01 06 08 2a 86 48 ce 3d 03 01 07 03 42 00
-     */
-    private fun decodeEcPublicKey(keyBytes: ByteArray): java.security.PublicKey {
-        val keyFactory = java.security.KeyFactory.getInstance("EC")
-
-        // Format 1: 65-byte uncompressed EC point
-        if (keyBytes.size == 65 && keyBytes[0] == 0x04.toByte()) {
-            // P-256 (secp256r1) SubjectPublicKeyInfo DER prefix
-            val derPrefix = byteArrayOf(
-                0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86.toByte(),
-                0x48, 0xce.toByte(), 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
-                0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x03, 0x01, 0x07,
-                0x03, 0x42, 0x00
-            )
-            return keyFactory.generatePublic(
-                java.security.spec.X509EncodedKeySpec(derPrefix + keyBytes)
-            )
-        }
-
-        // Format 2: DER/SubjectPublicKeyInfo — direkt yükle
-        return keyFactory.generatePublic(java.security.spec.X509EncodedKeySpec(keyBytes))
     }
 
     /** Minimal JSON parser — sadece {"key":"value"} formatı için */
