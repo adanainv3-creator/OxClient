@@ -130,6 +130,11 @@ object EntityTracker : PacketListener {
             val (uniqueId, p2) = PacketHelper.readZigzagVarLong(d, pos);   pos = p2  // uniqueEntityId
             val (rid, p3)      = PacketHelper.readVarLong(d, pos);         pos = p3  // runtimeEntityId
             val (_, p4)        = PacketHelper.readString(d, pos);          pos = p4  // platformChatId → atla
+            // ✅ FIX: Bedrock 1.21.x ADD_PLAYER formatı — eksik alanlar eklendi
+            // platformChatId'den sonra deviceId (string) ve buildPlatform (varint) var.
+            // Bunlar atlanmazsa x/y/z yanlış offset'ten okunuyor → saçma koordinatlar.
+            val (_, p5)        = PacketHelper.readString(d, pos);          pos = p5  // deviceId → atla
+            val (_, p6)        = PacketHelper.readVarInt(d, pos);          pos = p6  // buildPlatform → atla
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)

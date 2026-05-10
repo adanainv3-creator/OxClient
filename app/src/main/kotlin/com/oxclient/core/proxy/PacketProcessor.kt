@@ -202,9 +202,11 @@ object PacketProcessor {
             }
         }
 
-        // EntityTracker — HER İKİ YÖN
-        try { EntityTracker.onPacket(PacketEvent(packetId, data, direction)) } catch (_: Exception) {}
-
+        // ✅ FIX: EntityTracker.onPacket() direkt ÇAĞRILMIYOR.
+        // EntityTracker, PacketEventBus'a register() ile kayıt olduğundan
+        // publish() çağrısı zaten EntityTracker.onPacket()'i tetikler.
+        // Önceki kod: hem direkt hem EventBus → her paket 2 kez işleniyordu
+        // → StartGame 2x, AddPlayer 2x, parse hataları 2x görünüyordu.
         val event = PacketEvent(packetId, data, direction)
         try { PacketEventBus.publish(event) } catch (e: Exception) {
             OverlayLogger.e(TAG, "EventBus hatası pkt=0x${packetId.toString(16)}: ${e.message}", e)
