@@ -1,6 +1,5 @@
 package com.oxclient.module.visual
 
-import android.util.Log
 import com.oxclient.core.proxy.BedrockPacketIds
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.proxy.InjectionQueue
@@ -9,6 +8,7 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.events.PacketListener
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 
@@ -31,8 +31,8 @@ class FullBright : BaseModule(
     @Volatile private var lastNvInjectMs = 0L
     private val NV_REFRESH_MS   = 8000L
     private val NIGHT_VISION_ID = 16
+    private val TAG             = "FullBright"
 
-    // Tek bir SupervisorJob — scope ömür boyu yaşar, sadece loop job'ları iptal edilir
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loop: Job? = null
 
@@ -41,7 +41,8 @@ class FullBright : BaseModule(
     override fun onEnable() {
         PacketEventBus.register(this)
         lastNvInjectMs = 0L
-        Log.d("FullBright", "Açıldı (${mode.value})")
+        // FIX: Log.d → OverlayLogger.d — panelde görünsün
+        OverlayLogger.d(TAG, "Açıldı (${mode.value})")
         startLoop()
     }
 
@@ -49,31 +50,24 @@ class FullBright : BaseModule(
         stopLoop()
         PacketEventBus.unregister(this)
         if (mode.value == FbMode.NightVision) removeNightVision()
-        Log.d("FullBright", "Kapandı")
+        OverlayLogger.d(TAG, "Kapandı")
     }
 
     // ── Loop yönetimi ────────────────────────────────────────────────────
 
-    /**
-     * FIX 1: loop?.cancel() ardından yeni job başlatıyoruz.
-     * Eski kodda `while (isActive && isEnabled)` içindeki `isActive`,
-     * dosyanın altındaki extension ile scope'un Job'ını kontrol ediyordu —
-     * scope hiç iptal edilmediğinden loop durmuyordu.
-     *
-     * Düzeltme: `currentCoroutineContext().isActive` kullan — bu, yalnızca
-     * çalışan coroutine'in (loop job'ının) aktifliğini kontrol eder.
-     */
     private fun startLoop() {
         loop?.cancel()
         loop = scope.launch {
             var attempts = 0
-            // FIX 1: currentCoroutineContext().isActive — loop job iptal edilince durur
+            // FIX: currentCoroutineContext().isActive — loop job iptal edilince durur
+            // Eski: while (isActive && isEnabled) — scope'un isActive'ini kontrol ediyordu,
+            // loop?.cancel() sonrası scope hâlâ aktif olduğundan loop hiç durmuyordu.
             while (currentCoroutineContext().isActive && isEnabled) {
                 when (mode.value) {
                     FbMode.NightVision -> {
                         if (EntityTracker.selfRuntimeId == 0L) {
                             if (attempts < 20) {
-                                Log.d("FullBright", "selfRuntimeId=0, bekleniyor... ($attempts)")
+                                OverlayLogger.d(TAG, "selfRuntimeId=0, bekleniyor... ($attempts)")
                                 delay(500)
                                 attempts++
                                 continue
@@ -82,7 +76,7 @@ class FullBright : BaseModule(
                         attempts = 0
                         refreshNightVision()
                     }
-                    FbMode.Gamma -> injectGamma()
+                    FbMode.Gamma    -> injectGamma()
                     FbMode.Lighting -> { /* onPacket'te işlenir */ }
                 }
                 delay(5000)
@@ -101,27 +95,21 @@ class FullBright : BaseModule(
         if (!isEnabled) return
 
         when {
-            // StartGame → NV modunda hemen inject et
-            // FIX 2: EntityTracker priority=10, FullBright priority=30 — EntityTracker
-            // önce çalışır, selfRuntimeId bu noktada zaten set edilmiş olur.
-            // 100ms delay yine de bırakıldı — ek güvence.
             mode.value == FbMode.NightVision &&
             event.packetId == BedrockPacketIds.START_GAME -> {
                 lastNvInjectMs = 0L
                 scope.launch {
-                    delay(200) // EntityTracker'ın parseStartGame'i tamamlaması için
+                    delay(200)
                     if (isEnabled) injectNightVision()
                 }
             }
 
-            // Gamma: SetTime'ı gündüze çevir
             mode.value == FbMode.Gamma &&
             event.packetId == BedrockPacketIds.SET_TIME &&
             event.direction == PacketEvent.Direction.SERVER_TO_CLIENT -> {
                 event.modifiedData = buildSetTime(6000)
             }
 
-            // Lighting: LevelChunk light verisini patchle
             mode.value == FbMode.Lighting &&
             event.packetId == BedrockPacketIds.LEVEL_CHUNK &&
             event.direction == PacketEvent.Direction.SERVER_TO_CLIENT -> {
@@ -142,48 +130,46 @@ class FullBright : BaseModule(
     private fun injectNightVision() {
         val rid = EntityTracker.selfRuntimeId
         if (rid == 0L) {
-            Log.w("FullBright", "NV inject atlandı: selfRuntimeId=0 (StartGame henüz gelmedi)")
+            OverlayLogger.w(TAG, "NV inject atlandı: selfRuntimeId=0")
             return
         }
         if (!InjectionQueue.isBound) {
-            Log.w("FullBright", "NV inject atlandı: InjectionQueue bağlı değil")
+            OverlayLogger.w(TAG, "NV inject atlandı: InjectionQueue bağlı değil")
             return
         }
 
         val pkt = PacketHelper.buildMobEffect(
             runtimeId = rid,
-            eventId   = 1,           // add
+            eventId   = 1,
             effectId  = NIGHT_VISION_ID,
             amplifier = (strength.value / 200f).toInt().coerceIn(0, 255),
             particles = false,
-            duration  = 2_000_000    // sonsuz
+            duration  = 2_000_000
         )
         PacketHelper.injectToClient(pkt)
-        Log.d("FullBright", "NV enjekte edildi (rid=$rid)")
+        OverlayLogger.i(TAG, "NV enjekte edildi (rid=$rid)")
     }
 
     private fun removeNightVision() {
         val rid = EntityTracker.selfRuntimeId
-        if (rid == 0L) return
-        if (!InjectionQueue.isBound) return
+        if (rid == 0L || !InjectionQueue.isBound) return
 
         val pkt = PacketHelper.buildMobEffect(
             runtimeId = rid,
-            eventId   = 3,           // remove
+            eventId   = 3,
             effectId  = NIGHT_VISION_ID,
             amplifier = 0,
             particles = false,
             duration  = 0
         )
         PacketHelper.injectToClient(pkt)
-        Log.d("FullBright", "NV kaldırıldı")
+        OverlayLogger.i(TAG, "NV kaldırıldı")
     }
 
     // ── Gamma ────────────────────────────────────────────────────────────
 
     private fun injectGamma() {
-        val pkt = buildSetTime(6000)
-        PacketHelper.injectToClient(pkt)
+        PacketHelper.injectToClient(buildSetTime(6000))
     }
 
     private fun buildSetTime(time: Int): ByteArray {
@@ -196,9 +182,8 @@ class FullBright : BaseModule(
     // ── Lighting ─────────────────────────────────────────────────────────
 
     private fun patchChunkLight(event: PacketEvent) {
-        val d = event.data
         try {
-            val modified = d.copyOf()
+            val modified = event.data.copyOf()
             var i = 0
             while (i < modified.size - 16) {
                 if ((0 until 16).all { modified[i + it] == 0.toByte() }) {
