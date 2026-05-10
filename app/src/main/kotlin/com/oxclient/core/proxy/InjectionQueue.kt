@@ -19,12 +19,10 @@ object InjectionQueue {
     @Volatile private var clientAddr   : InetAddress?   = null
     @Volatile private var clientPort   : Int            = 0
 
-    // RakNet sequence sayaçları — her bağlantıda 0'dan başlar
     private val seqCounter      = AtomicInteger(0)
     private val reliableCounter = AtomicInteger(0)
     private val orderCounter    = AtomicInteger(0)
 
-    // FIX 4: AtomicLong — iki coroutine'den eş zamanlı çağrıda race condition olmaması için
     private val lastInjectMs        = AtomicLong(0L)
     private const val MIN_INJECT_INTERVAL_MS = 5L
 
@@ -55,17 +53,19 @@ object InjectionQueue {
     }
 
     /**
-     * Sunucuya enjeksiyon — ŞİFRELEME UYGULANIYOR.
+     * Sunucuya enjeksiyon.
      *
-     * data parametresi: wrapBatch() çıktısı — [0xFE][batch_body]
-     * Şifreleme: 0xFE header'dan SONRA gelen kısma (batch_body) uygulanır.
+     * data formatı: wrapBatch() çıktısı — [0xFE][batch_body]
+     *
+     * ✅ FIX: Şifreleme AES-256-GCM (CTR) — PacketProcessor.encrypt() kullanılıyor.
+     * Şifreleme 0xFE header'dan SONRA gelen batch_body'ye uygulanır.
+     * PacketProcessor.encrypt() aynı zamanda 8 byte SHA256 checksum ekliyor.
      */
     fun enqueueToServer(data: ByteArray) {
         if (!isBound) { OverlayLogger.w(TAG, "ToServer: UNBOUND — paket atlandı"); return }
         val sock = serverSocket ?: return
         val addr = serverAddr   ?: return
         try {
-            // FIX 4: AtomicLong ile thread-safe rate limit
             val now = System.currentTimeMillis()
             val last = lastInjectMs.get()
             val diff = now - last
@@ -74,12 +74,10 @@ object InjectionQueue {
             }
             lastInjectMs.set(System.currentTimeMillis())
 
-            // Şifreleme aktifse batch_body'yi şifrele
-            // data formatı: [0xFE][batch_body]
-            // Şifreleme sadece 0xFE'den SONRAKİ kısma uygulanır
             val finalData = if (PacketProcessor.encryptionEnabled &&
                                data.isNotEmpty() &&
                                data[0] == 0xFE.toByte()) {
+                // 0xFE + şifrelenmiş(batch_body + checksum)
                 val body      = data.copyOfRange(1, data.size)
                 val encrypted = PacketProcessor.encrypt(body)
                 byteArrayOf(0xFE.toByte()) + encrypted
@@ -94,6 +92,11 @@ object InjectionQueue {
         }
     }
 
+    /**
+     * İstemciye enjeksiyon — şifreleme YOK.
+     * İstemci (Minecraft) proxy'yi yerel sunucu olarak görüyor,
+     * LAN bağlantısında şifreleme kullanılmıyor.
+     */
     fun enqueueToClient(data: ByteArray) {
         if (!isBound) { Log.w(TAG, "ToClient: UNBOUND — paket atlandı"); return }
         val sock = listenSocket ?: return
@@ -108,16 +111,6 @@ object InjectionQueue {
 
     /**
      * RakNet FrameSet wrapper — RELIABLE_ORDERED (reliability=3)
-     *
-     * Datagram yapısı:
-     *   [1B]  FrameSet ID = 0x84
-     *   [3B]  Sequence Number (LE)
-     *   [1B]  Flags = 0x60 (reliability=3, no split)
-     *   [2B]  Payload bit length (BE)
-     *   [3B]  Reliable message index (LE)
-     *   [3B]  Order index (LE)
-     *   [1B]  Order channel = 0
-     *   [N]   Payload
      */
     private fun wrapInFrameSet(payload: ByteArray): ByteArray {
         val seq      = seqCounter.getAndIncrement()      and 0xFFFFFF

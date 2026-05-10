@@ -6,31 +6,36 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.ui.overlay.OverlayLogger
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * PacketProcessor
  *
- * Diğer AI'nın verdiği "otomatik sıkıştırma tespiti" kodu 2 nedenden yanlış:
+ * ✅ FIX (KRİTİK): Bedrock 1.16.220+ şifreleme AES-256-GCM kullanıyor, CFB8 değil.
  *
- * 1) firstByte == 0x78 ise zlib aktif ediyordu.
- *    0x78 ham batch'te sıradan bir varint length byte'ı olabilir (120 byte'lık paket).
- *    Bu heuristic yanlış pozitif üretir → ham paket inflate edilmeye çalışılır
- *    → exception → fallback yine compression açar → sonsuz döngü / bağlantı kopması.
+ * Gerçek Bedrock şifreleme protokolü (PrismarineJS/bedrock-protocol doğrulandı):
  *
- * 2) NetworkSettings algoritma okuma offset'i hatalıydı.
- *    NetworkSettings (0xC7) formatı:
- *      [packetId varint=2B] [threshold uint16LE=2B] [algorithm uint16LE=2B]
- *    Algoritmanın düşük byte'ı: data[idSize + 2]
- *    Önceki kodda idSize+2 ve idSize+3 LE birleştirme yapıyordu — gereksiz ve
- *    büyük değerlerde yanlış sonuç verebilirdi.
+ * ŞIFRELEME (C→S):
+ *   1. Paketi sıkıştır (zlib raw deflate)
+ *   2. Checksum = SHA256(counter_LE8 + compressed + secretKey)[0:8]
+ *   3. payload = compressed + checksum
+ *   4. AES-256-GCM ile şifrele (IV = secretKey[0:12], 12 byte)
  *
- * DOĞRU: Sıkıştırma durumu YALNIZCA NetworkSettings paketinden okunur.
+ * ŞIFRE ÇÖZME (S→C):
+ *   1. AES-256-GCM ile çöz
+ *   2. Son 8 byte = checksum → at
+ *   3. Kalan = sıkıştırılmış veri → inflate
  *
- * ✅ FIX (KRİTİK): Bedrock şifreleme (AES-256-CFB8) desteği eklendi.
- *    2b2t gibi online sunucularda ServerToClientHandshake (0x03) paketi
- *    geldikten sonra TÜM paketler şifreli gelir.
- *    Şifre çözülmeden PacketProcessor ham byte okur → hiçbir şey parse edilemez
- *    → selfRuntimeId=0, konum=0,0,0 → modüller çalışmaz.
+ * NOT: Bedrock 1.16.220 öncesi CFB8 kullanıyordu. 2b2tpe Bedrock 1.21.x
+ *      sunucusu, dolayısıyla GCM.
+ *
+ * NOT: GCM modu Android'de javax.crypto.Cipher ile destekleniyor
+ *      ama "streaming" (parça parça doFinal) desteklenmiyor.
+ *      Her paket ayrı bir Cipher instance'ı ile işlenmeli.
  */
 object PacketProcessor {
 
@@ -39,39 +44,22 @@ object PacketProcessor {
     @Volatile var compressionEnabled   = false
     @Volatile var compressionAlgorithm = 0     // 0 = zlib, 1 = snappy
 
-    // AES-256-CFB8 şifreleme state'i
     @Volatile var encryptionEnabled    = false
-    private var decryptCipher: javax.crypto.Cipher? = null
-    private var encryptCipher: javax.crypto.Cipher? = null
+    @Volatile private var secretKeyBytes: ByteArray? = null
     @Volatile private var sendCounter  = 0L
     @Volatile private var recvCounter  = 0L
-    private lateinit var secretKey: javax.crypto.SecretKey
 
-    fun enableEncryption(secretKeyBytes: ByteArray) {
-        try {
-            secretKey = javax.crypto.spec.SecretKeySpec(secretKeyBytes, "AES")
-            val iv     = secretKeyBytes.copyOf(16)
-            val ivSpec = javax.crypto.spec.IvParameterSpec(iv)
-
-            decryptCipher = javax.crypto.Cipher.getInstance("AES/CFB8/NoPadding").apply {
-                init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, ivSpec)
-            }
-            encryptCipher = javax.crypto.Cipher.getInstance("AES/CFB8/NoPadding").apply {
-                init(javax.crypto.Cipher.ENCRYPT_MODE, secretKey, ivSpec)
-            }
-            sendCounter = 0L
-            recvCounter = 0L
-            encryptionEnabled = true
-            OverlayLogger.i(TAG, "✅ Şifreleme aktif (AES-256-CFB8)")
-        } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Şifreleme başlatma hatası: ${e.message}", e)
-        }
+    fun enableEncryption(keyBytes: ByteArray) {
+        secretKeyBytes   = keyBytes.copyOf()
+        sendCounter      = 0L
+        recvCounter      = 0L
+        encryptionEnabled = true
+        OverlayLogger.i(TAG, "✅ Şifreleme aktif (AES-256-GCM, key=${keyBytes.size}B)")
     }
 
     fun resetEncryption() {
         encryptionEnabled = false
-        decryptCipher     = null
-        encryptCipher     = null
+        secretKeyBytes    = null
         sendCounter       = 0L
         recvCounter       = 0L
         OverlayLogger.d(TAG, "Şifreleme sıfırlandı")
@@ -84,20 +72,89 @@ object PacketProcessor {
         OverlayLogger.d(TAG, "PacketProcessor sıfırlandı")
     }
 
-    /** Sunucudan gelen veriyi çöz (S→C) */
-    private fun decrypt(data: ByteArray): ByteArray =
-        decryptCipher?.doFinal(data) ?: data
+    // ── AES-256-GCM şifre çözme (S→C) ───────────────────────────────────
+    //
+    // Bedrock GCM'i tag-less modda kullanıyor (authentication tag yok).
+    // IV = secretKey[0:12] — her paket için aynı IV, farklı counter yok.
+    // Bu biraz alışılmadık ama PrismarineJS kodunda böyle:
+    //   createCipheriv('aes-256-gcm', secret, iv.slice(0, 12))
+    // ve GCM tag boyutu 0 (setAuthTagLength(0) eşdeğeri).
+    //
+    // Android'de GCM "no-auth-tag" modu: GCMParameterSpec(0, iv) ÇALIŞMIYOR.
+    // Alternatif: CTR modunu simüle et — GCM'in CTR kısmı ile özdeş.
+    // AES-256-CTR, IV = secretKey[0:16] (ilk 16 byte, counter=0).
+    //
+    // PrismarineJS iv.slice(0, 12) kullanıyor ama Android AES-CTR 16 byte IV istiyor.
+    // Çözüm: iv[0:12] + [0,0,0,1] → standard GCM counter block formatı.
 
-    /** Sunucuya gönderilecek veriyi şifrele (C→S inject) */
-    fun encrypt(data: ByteArray): ByteArray =
-        encryptCipher?.doFinal(data) ?: data
+    private fun gcmDecrypt(data: ByteArray): ByteArray {
+        val key = secretKeyBytes ?: return data
+        return try {
+            val secretKey = SecretKeySpec(key, "AES")
+            // IV: secretKey'in ilk 12 byte'ı
+            val iv = key.copyOf(12)
+            // GCM tag length 0 → Android desteklemiyor
+            // CTR ile eşdeğer: IV = iv[0:12] + 00000001 (big endian counter=1)
+            val ctrIv = ByteArray(16)
+            System.arraycopy(iv, 0, ctrIv, 0, 12)
+            ctrIv[15] = 1  // GCM initial counter = 1
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(ctrIv))
+            cipher.doFinal(data)
+        } catch (e: Exception) {
+            OverlayLogger.w(TAG, "GCM decrypt hatası: ${e.message}")
+            data
+        }
+    }
+
+    // ── AES-256-GCM şifreleme (C→S inject) ──────────────────────────────
+
+    fun encrypt(plaintext: ByteArray): ByteArray {
+        val key = secretKeyBytes ?: return plaintext
+        return try {
+            // Checksum = SHA256(counter_LE8 + plaintext + secretKey)[0:8]
+            val checksum = computeChecksum(plaintext, sendCounter, key)
+            sendCounter++
+
+            val payload = plaintext + checksum
+
+            val secretKey = SecretKeySpec(key, "AES")
+            val iv = key.copyOf(12)
+            val ctrIv = ByteArray(16)
+            System.arraycopy(iv, 0, ctrIv, 0, 12)
+            ctrIv[15] = 1
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey, IvParameterSpec(ctrIv))
+            cipher.doFinal(payload)
+        } catch (e: Exception) {
+            OverlayLogger.w(TAG, "GCM encrypt hatası: ${e.message}")
+            plaintext
+        }
+    }
+
+    private fun computeChecksum(data: ByteArray, counter: Long, key: ByteArray): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        // counter: little-endian 64-bit
+        val counterBytes = ByteArray(8)
+        var c = counter
+        for (i in 0 until 8) { counterBytes[i] = (c and 0xFF).toByte(); c = c ushr 8 }
+        digest.update(counterBytes)
+        digest.update(data)
+        digest.update(key)
+        return digest.digest().copyOf(8)
+    }
+
+    // ── Ana işleme ───────────────────────────────────────────────────────
 
     fun processBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         if (body.isEmpty()) return body
         return try {
+            // S→C: önce şifre çöz
             val decrypted = if (encryptionEnabled &&
                                direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
-                decrypt(body)
+                val dec = gcmDecrypt(body)
+                // Son 8 byte checksum — at
+                if (dec.size > 8) dec.copyOf(dec.size - 8) else dec
             } else {
                 body
             }
@@ -105,6 +162,7 @@ object PacketProcessor {
             val result = if (compressionEnabled) processCompressedBatch(decrypted, direction)
                          else                    processRawBatch(decrypted, direction)
 
+            // C→S inject: sıkıştır + şifrele
             if (encryptionEnabled &&
                 direction == PacketEvent.Direction.CLIENT_TO_SERVER &&
                 result != null) {
@@ -113,7 +171,7 @@ object PacketProcessor {
                 result
             }
         } catch (e: Exception) {
-            OverlayLogger.w(TAG, "Batch işleme hatası, orijinal iletiliyor: ${e.message}")
+            OverlayLogger.w(TAG, "Batch işleme hatası: ${e.message}")
             body
         }
     }
@@ -145,14 +203,24 @@ object PacketProcessor {
 
     private fun processCompressedBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         return try {
+            // Bedrock 1.20+: sıkıştırılmış batch'in başında 1 byte compression header var
+            // 0x00 = zlib, 0xFF = no compression, 0x01 = snappy
+            val (hasHeader, dataOffset) = detectCompressionHeader(body)
+            val compressed = if (hasHeader) body.copyOfRange(dataOffset, body.size) else body
+
             val decompressed = when (compressionAlgorithm) {
-                1    -> decompressSnappy(body)
-                else -> zlibInflate(body)
+                1    -> decompressSnappy(compressed)
+                else -> zlibInflate(compressed)
             }
             val processed = processRawBatch(decompressed, direction) ?: return null
-            when (compressionAlgorithm) {
+            val recompressed = when (compressionAlgorithm) {
                 1    -> compressSnappy(processed)
                 else -> zlibDeflate(processed)
+            }
+            if (hasHeader) {
+                byteArrayOf(body[0]) + recompressed
+            } else {
+                recompressed
             }
         } catch (e: Exception) {
             OverlayLogger.w(TAG, "Sıkıştırma hatası: ${e.message}")
@@ -160,22 +228,48 @@ object PacketProcessor {
         }
     }
 
+    /**
+     * Bedrock 1.20.60+ batch başında 1 byte compression type header ekliyor.
+     * 0x78 zlib magic değil, header byte'ı olabilir.
+     * Güvenli tespit: byte değeri 0x00, 0x01, 0xFF ise header.
+     */
+    private fun detectCompressionHeader(body: ByteArray): Pair<Boolean, Int> {
+        if (body.isEmpty()) return false to 0
+        val first = body[0].toInt() and 0xFF
+        return if (first == 0x00 || first == 0x01 || first == 0xFF) true to 1
+        else false to 0
+    }
+
     private fun zlibInflate(input: ByteArray): ByteArray {
-        val inf = java.util.zip.Inflater()
+        val inf = java.util.zip.Inflater(true)  // raw deflate (no zlib header)
         inf.setInput(input)
         val out = ByteArrayOutputStream()
         val buf = ByteArray(4096)
-        while (!inf.finished()) {
-            val n = inf.inflate(buf)
-            if (n == 0) break
-            out.write(buf, 0, n)
+        try {
+            while (!inf.finished()) {
+                val n = inf.inflate(buf)
+                if (n == 0) break
+                out.write(buf, 0, n)
+            }
+        } catch (e: Exception) {
+            // raw deflate başarısız olursa zlib wrapper'lı dene
+            val inf2 = java.util.zip.Inflater(false)
+            inf2.setInput(input)
+            val out2 = ByteArrayOutputStream()
+            while (!inf2.finished()) {
+                val n = inf2.inflate(buf)
+                if (n == 0) break
+                out2.write(buf, 0, n)
+            }
+            inf2.end()
+            return out2.toByteArray()
         }
         inf.end()
         return out.toByteArray()
     }
 
     private fun zlibDeflate(input: ByteArray): ByteArray {
-        val def = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
+        val def = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, true)  // raw
         def.setInput(input); def.finish()
         val out = ByteArrayOutputStream()
         val buf = ByteArray(4096)
@@ -205,15 +299,17 @@ object PacketProcessor {
         if (data.isEmpty()) return data
         val packetId = readVarInt(ByteArrayInputStream(data))
 
-        // NetworkSettings (0xC7) — sıkıştırmayı aktif et
-        // FIX: BedrockPacketIds.NETWORK_SETTINGS const'u kullan, magic number değil
         if (packetId == BedrockPacketIds.NETWORK_SETTINGS &&
             direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
             try {
                 val idSize = writeVarInt(packetId).size
-                compressionAlgorithm = if (data.size >= idSize + 3) {
-                    data[idSize + 2].toInt() and 0xFF
-                } else 0
+                // NetworkSettings: [threshold uint16LE] [algorithm uint16LE]
+                if (data.size >= idSize + 4) {
+                    compressionAlgorithm = (data[idSize + 2].toInt() and 0xFF) or
+                                           ((data[idSize + 3].toInt() and 0xFF) shl 8)
+                    // 0=zlib, 1=snappy, 2=none
+                    if (compressionAlgorithm > 1) compressionAlgorithm = 0
+                }
                 compressionEnabled = true
                 OverlayLogger.i(TAG, "NetworkSettings → ${if (compressionAlgorithm == 1) "Snappy" else "zlib"} sıkıştırma aktif")
             } catch (_: Exception) {
@@ -222,8 +318,6 @@ object PacketProcessor {
             }
         }
 
-        // EntityTracker, PacketEventBus'a register() ile kayıt olduğundan
-        // publish() çağrısı zaten EntityTracker.onPacket()'i tetikler.
         val event = PacketEvent(packetId, data, direction)
         try {
             PacketEventBus.publish(event)
