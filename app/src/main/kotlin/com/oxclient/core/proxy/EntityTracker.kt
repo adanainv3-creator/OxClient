@@ -129,15 +129,28 @@ object EntityTracker : PacketListener {
             val (_, p1)        = PacketHelper.readString(d, pos);          pos = p1  // username
             val (uniqueId, p2) = PacketHelper.readZigzagVarLong(d, pos);   pos = p2  // uniqueEntityId
             val (rid, p3)      = PacketHelper.readVarLong(d, pos);         pos = p3  // runtimeEntityId
-            val (_, p4)        = PacketHelper.readString(d, pos);          pos = p4  // platformChatId → atla
-            // ✅ FIX: Bedrock 1.21.x ADD_PLAYER formatı — eksik alanlar eklendi
-            // platformChatId'den sonra deviceId (string) ve buildPlatform (varint) var.
-            // Bunlar atlanmazsa x/y/z yanlış offset'ten okunuyor → saçma koordinatlar.
-            val (_, p5)        = PacketHelper.readString(d, pos);          pos = p5  // deviceId → atla
-            val (_, p6)        = PacketHelper.readVarInt(d, pos);          pos = p6  // buildPlatform → atla
+            val (_, p4)        = PacketHelper.readString(d, pos);          pos = p4  // platformChatId
+            val (_, p5)        = PacketHelper.readString(d, pos);          pos = p5  // deviceId
+            val (_, p6)        = PacketHelper.readVarInt(d, pos);          pos = p6  // buildPlatform
+            // ✅ FIX: Bedrock 1.21.60 — gameType (varint) eksikti
+            val (_, p7)        = PacketHelper.readVarInt(d, pos);          pos = p7  // gameType
+
+            // Bounds kontrolü: x,y,z için 12 byte gerekli
+            if (pos + 12 > d.size) {
+                OverlayLogger.w(TAG, "AddPlayer rid=$rid — yetersiz veri (pos=$pos size=${d.size})")
+                return
+            }
             val x = PacketHelper.readFloatLE(d, pos); pos += 4
             val y = PacketHelper.readFloatLE(d, pos); pos += 4
             val z = PacketHelper.readFloatLE(d, pos)
+
+            // Koordinat doğrulama: NaN/Inf veya absürd değerleri kaydetme
+            if (!x.isFinite() || !y.isFinite() || !z.isFinite() ||
+                Math.abs(x) > 3e7f || Math.abs(y) > 4096f || Math.abs(z) > 3e7f) {
+                OverlayLogger.w(TAG, "AddPlayer rid=$rid — geçersiz koordinat x=$x y=$y z=$z")
+                return
+            }
+
             if (rid != selfRuntimeId) {
                 entities[rid] = TrackedEntity(rid, uniqueId, x, y, z, isPlayer = true)
                 uniqueToRuntime[uniqueId] = rid

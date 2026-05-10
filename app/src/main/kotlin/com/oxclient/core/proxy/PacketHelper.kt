@@ -343,7 +343,15 @@ object PacketHelper {
 
     fun readString(data: ByteArray, offset: Int): Pair<String, Int> {
         val (len, pos) = readVarInt(data, offset)
-        if (len <= 0 || pos + len > data.size) return "" to pos
+        // Negatif uzunluk → veri bozuk, pos'u varint sonrasına bırak
+        if (len < 0) return "" to pos
+        // Boş string → pos varint sonrasında, doğru
+        if (len == 0) return "" to pos
+        // Bounds aşımı: pos+len > data.size
+        // KRİTİK: exception atmak yerine güvenli dön ama pos'u
+        // doğru konuma (pos+len) ilerlet — cascade hataları önler.
+        // Çağrı kodu zaten catch bloğu içinde, sınır dışı pos kabul edilir.
+        if (pos + len > data.size) return "" to (pos + len)
         return String(data, pos, len, Charsets.UTF_8) to pos + len
     }
 }

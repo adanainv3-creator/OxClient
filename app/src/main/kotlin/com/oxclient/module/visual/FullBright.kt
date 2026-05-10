@@ -41,15 +41,25 @@ class FullBright : BaseModule(
         lastNvInjectMs = 0L
         Log.d("FullBright", "Açıldı (${mode.value})")
 
-        // StartGame henüz gelmemişse EntityTracker.selfRuntimeId 0 olur,
-        // onPacket'te StartGame yakalanınca veya loop'ta tekrar dene
         loop = scope.launch {
-            delay(500) // StartGame'in işlenmesini bekle
+            // İlk 10 saniye daha sık dene — StartGame'in gelmesini bekle
+            var attempts = 0
             while (isActive && isEnabled) {
                 when (mode.value) {
-                    FbMode.NightVision -> refreshNightVision()
-                    FbMode.Gamma       -> injectGamma()
-                    FbMode.Lighting    -> {} // onPacket'te işlenir
+                    FbMode.NightVision -> {
+                        if (EntityTracker.selfRuntimeId == 0L) {
+                            if (attempts < 20) {
+                                Log.d("FullBright", "selfRuntimeId=0, bekleniyor... ($attempts)")
+                                delay(500)
+                                attempts++
+                                continue
+                            }
+                        }
+                        attempts = 0
+                        refreshNightVision()
+                    }
+                    FbMode.Gamma    -> injectGamma()
+                    FbMode.Lighting -> {} // onPacket'te işlenir
                 }
                 delay(5000)
             }
@@ -69,11 +79,16 @@ class FullBright : BaseModule(
         if (!isEnabled) return
 
         when {
-            // StartGame → hemen NV uygula
+            // StartGame → NV modunda hemen inject et (selfRuntimeId artık set)
             mode.value == FbMode.NightVision && event.packetId == BedrockPacketIds.START_GAME -> {
-                lastNvInjectMs = 0L // zorla yenile
+                lastNvInjectMs = 0L  // cooldown sıfırla
+                // StartGame işlendikten hemen sonra inject et (EntityTracker önce çalışır)
+                scope.launch {
+                    kotlinx.coroutines.delay(100)  // EntityTracker.selfRuntimeId set olsun
+                    if (isEnabled) injectNightVision()
+                }
             }
-            // Gamma: SetTime'ı gündüze çevir (0x0A)
+            // Gamma: SetTime'ı gündüze çevir
             mode.value == FbMode.Gamma &&
             event.packetId == BedrockPacketIds.SET_TIME &&
             event.direction == PacketEvent.Direction.SERVER_TO_CLIENT -> {
@@ -99,7 +114,14 @@ class FullBright : BaseModule(
 
     private fun injectNightVision() {
         val rid = EntityTracker.selfRuntimeId
-        if (rid == 0L) return
+        if (rid == 0L) {
+            Log.w("FullBright", "NV inject atlandı: selfRuntimeId=0 (StartGame henüz gelmedi)")
+            return
+        }
+        if (!InjectionQueue.isBound) {
+            Log.w("FullBright", "NV inject atlandı: InjectionQueue bağlı değil")
+            return
+        }
 
         val pkt = PacketHelper.buildMobEffect(
             runtimeId = rid,

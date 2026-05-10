@@ -148,9 +148,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            // ✅ FIX: FLAG_NOT_FOCUSABLE kaldırıldı.
+            // Bu flag aktifken Switch, Slider ve tüm interactive widget'lar
+            // touch event ALAMIYOR — FullBright toggle'ı dahil hiçbir ayar
+            // çalışmıyordu. Menü açıkken focus alabilmeli.
+            // FLAG_NOT_TOUCH_MODAL de kaldırıldı — zaten arka planı kaplayan
+            // Box(detectTapGestures { hideMenu() }) menüyü kapatıyor.
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
@@ -810,7 +814,10 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(modifier = Modifier.weight(1f).clickable { ModuleManager.toggle(module); enabled = module.isEnabled }) {
+            Column(modifier = Modifier.weight(1f).clickable {
+                ModuleManager.toggle(module)
+                // enabled, enabledFlow üzerinden LaunchedEffect ile güncellenir ✅
+            }) {
                 Text(module.name, fontSize = 13.sp, fontWeight = FontWeight.Bold,
                     color = if (enabled) Color.White else OxOnSurface, fontFamily = FontFamily.Monospace)
                 if (module.description.isNotBlank()) {
@@ -826,7 +833,13 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                 }
                 Switch(
                     checked = enabled,
-                    onCheckedChange = { ModuleManager.toggle(module); enabled = module.isEnabled; onShortcutChanged() },
+                    onCheckedChange = {
+                        ModuleManager.toggle(module)
+                        // enabled, enabledFlow üzerinden LaunchedEffect ile güncellenir ✅
+                        // Önceki hata: module.isEnabled toggle'dan hemen sonra okunuyordu —
+                        // race condition ile bazen yanlış değer dönüyordu.
+                        onShortcutChanged()
+                    },
                     colors = SwitchDefaults.colors(checkedTrackColor = OxPurple, checkedThumbColor = Color.White),
                     modifier = Modifier.height(20.dp)
                 )
