@@ -3,6 +3,7 @@ package com.oxclient.core.proxy
 import android.util.Log
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
+import com.oxclient.ui.overlay.OverlayLogger
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 
@@ -39,25 +40,16 @@ object PacketProcessor {
     @Volatile var compressionAlgorithm = 0     // 0 = zlib, 1 = snappy
 
     // ✅ FIX: AES-256-CFB8 şifreleme state'i
-    // Bedrock şifrelemesi: her yön için ayrı cipher, counter mod (send counter / receive counter)
     @Volatile var encryptionEnabled    = false
-    private var decryptCipher: javax.crypto.Cipher? = null  // sunucu→biz
-    private var encryptCipher: javax.crypto.Cipher? = null  // biz→sunucu
+    private var decryptCipher: javax.crypto.Cipher? = null
+    private var encryptCipher: javax.crypto.Cipher? = null
     @Volatile private var sendCounter  = 0L
     @Volatile private var recvCounter  = 0L
     private lateinit var secretKey: javax.crypto.SecretKey
 
-    /**
-     * ServerToClientHandshake JWT'sinden şifreli oturumu başlat.
-     * WClient'in OnlineLoginPacketListener.beforeServerBound içinde yaptığının aynısı.
-     *
-     * jwt: ServerToClientHandshake paketinin içindeki JWT string
-     * clientPrivateKey: Login sırasında oluşturulan EC private key (Base64)
-     */
     fun enableEncryption(secretKeyBytes: ByteArray) {
         try {
             secretKey = javax.crypto.spec.SecretKeySpec(secretKeyBytes, "AES")
-            // Bedrock CFB8: IV = secretKey'in ilk 16 byte'ı
             val iv = secretKeyBytes.copyOf(16)
             val ivSpec = javax.crypto.spec.IvParameterSpec(iv)
 
@@ -70,9 +62,9 @@ object PacketProcessor {
             sendCounter = 0L
             recvCounter = 0L
             encryptionEnabled = true
-            Log.i(TAG, "✅ Şifreleme aktif (AES-256-CFB8)")
+            OverlayLogger.i(TAG, "✅ Şifreleme aktif (AES-256-CFB8)")
         } catch (e: Exception) {
-            Log.e(TAG, "Şifreleme başlatma hatası: ${e.message}")
+            OverlayLogger.e(TAG, "Şifreleme başlatma hatası: ${e.message}", e)
         }
     }
 
@@ -82,12 +74,14 @@ object PacketProcessor {
         encryptCipher = null
         sendCounter = 0L
         recvCounter = 0L
+        OverlayLogger.d(TAG, "Şifreleme sıfırlandı")
     }
 
     fun reset() {
         compressionEnabled = false
         compressionAlgorithm = 0
         resetEncryption()
+        OverlayLogger.d(TAG, "PacketProcessor sıfırlandı")
     }
 
     /** Sunucudan gelen veriyi çöz (S→C) */
@@ -103,7 +97,6 @@ object PacketProcessor {
     fun processBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         if (body.isEmpty()) return body
         return try {
-            // ✅ FIX: Sunucudan gelen veri şifrelenmiş olabilir — önce çöz
             val decrypted = if (encryptionEnabled && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
                 decrypt(body)
             } else {
@@ -111,14 +104,13 @@ object PacketProcessor {
             }
             val result = if (compressionEnabled) processCompressedBatch(decrypted, direction)
                          else                    processRawBatch(decrypted, direction)
-            // ✅ FIX: Sunucuya enjekte edilecek paketleri şifrele
             if (encryptionEnabled && direction == PacketEvent.Direction.CLIENT_TO_SERVER && result != null) {
                 encrypt(result)
             } else {
                 result
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Batch işleme hatası, orijinal iletiliyor: ${e.message}")
+            OverlayLogger.w(TAG, "Batch işleme hatası, orijinal iletiliyor: ${e.message}")
             body
         }
     }
@@ -160,7 +152,7 @@ object PacketProcessor {
                 else -> zlibDeflate(processed)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Sıkıştırma hatası: ${e.message}")
+            OverlayLogger.w(TAG, "Sıkıştırma hatası: ${e.message}")
             body
         }
     }
@@ -183,13 +175,13 @@ object PacketProcessor {
     private fun decompressSnappy(input: ByteArray): ByteArray = try {
         org.iq80.snappy.Snappy.uncompress(input, 0, input.size)
     } catch (e: Exception) {
-        Log.w(TAG, "Snappy başarısız, zlib: ${e.message}"); zlibInflate(input)
+        OverlayLogger.w(TAG, "Snappy başarısız, zlib: ${e.message}"); zlibInflate(input)
     }
 
     private fun compressSnappy(input: ByteArray): ByteArray = try {
         org.iq80.snappy.Snappy.compress(input)
     } catch (e: Exception) {
-        Log.w(TAG, "Snappy compress başarısız, zlib: ${e.message}"); zlibDeflate(input)
+        OverlayLogger.w(TAG, "Snappy compress başarısız, zlib: ${e.message}"); zlibDeflate(input)
     }
 
     private fun processSinglePacket(data: ByteArray, direction: PacketEvent.Direction): ByteArray? {
@@ -197,28 +189,25 @@ object PacketProcessor {
         val packetId = readVarInt(ByteArrayInputStream(data))
 
         // NetworkSettings (0xC7) — sıkıştırmayı aktif et
-        // Format: [packetId varint] [threshold uint16LE] [algorithm uint16LE]
-        // Sıkıştırma bilgisi SADECE buradan okunur, başka hiçbir heuristik yok.
         if (packetId == 0xC7 && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
             try {
-                val idSize = writeVarInt(packetId).size  // 0xC7 → varint 2 byte
-                // algorithm düşük byte'ı: data[idSize + 2]
+                val idSize = writeVarInt(packetId).size
                 compressionAlgorithm = if (data.size >= idSize + 3) {
                     data[idSize + 2].toInt() and 0xFF
                 } else 0
                 compressionEnabled = true
-                Log.i(TAG, "NetworkSettings → ${if (compressionAlgorithm == 1) "Snappy" else "zlib"}")
+                OverlayLogger.i(TAG, "NetworkSettings → ${if (compressionAlgorithm == 1) "Snappy" else "zlib"} sıkıştırma aktif")
             } catch (_: Exception) {
                 compressionEnabled = true; compressionAlgorithm = 0
             }
         }
 
-        // EntityTracker — HER İKİ YÖN (C→S de dahil, PLAYER_AUTH_INPUT için)
+        // EntityTracker — HER İKİ YÖN
         try { EntityTracker.onPacket(PacketEvent(packetId, data, direction)) } catch (_: Exception) {}
 
         val event = PacketEvent(packetId, data, direction)
         try { PacketEventBus.publish(event) } catch (e: Exception) {
-            Log.e(TAG, "EventBus hatası pkt=0x${packetId.toString(16)}: ${e.message}")
+            OverlayLogger.e(TAG, "EventBus hatası pkt=0x${packetId.toString(16)}: ${e.message}", e)
         }
 
         return when {

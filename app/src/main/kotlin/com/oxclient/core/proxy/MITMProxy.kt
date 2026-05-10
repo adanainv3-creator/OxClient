@@ -1,6 +1,7 @@
 package com.oxclient.core.proxy
 
 import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.events.PacketEvent
 import kotlinx.coroutines.*
 import java.net.DatagramPacket
@@ -96,7 +97,7 @@ class MITMProxy(
 
     fun start() {
         if (running.getAndSet(true)) { Log.w(TAG, "Zaten çalışıyor"); return }
-        Log.i(TAG, "Başlatılıyor → :$listenPort ↔ $targetHost:$targetPort")
+        OverlayLogger.i(TAG, "Başlatılıyor → :$listenPort ↔ $targetHost:$targetPort")
 
         EntityTracker.register()
 
@@ -106,9 +107,9 @@ class MITMProxy(
                 resolvedServerAddress = withContext(Dispatchers.IO) {
                     InetAddress.getByName(targetHost)
                 }
-                Log.i(TAG, "DNS: $targetHost → ${resolvedServerAddress!!.hostAddress}")
+                OverlayLogger.i(TAG, "DNS: $targetHost → ${resolvedServerAddress!!.hostAddress}")
             } catch (e: Exception) {
-                Log.e(TAG, "DNS hatası: $targetHost", e)
+                OverlayLogger.e(TAG, "DNS hatası: $targetHost", e)
                 running.set(false)
                 EntityTracker.unregister()
                 return@launch
@@ -124,15 +125,15 @@ class MITMProxy(
                 serverSocket = DatagramSocket().apply {
                     soTimeout = 0
                 }
-                Log.i(TAG, "Soketler hazır — dinleniyor :$listenPort")
+                OverlayLogger.i(TAG, "Soketler hazır — dinleniyor :$listenPort")
             } catch (e: Exception) {
-                Log.e(TAG, "Soket hatası (port $listenPort meşgul?)", e)
+                OverlayLogger.e(TAG, "Soket hatası (port $listenPort meşgul?)", e)
                 running.set(false)
                 EntityTracker.unregister()
                 return@launch
             }
 
-            Log.i(TAG, "✓ Relay aktif")
+            OverlayLogger.i(TAG, "✓ Relay aktif")
 
             val cJob = launch { clientLoop() }
             val sJob = launch { serverLoop() }
@@ -146,7 +147,7 @@ class MITMProxy(
 
     fun stop() {
         if (!running.getAndSet(false)) return
-        Log.i(TAG, "Durduruluyor…")
+        OverlayLogger.i(TAG, "Durduruluyor…")
         EntityTracker.unregister()
         InjectionQueue.unbind()
         PacketProcessor.reset()  // ✅ Şifreleme + sıkıştırma state'ini temizle
@@ -156,7 +157,7 @@ class MITMProxy(
         clientAddress         = null
         resolvedServerAddress = null
         serverConnected       = false
-        Log.i(TAG, "Relay durduruldu")
+        OverlayLogger.i(TAG, "Relay durduruldu")
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -195,7 +196,7 @@ class MITMProxy(
                 if (clientAddress == null) {
                     clientAddress = senderAddr
                     clientPort    = senderPort
-                    Log.i(TAG, "İstemci bağlandı: ${senderAddr.hostAddress}:$senderPort")
+                    OverlayLogger.i(TAG, "İstemci bağlandı: ${senderAddr.hostAddress}:$senderPort")
                     // ✅ FIX: InjectionQueue'yu bağla — hileler artık çalışır
                     bindInjectionQueue()
                 }
@@ -436,7 +437,7 @@ class MITMProxy(
             // Client key pair — login sırasında üretilip kaydedilen
             val clientPrivateKey = HandshakeKeyHolder.privateKey
             if (clientPrivateKey == null) {
-                Log.w(TAG, "Handshake: client private key yok — şifreleme atlandı")
+                OverlayLogger.w(TAG, "Handshake: client private key yok — şifreleme atlandı")
                 return
             }
 
@@ -459,9 +460,9 @@ class MITMProxy(
             val handshakeResponse = buildClientToServerHandshake()
             PacketHelper.injectToServer(handshakeResponse)
 
-            Log.i(TAG, "✅ Handshake tamamlandı — şifreleme aktif")
+            OverlayLogger.i(TAG, "✅ Handshake tamamlandı — şifreleme aktif")
         } catch (e: Exception) {
-            Log.e(TAG, "Handshake hatası: ${e.message}", e)
+            OverlayLogger.e(TAG, "Handshake hatası: ${e.message}", e)
         }
     }
 
@@ -536,7 +537,7 @@ class MITMProxy(
             sAddr = sAddr, sPort = targetPort,
             cAddr = cAddr, cPort = clientPort
         )
-        Log.i(TAG, "InjectionQueue bağlandı")
+        OverlayLogger.i(TAG, "InjectionQueue bağlandı")
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import android.util.Log
 import com.google.gson.Gson
+import com.oxclient.core.proxy.HandshakeKeyHolder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -90,6 +91,7 @@ object MicrosoftAuthManager {
     fun signOut() {
         AccountManager.selectedAccount?.let { AccountManager.removeAccount(it) }
         AccountManager.clearSelectedAccount()
+        HandshakeKeyHolder.clear()
         _authState.value = AuthState.Idle
     }
 
@@ -129,6 +131,13 @@ object MicrosoftAuthManager {
         val xstsMcUhs   = xstsMcResp.second
         val xstsGamertag = xstsMcResp.third
         currentCoroutineContext().ensureActive()
+
+        // ✅ FIX: Login paketi gönderilmeden önce EC key pair üret ve HandshakeKeyHolder'a kaydet.
+        // MITMProxy.handleHandshake() bu private key'i kullanarak ECDH yapar ve şifrelemeyi başlatır.
+        // Bu çağrı olmadan HandshakeKeyHolder.privateKey = null → şifreleme atlanır
+        // → selfRuntimeId=0, konum=0,0,0 → modüller/konum çalışmaz.
+        HandshakeKeyHolder.generate()
+        Log.i(TAG, "HandshakeKeyHolder EC key pair üretildi — login başlıyor")
 
         // 6. Minecraft Bedrock token — X509 + JWT zinciri ile
         val (mcToken, chainGamertag) = fetchMinecraftToken(xstsMcToken, xstsMcUhs)
@@ -380,7 +389,8 @@ object MicrosoftAuthManager {
     /**
      * Bedrock authentication akışı:
      *
-     * 1. EC secp256r1 key pair oluştur (her oturum için taze)
+     * 1. HandshakeKeyHolder'dan daha önce üretilen EC key pair'i al
+     *    (generate() doSignInFlow() içinde fetchMinecraftToken'dan ÖNCE çağrıldı)
      * 2. Public key'i DER → Base64 olarak encode et
      * 3. Cihaz JWT'sini oluştur ve kendi private key'imizle ES256 ile imzala
      *    - header : { "alg": "ES256", "x5u": "<pubKeyB64>" }
@@ -394,25 +404,32 @@ object MicrosoftAuthManager {
      */
     private fun fetchMinecraftToken(xstsToken: String, userHash: String): Pair<String, String> {
 
-        // ── 1. EC key pair ────────────────────────────────────────────────
-        val keyPairGen = KeyPairGenerator.getInstance("EC")
-        keyPairGen.initialize(ECGenParameterSpec("secp256r1"))
-        val keyPair    = keyPairGen.generateKeyPair()
-        val ecPrivate  = keyPair.private  as ECPrivateKey
-        val ecPublic   = keyPair.public   as ECPublicKey
+        // ── 1. HandshakeKeyHolder'dan key pair al ─────────────────────────
+        // generate() doSignInFlow() içinde bu fonksiyondan ÖNCE çağrıldı.
+        // Böylece MITMProxy.handleHandshake() aynı private key'i kullanarak
+        // sunucuyla ECDH yapabilir ve şifrelemeyi başlatabilir.
+        val ecPrivate = HandshakeKeyHolder.privateKey as? ECPrivateKey
+            ?: run {
+                // Fallback: eğer herhangi bir sebepten key yoksa üret ve kaydet
+                Log.w(TAG, "HandshakeKeyHolder boş, generate() yeniden çağrılıyor")
+                HandshakeKeyHolder.generate()
+                HandshakeKeyHolder.privateKey as ECPrivateKey
+            }
+        val ecPublic = HandshakeKeyHolder.publicKey as ECPublicKey
 
         // SubjectPublicKeyInfo (DER) → Base64 — x5u ve identityPublicKey için kullanılır
-        val pubKeyB64  = Base64.encodeToString(ecPublic.encoded, Base64.NO_WRAP)
+        val pubKeyB64 = Base64.encodeToString(ecPublic.encoded, Base64.NO_WRAP)
 
         Log.d(TAG, "EC public key (B64, ${ecPublic.encoded.size} byte): ${pubKeyB64.take(40)}…")
 
         // ── 2. Cihaz JWT'si oluştur ───────────────────────────────────────
-        val deviceJwt  = buildDeviceJwt(ecPrivate, pubKeyB64)
+        val deviceJwt = buildDeviceJwt(ecPrivate, pubKeyB64)
         Log.d(TAG, "Cihaz JWT oluşturuldu: ${deviceJwt.take(60)}…")
 
         // ── 3. İstek gövdesi ──────────────────────────────────────────────
         // chain dizisi → gönderilecek zincir (sadece cihaz JWT'si)
         val outgoingChainJson = """["$deviceJwt"]"""
+
         val bodyStr = """{"identityPublicKey":"$pubKeyB64","chain":$outgoingChainJson}"""
 
         Log.d(TAG, "MC /authentication isteği gönderiliyor…")
@@ -460,78 +477,51 @@ object MicrosoftAuthManager {
 
     /**
      * ES256 (ECDSA + SHA-256) ile imzalanmış cihaz JWT'si oluşturur.
-     *
-     * Header : { "alg": "ES256", "x5u": "<pubKeyB64>" }
-     * Payload: { "certificateAuthority": true,
-     *            "identityPublicKey": "<pubKeyB64>",
-     *            "exp": <now+1gün>, "nbf": <now-1sn>, "iat": <now>,
-     *            "iss": "Minecraft" }
-     *
-     * JWT segmentleri URL-safe Base64 (NO_WRAP + NO_PADDING) ile encode edilir.
      */
     private fun buildDeviceJwt(privateKey: ECPrivateKey, pubKeyB64: String): String {
         val nowSec  = System.currentTimeMillis() / 1000L
-        val expSec  = nowSec + 86_400L   // 24 saat geçerli
-        val nbfSec  = nowSec - 1L        // 1 saniye önce başlatılmış say
+        val expSec  = nowSec + 86_400L
+        val nbfSec  = nowSec - 1L
 
-        // Header
         val headerJson   = """{"alg":"ES256","x5u":"$pubKeyB64"}"""
         val headerB64    = b64Url(headerJson.toByteArray(Charsets.UTF_8))
 
-        // Payload
         val payloadJson  = """{"certificateAuthority":true,"identityPublicKey":"$pubKeyB64","exp":$expSec,"nbf":$nbfSec,"iat":$nowSec,"iss":"Minecraft"}"""
         val payloadB64   = b64Url(payloadJson.toByteArray(Charsets.UTF_8))
 
-        // İmzalanacak veri: "<headerB64>.<payloadB64>"
         val signingInput = "$headerB64.$payloadB64"
 
-        // ECDSA imzası → DER formatında gelir, JWT için raw (r||s) formatına çevir
         val signer = Signature.getInstance("SHA256withECDSA")
         signer.initSign(privateKey)
         signer.update(signingInput.toByteArray(Charsets.US_ASCII))
         val derSig    = signer.sign()
-        val rawSig    = derToRawEcSignature(derSig)   // 64 byte: r(32) + s(32)
+        val rawSig    = derToRawEcSignature(derSig)
         val sigB64    = b64Url(rawSig)
 
         return "$signingInput.$sigB64"
     }
 
-    /**
-     * ECDSA DER imzasını JWT uyumlu raw (r ‖ s) formatına dönüştürür.
-     *
-     * DER SEQUENCE yapısı:
-     *   30 <len>
-     *     02 <rLen> <r bytes>
-     *     02 <sLen> <s bytes>
-     *
-     * Her bileşen 32 byte'a sıfırlanır (secp256r1 için sabit uzunluk).
-     */
     private fun derToRawEcSignature(der: ByteArray): ByteArray {
-        // r ve s bileşenlerini DER'den çıkar
-        var offset = 2                               // SEQUENCE tag + length atla
+        var offset = 2
         check(der[0] == 0x30.toByte()) { "DER SEQUENCE bekleniyor" }
 
-        // r
         check(der[offset] == 0x02.toByte()) { "r INTEGER bekleniyor" }
         offset++
         val rLen    = der[offset++].toInt() and 0xFF
         val rBytes  = der.copyOfRange(offset, offset + rLen)
         offset     += rLen
 
-        // s
         check(der[offset] == 0x02.toByte()) { "s INTEGER bekleniyor" }
         offset++
         val sLen    = der[offset++].toInt() and 0xFF
         val sBytes  = der.copyOfRange(offset, offset + sLen)
 
-        // Her bileşeni 32 byte'a normalize et (başındaki 0x00 pad byte'ları at / eksikse ekle)
         val r32 = BigInteger(1, rBytes).toByteArray().let { padOrTrim(it, 32) }
         val s32 = BigInteger(1, sBytes).toByteArray().let { padOrTrim(it, 32) }
 
         return r32 + s32
     }
 
-    /** Diziyi tam [size] byte'a getirir: önden sıfır ekler veya baştaki sıfırları atar. */
     private fun padOrTrim(bytes: ByteArray, size: Int): ByteArray {
         return when {
             bytes.size == size -> bytes
@@ -540,7 +530,6 @@ object MicrosoftAuthManager {
         }
     }
 
-    /** Byte dizisini URL-safe, padding'siz Base64'e encode eder (JWT standardı). */
     private fun b64Url(data: ByteArray): String =
         Base64.encodeToString(data, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
