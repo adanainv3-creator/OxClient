@@ -387,11 +387,15 @@ class MITMProxy(
                     r
                 } else body
 
-                val (packetId, _) = readVarIntFromBytes(rawBody, 0)
-                OverlayLogger.d(TAG, "HS-scan: packetId=0x${packetId.toString(16)}")
+                // rawBody formatı: [varint(packetLen)][packetId varint][data...]
+                // Önce length prefix'i atla, sonra paket ID'sini oku
+                val (_, packetStart) = readVarIntFromBytes(rawBody, 0)
+                val (packetId, _) = readVarIntFromBytes(rawBody, packetStart)
+                OverlayLogger.d(TAG, "HS-scan: packetId=0x${packetId.toString(16)} packetStart=$packetStart")
 
                 if (packetId == BedrockPacketIds.SERVER_TO_CLIENT_HANDSHAKE) {
-                    handleHandshake(rawBody)
+                    // handleHandshake rawBody[packetStart..] bekliyor (length prefix hariç)
+                    handleHandshake(rawBody.copyOfRange(packetStart, rawBody.size))
                     return payload
                 }
             } catch (e: Exception) {
