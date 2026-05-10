@@ -60,12 +60,13 @@ object BedrockPacketIds {
     const val BLOCK_EVENT             = 0x46
     const val ENTITY_EVENT2           = 0x47
     const val CLIENT_BOUND_MAP_ITEM_DATA = 0x43
-    const val USE_ITEM                = 0x1F  // alias
+    // USE_ITEM alias kaldırıldı — 0x1F MOB_EQUIPMENT ile çakışıyordu
     const val GAME_RULES_CHANGED      = 0x48
     const val UPDATE_BLOCK_SYNCED     = 0x6E
     const val MOVE_ENTITY_DELTA       = 0x6F
     const val SET_ACTOR_MOTION        = 0x28  // alias
-    const val PLAYER_AUTH_INPUT       = 0x90
+    // ✅ FIX: 1.21.60'da 0x91 — eski 0x90 yüzünden EntityTracker konum almıyordu
+    const val PLAYER_AUTH_INPUT       = 0x91
     const val LEVEL_CHUNK             = 0x3A
     const val FULL_CHUNK_DATA         = 0x3A  // alias
     const val SET_COMMANDS_ENABLED    = 0x3B
@@ -75,7 +76,7 @@ object BedrockPacketIds {
     const val COMMAND_BLOCK_UPDATE    = 0x4E
     const val AVAILABLE_COMMANDS      = 0x4C
     const val TRANSFER_SERVER         = 0x55
-    const val CHUNK_RADIUS_UPDATE     = 0x45  // alias - dikkat
+    const val CHUNK_RADIUS_UPDATE     = 0x46  // ✅ FIX: 0x45 LEVEL_EVENT ile çakışıyordu
     const val TICK_SYNC               = 0x17
     const val ENTITY_IDENTIFIER_LIST  = 0x77
     const val LEVEL_SOUND_EVENT_V2    = 0x86

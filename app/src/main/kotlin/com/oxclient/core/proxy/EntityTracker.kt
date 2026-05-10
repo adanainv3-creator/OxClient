@@ -184,8 +184,12 @@ object EntityTracker : PacketListener {
     private fun parseAuthInput(d: ByteArray) {
         try {
             val (_, p0) = PacketHelper.readVarInt(d, 0); var pos = p0
+            // PLAYER_AUTH_INPUT format: pitch, yaw, headYaw, x, y, z
+            // ✅ FIX: headYaw (4 byte) atlanmıyordu → x/y/z yanlış offsetten okunuyordu
+            //         Bu yüzden konum hep 0,0,0 görünüyordu
             val pitch = PacketHelper.readFloatLE(d, pos); pos += 4
             val yaw   = PacketHelper.readFloatLE(d, pos); pos += 4
+            pos += 4  // headYaw — atla
             val x     = PacketHelper.readFloatLE(d, pos); pos += 4
             val y     = PacketHelper.readFloatLE(d, pos); pos += 4
             val z     = PacketHelper.readFloatLE(d, pos)

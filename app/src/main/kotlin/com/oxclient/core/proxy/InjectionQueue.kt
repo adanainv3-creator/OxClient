@@ -17,14 +17,18 @@ object InjectionQueue {
     @Volatile private var clientAddr   : InetAddress?   = null
     @Volatile private var clientPort   : Int            = 0
 
-    // ✅ FIX: Sequence, Reliable index ve Order index AYRI sayaçlarda.
-    //         Önceki kodda hepsi aynı `seq` değerini paylaşıyordu.
-    //         RakNet protokolünde bu üç sayaç bağımsız olarak artar;
-    //         aynı değeri kullanmak sunucunun duplicate/out-of-order
-    //         tespitini bozar ve frame drop'a yol açar.
-    private val seqCounter      = AtomicInteger(0x7000)  // FrameSet sequence
-    private val reliableCounter = AtomicInteger(0)       // Reliable message index
-    private val orderCounter    = AtomicInteger(0)       // Order index
+    // ✅ FIX: Sequence counter 0'dan başlamalı.
+    //         0x7000 ile başlamak sunucunun duplicate/flood tespitini tetikliyordu → kick.
+    //         RakNet'te sequence her bağlantıda 0'dan başlar.
+    private val seqCounter      = AtomicInteger(0)  // FrameSet sequence
+    private val reliableCounter = AtomicInteger(0)  // Reliable message index
+    private val orderCounter    = AtomicInteger(0)  // Order index
+
+    // ✅ FIX: Inject rate limit — çok fazla paket aynı anda gönderilince sunucu kick atıyor.
+    //         KillAura + Criticals(Vanilla=7 paket) + TPAura aynı tick'te 10+ paket yapıyor.
+    //         Minimum 5ms arayla gönder.
+    private var lastInjectMs = 0L
+    private const val MIN_INJECT_INTERVAL_MS = 5L
 
     @Volatile var isBound: Boolean = false
         private set
@@ -45,7 +49,7 @@ object InjectionQueue {
         isBound = false
         serverSocket = null; listenSocket = null
         serverAddr = null; clientAddr = null
-        seqCounter.set(0x7000)
+        seqCounter.set(0)
         reliableCounter.set(0)
         orderCounter.set(0)
         Log.d(TAG, "Unbound")
@@ -56,6 +60,12 @@ object InjectionQueue {
         val sock = serverSocket ?: return
         val addr = serverAddr   ?: return
         try {
+            // ✅ FIX: Rate limit — çok sık inject flood olarak algılanıyor
+            val now = System.currentTimeMillis()
+            if (now - lastInjectMs < MIN_INJECT_INTERVAL_MS) {
+                Thread.sleep(MIN_INJECT_INTERVAL_MS - (now - lastInjectMs))
+            }
+            lastInjectMs = System.currentTimeMillis()
             val wrapped = wrapInFrameSet(data)
             sock.send(DatagramPacket(wrapped, wrapped.size, addr, serverPort))
             Log.d(TAG, "ToServer: ${wrapped.size}B gönderildi (FrameSet)")
