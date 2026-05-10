@@ -235,9 +235,9 @@ object PacketProcessor {
     // detectCompressionHeader kaldırıldı — artık processCompressedBatch içinde inline yapılıyor.
 
     private fun zlibInflateSafe(input: ByteArray): ByteArray? {
-        // Önce zlib wrapper ile dene (0x78 0x9C / 0x78 0xDA header içerir)
+        // Bedrock raw deflate (nowrap=true) gönderir — önce bunu dene
         try {
-            val inf = java.util.zip.Inflater(false)
+            val inf = java.util.zip.Inflater(true)
             inf.setInput(input)
             val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
             while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
@@ -246,9 +246,9 @@ object PacketProcessor {
             if (result.isNotEmpty()) return result
         } catch (_: Exception) {}
 
-        // Sonra raw deflate ile dene (nowrap=true)
+        // Fallback: zlib wrapper (0x78 0x9C)
         try {
-            val inf = java.util.zip.Inflater(true)
+            val inf = java.util.zip.Inflater(false)
             inf.setInput(input)
             val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
             while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
@@ -265,7 +265,9 @@ object PacketProcessor {
     }
 
     private fun zlibDeflate(input: ByteArray): ByteArray {
-        val def = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, true)
+        // nowrap=false → zlib wrapper (0x78 magic) — sunucu bu formatı bekliyor.
+        // PacketHelper.zlibDeflate ile tutarlı olması için nowrap=false kullanılıyor.
+        val def = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, false)
         def.setInput(input); def.finish()
         val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
         while (!def.finished()) { val n = def.deflate(buf); if (n > 0) out.write(buf, 0, n) }

@@ -374,20 +374,25 @@ class MITMProxy(
     private fun processGamePacket(payload: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         val body = payload.copyOfRange(1, payload.size)
 
-        // ✅ FIX: ServerToClientHandshake (0x03) tespiti.
-        // Şifreleme henüz aktif değilken gelen paketin ID'sini kontrol et.
-        // Decompress gerekiyorsa önce uygula, sonra paket ID'sini oku.
+        // ServerToClientHandshake (0x03) tespiti — şifreleme aktif olmadan önce gelir.
+        // Bu paketi yakalayıp ECDH key türet, şifrelemeyi başlat.
+        // KRİTİK: handleHandshake() encryptionEnabled=true yapıyor.
+        // Bu paket processBatch'e GİRMEMELİ — girecek olursa kod onu şifreli sanır
+        // ve bozar; Minecraft bağlantıyı keser.
         if (direction == PacketEvent.Direction.SERVER_TO_CLIENT && !PacketProcessor.encryptionEnabled) {
             try {
+                // Decompress: önce raw deflate (nowrap=true), sonra zlib wrapper (nowrap=false)
                 val rawBody = if (PacketProcessor.compressionEnabled) {
-                    try { zlibInflateSimple(body) } catch (_: Exception) { body }
+                    zlibInflateSafe(body)
                 } else body
+
                 val (packetId, _) = readVarIntFromBytes(rawBody, 0)
                 if (packetId == BedrockPacketIds.SERVER_TO_CLIENT_HANDSHAKE) {
                     handleHandshake(rawBody)
-                    // Handshake paketini istemciye ilet (şifreleme aktif olmadan önce)
-                    // processBatch'ten ÖNCE döndür — şifreleme şimdi aktif,
-                    // ama bu paketi şifrelemeden iletmeye devam et
+                    // Handshake paketini olduğu gibi istemciye ilet — processBatch ATLA.
+                    // processBatch'e girerse encryptionEnabled=true olduğu için gcmDecrypt
+                    // uygulanır, ham veri bozulur.
+                    return payload
                 }
             } catch (_: Exception) {}
         }
@@ -396,6 +401,36 @@ class MITMProxy(
 
         return if (result == null) null
         else byteArrayOf(0xFE.toByte()) + result
+    }
+
+    /**
+     * Hem raw deflate (nowrap=true) hem zlib wrapper (nowrap=false) dener.
+     * Başarısız olursa orijinal veriyi döner — hiçbir zaman exception fırlatmaz.
+     */
+    private fun zlibInflateSafe(input: ByteArray): ByteArray {
+        // 1. Raw deflate (Bedrock genellikle bunu kullanır)
+        try {
+            val inf = java.util.zip.Inflater(true)
+            inf.setInput(input)
+            val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(4096)
+            while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
+            inf.end()
+            val result = out.toByteArray()
+            if (result.isNotEmpty()) return result
+        } catch (_: Exception) {}
+
+        // 2. Zlib wrapper (0x78 0x9C magic)
+        try {
+            val inf = java.util.zip.Inflater(false)
+            inf.setInput(input)
+            val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(4096)
+            while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
+            inf.end()
+            val result = out.toByteArray()
+            if (result.isNotEmpty()) return result
+        } catch (_: Exception) {}
+
+        return input  // Başarısız — ham veriyi döndür
     }
 
     /**
@@ -485,13 +520,6 @@ class MITMProxy(
             shift += 7
         }
         return result to pos
-    }
-
-    private fun zlibInflateSimple(input: ByteArray): ByteArray {
-        val inf = java.util.zip.Inflater(); inf.setInput(input)
-        val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(4096)
-        while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
-        inf.end(); return out.toByteArray()
     }
 
     /** Minimal JSON parser — sadece {"key":"value"} formatı için */
