@@ -6,6 +6,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 object InjectionQueue {
 
@@ -23,8 +24,8 @@ object InjectionQueue {
     private val reliableCounter = AtomicInteger(0)
     private val orderCounter    = AtomicInteger(0)
 
-    // Rate limit — çok sık inject flood olarak algılanıyor
-    private var lastInjectMs = 0L
+    // FIX 4: AtomicLong — iki coroutine'den eş zamanlı çağrıda race condition olmaması için
+    private val lastInjectMs        = AtomicLong(0L)
     private const val MIN_INJECT_INTERVAL_MS = 5L
 
     @Volatile var isBound: Boolean = false
@@ -49,37 +50,37 @@ object InjectionQueue {
         seqCounter.set(0)
         reliableCounter.set(0)
         orderCounter.set(0)
+        lastInjectMs.set(0L)
         Log.d(TAG, "Unbound")
     }
 
     /**
      * Sunucuya enjeksiyon — ŞİFRELEME UYGULANIYOR.
      *
-     * ✅ FIX (KRİTİK): Şifreleme aktifken enjekte edilen paketler şifrelenmeden
-     * gönderiliyordu. Sunucu şifreli paket beklediği için bunları tamamen
-     * ignore ediyordu → KillAura, TPAura, Criticals vb. hiçbir etki yaratmıyordu.
-     *
      * data parametresi: wrapBatch() çıktısı — [0xFE][batch_body]
      * Şifreleme: 0xFE header'dan SONRA gelen kısma (batch_body) uygulanır.
-     * Akış: data → [0xFE | encrypt(data[1..])] → wrapInFrameSet → UDP
      */
     fun enqueueToServer(data: ByteArray) {
         if (!isBound) { OverlayLogger.w(TAG, "ToServer: UNBOUND — paket atlandı"); return }
         val sock = serverSocket ?: return
         val addr = serverAddr   ?: return
         try {
-            // Rate limit
+            // FIX 4: AtomicLong ile thread-safe rate limit
             val now = System.currentTimeMillis()
-            if (now - lastInjectMs < MIN_INJECT_INTERVAL_MS) {
-                Thread.sleep(MIN_INJECT_INTERVAL_MS - (now - lastInjectMs))
+            val last = lastInjectMs.get()
+            val diff = now - last
+            if (diff < MIN_INJECT_INTERVAL_MS) {
+                Thread.sleep(MIN_INJECT_INTERVAL_MS - diff)
             }
-            lastInjectMs = System.currentTimeMillis()
+            lastInjectMs.set(System.currentTimeMillis())
 
-            // ✅ FIX: Şifreleme aktifse batch_body'yi şifrele
+            // Şifreleme aktifse batch_body'yi şifrele
             // data formatı: [0xFE][batch_body]
             // Şifreleme sadece 0xFE'den SONRAKİ kısma uygulanır
-            val finalData = if (PacketProcessor.encryptionEnabled && data.isNotEmpty() && data[0] == 0xFE.toByte()) {
-                val body    = data.copyOfRange(1, data.size)
+            val finalData = if (PacketProcessor.encryptionEnabled &&
+                               data.isNotEmpty() &&
+                               data[0] == 0xFE.toByte()) {
+                val body      = data.copyOfRange(1, data.size)
                 val encrypted = PacketProcessor.encrypt(body)
                 byteArrayOf(0xFE.toByte()) + encrypted
             } else {

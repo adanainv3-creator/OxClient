@@ -23,15 +23,16 @@ class FullBright : BaseModule(
     enum class FbMode { Gamma, NightVision, Lighting }
 
     private val mode     = EnumSetting("Mode",     FbMode.NightVision, FbMode.entries)
-    private val strength = FloatSetting("Strength",1000f, 100f, 10000f)
-    private val shortcut = BoolSetting("Shortcut", false)
+    private val strength = FloatSetting("Strength", 1000f, 100f, 10000f)
+    private val shortcut = BoolSetting("Shortcut",  false)
 
     override fun registerSettings() = listOf(mode, strength, shortcut)
 
     @Volatile private var lastNvInjectMs = 0L
-    private val NV_REFRESH_MS = 8000L
+    private val NV_REFRESH_MS   = 8000L
     private val NIGHT_VISION_ID = 16
 
+    // Tek bir SupervisorJob — scope ömür boyu yaşar, sadece loop job'ları iptal edilir
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loop: Job? = null
 
@@ -41,11 +42,33 @@ class FullBright : BaseModule(
         PacketEventBus.register(this)
         lastNvInjectMs = 0L
         Log.d("FullBright", "Açıldı (${mode.value})")
+        startLoop()
+    }
 
+    override fun onDisable() {
+        stopLoop()
+        PacketEventBus.unregister(this)
+        if (mode.value == FbMode.NightVision) removeNightVision()
+        Log.d("FullBright", "Kapandı")
+    }
+
+    // ── Loop yönetimi ────────────────────────────────────────────────────
+
+    /**
+     * FIX 1: loop?.cancel() ardından yeni job başlatıyoruz.
+     * Eski kodda `while (isActive && isEnabled)` içindeki `isActive`,
+     * dosyanın altındaki extension ile scope'un Job'ını kontrol ediyordu —
+     * scope hiç iptal edilmediğinden loop durmuyordu.
+     *
+     * Düzeltme: `currentCoroutineContext().isActive` kullan — bu, yalnızca
+     * çalışan coroutine'in (loop job'ının) aktifliğini kontrol eder.
+     */
+    private fun startLoop() {
+        loop?.cancel()
         loop = scope.launch {
-            // İlk 10 saniye daha sık dene — StartGame'in gelmesini bekle
             var attempts = 0
-            while (isActive && isEnabled) {
+            // FIX 1: currentCoroutineContext().isActive — loop job iptal edilince durur
+            while (currentCoroutineContext().isActive && isEnabled) {
                 when (mode.value) {
                     FbMode.NightVision -> {
                         if (EntityTracker.selfRuntimeId == 0L) {
@@ -59,19 +82,17 @@ class FullBright : BaseModule(
                         attempts = 0
                         refreshNightVision()
                     }
-                    FbMode.Gamma    -> injectGamma()
-                    FbMode.Lighting -> {} // onPacket'te işlenir
+                    FbMode.Gamma -> injectGamma()
+                    FbMode.Lighting -> { /* onPacket'te işlenir */ }
                 }
                 delay(5000)
             }
         }
     }
 
-    override fun onDisable() {
-        loop?.cancel(); loop = null
-        PacketEventBus.unregister(this)
-        if (mode.value == FbMode.NightVision) removeNightVision()
-        Log.d("FullBright", "Kapandı")
+    private fun stopLoop() {
+        loop?.cancel()
+        loop = null
     }
 
     // ── Paket dinleyici ──────────────────────────────────────────────────
@@ -80,21 +101,26 @@ class FullBright : BaseModule(
         if (!isEnabled) return
 
         when {
-            // StartGame → NV modunda hemen inject et (selfRuntimeId artık set)
-            mode.value == FbMode.NightVision && event.packetId == BedrockPacketIds.START_GAME -> {
-                lastNvInjectMs = 0L  // cooldown sıfırla
-                // StartGame işlendikten hemen sonra inject et (EntityTracker önce çalışır)
+            // StartGame → NV modunda hemen inject et
+            // FIX 2: EntityTracker priority=10, FullBright priority=30 — EntityTracker
+            // önce çalışır, selfRuntimeId bu noktada zaten set edilmiş olur.
+            // 100ms delay yine de bırakıldı — ek güvence.
+            mode.value == FbMode.NightVision &&
+            event.packetId == BedrockPacketIds.START_GAME -> {
+                lastNvInjectMs = 0L
                 scope.launch {
-                    kotlinx.coroutines.delay(100)  // EntityTracker.selfRuntimeId set olsun
+                    delay(200) // EntityTracker'ın parseStartGame'i tamamlaması için
                     if (isEnabled) injectNightVision()
                 }
             }
+
             // Gamma: SetTime'ı gündüze çevir
             mode.value == FbMode.Gamma &&
             event.packetId == BedrockPacketIds.SET_TIME &&
             event.direction == PacketEvent.Direction.SERVER_TO_CLIENT -> {
                 event.modifiedData = buildSetTime(6000)
             }
+
             // Lighting: LevelChunk light verisini patchle
             mode.value == FbMode.Lighting &&
             event.packetId == BedrockPacketIds.LEVEL_CHUNK &&
@@ -139,6 +165,7 @@ class FullBright : BaseModule(
     private fun removeNightVision() {
         val rid = EntityTracker.selfRuntimeId
         if (rid == 0L) return
+        if (!InjectionQueue.isBound) return
 
         val pkt = PacketHelper.buildMobEffect(
             runtimeId = rid,
@@ -155,7 +182,7 @@ class FullBright : BaseModule(
     // ── Gamma ────────────────────────────────────────────────────────────
 
     private fun injectGamma() {
-        val pkt = buildSetTime(6000) // öğlen
+        val pkt = buildSetTime(6000)
         PacketHelper.injectToClient(pkt)
     }
 
@@ -174,7 +201,6 @@ class FullBright : BaseModule(
             val modified = d.copyOf()
             var i = 0
             while (i < modified.size - 16) {
-                // 16 ardışık 0x00 → boş light bloğu bul
                 if ((0 until 16).all { modified[i + it] == 0.toByte() }) {
                     val end = minOf(i + 2048, modified.size)
                     for (j in i until end) modified[j] = 0xFF.toByte()
@@ -187,6 +213,3 @@ class FullBright : BaseModule(
         } catch (_: Exception) {}
     }
 }
-
-// CoroutineScope için isActive
-private val CoroutineScope.isActive: Boolean get() = coroutineContext[Job]?.isActive == true

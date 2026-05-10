@@ -39,7 +39,7 @@ object PacketProcessor {
     @Volatile var compressionEnabled   = false
     @Volatile var compressionAlgorithm = 0     // 0 = zlib, 1 = snappy
 
-    // ✅ FIX: AES-256-CFB8 şifreleme state'i
+    // AES-256-CFB8 şifreleme state'i
     @Volatile var encryptionEnabled    = false
     private var decryptCipher: javax.crypto.Cipher? = null
     private var encryptCipher: javax.crypto.Cipher? = null
@@ -50,7 +50,7 @@ object PacketProcessor {
     fun enableEncryption(secretKeyBytes: ByteArray) {
         try {
             secretKey = javax.crypto.spec.SecretKeySpec(secretKeyBytes, "AES")
-            val iv = secretKeyBytes.copyOf(16)
+            val iv     = secretKeyBytes.copyOf(16)
             val ivSpec = javax.crypto.spec.IvParameterSpec(iv)
 
             decryptCipher = javax.crypto.Cipher.getInstance("AES/CFB8/NoPadding").apply {
@@ -70,41 +70,44 @@ object PacketProcessor {
 
     fun resetEncryption() {
         encryptionEnabled = false
-        decryptCipher = null
-        encryptCipher = null
-        sendCounter = 0L
-        recvCounter = 0L
+        decryptCipher     = null
+        encryptCipher     = null
+        sendCounter       = 0L
+        recvCounter       = 0L
         OverlayLogger.d(TAG, "Şifreleme sıfırlandı")
     }
 
     fun reset() {
-        compressionEnabled = false
+        compressionEnabled   = false
         compressionAlgorithm = 0
         resetEncryption()
         OverlayLogger.d(TAG, "PacketProcessor sıfırlandı")
     }
 
     /** Sunucudan gelen veriyi çöz (S→C) */
-    private fun decrypt(data: ByteArray): ByteArray {
-        return decryptCipher?.doFinal(data) ?: data
-    }
+    private fun decrypt(data: ByteArray): ByteArray =
+        decryptCipher?.doFinal(data) ?: data
 
     /** Sunucuya gönderilecek veriyi şifrele (C→S inject) */
-    fun encrypt(data: ByteArray): ByteArray {
-        return encryptCipher?.doFinal(data) ?: data
-    }
+    fun encrypt(data: ByteArray): ByteArray =
+        encryptCipher?.doFinal(data) ?: data
 
     fun processBatch(body: ByteArray, direction: PacketEvent.Direction): ByteArray? {
         if (body.isEmpty()) return body
         return try {
-            val decrypted = if (encryptionEnabled && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
+            val decrypted = if (encryptionEnabled &&
+                               direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
                 decrypt(body)
             } else {
                 body
             }
+
             val result = if (compressionEnabled) processCompressedBatch(decrypted, direction)
                          else                    processRawBatch(decrypted, direction)
-            if (encryptionEnabled && direction == PacketEvent.Direction.CLIENT_TO_SERVER && result != null) {
+
+            if (encryptionEnabled &&
+                direction == PacketEvent.Direction.CLIENT_TO_SERVER &&
+                result != null) {
                 encrypt(result)
             } else {
                 result
@@ -158,30 +161,44 @@ object PacketProcessor {
     }
 
     private fun zlibInflate(input: ByteArray): ByteArray {
-        val inf = java.util.zip.Inflater(); inf.setInput(input)
-        val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
-        while (!inf.finished()) { val n = inf.inflate(buf); if (n == 0) break; out.write(buf, 0, n) }
-        inf.end(); return out.toByteArray()
+        val inf = java.util.zip.Inflater()
+        inf.setInput(input)
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        while (!inf.finished()) {
+            val n = inf.inflate(buf)
+            if (n == 0) break
+            out.write(buf, 0, n)
+        }
+        inf.end()
+        return out.toByteArray()
     }
 
     private fun zlibDeflate(input: ByteArray): ByteArray {
         val def = java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION)
         def.setInput(input); def.finish()
-        val out = ByteArrayOutputStream(); val buf = ByteArray(4096)
-        while (!def.finished()) { val n = def.deflate(buf); if (n > 0) out.write(buf, 0, n) }
-        def.end(); return out.toByteArray()
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        while (!def.finished()) {
+            val n = def.deflate(buf)
+            if (n > 0) out.write(buf, 0, n)
+        }
+        def.end()
+        return out.toByteArray()
     }
 
     private fun decompressSnappy(input: ByteArray): ByteArray = try {
         org.iq80.snappy.Snappy.uncompress(input, 0, input.size)
     } catch (e: Exception) {
-        OverlayLogger.w(TAG, "Snappy başarısız, zlib: ${e.message}"); zlibInflate(input)
+        OverlayLogger.w(TAG, "Snappy başarısız, zlib: ${e.message}")
+        zlibInflate(input)
     }
 
     private fun compressSnappy(input: ByteArray): ByteArray = try {
         org.iq80.snappy.Snappy.compress(input)
     } catch (e: Exception) {
-        OverlayLogger.w(TAG, "Snappy compress başarısız, zlib: ${e.message}"); zlibDeflate(input)
+        OverlayLogger.w(TAG, "Snappy compress başarısız, zlib: ${e.message}")
+        zlibDeflate(input)
     }
 
     private fun processSinglePacket(data: ByteArray, direction: PacketEvent.Direction): ByteArray? {
@@ -189,7 +206,9 @@ object PacketProcessor {
         val packetId = readVarInt(ByteArrayInputStream(data))
 
         // NetworkSettings (0xC7) — sıkıştırmayı aktif et
-        if (packetId == 0xC7 && direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
+        // FIX: BedrockPacketIds.NETWORK_SETTINGS const'u kullan, magic number değil
+        if (packetId == BedrockPacketIds.NETWORK_SETTINGS &&
+            direction == PacketEvent.Direction.SERVER_TO_CLIENT) {
             try {
                 val idSize = writeVarInt(packetId).size
                 compressionAlgorithm = if (data.size >= idSize + 3) {
@@ -198,17 +217,17 @@ object PacketProcessor {
                 compressionEnabled = true
                 OverlayLogger.i(TAG, "NetworkSettings → ${if (compressionAlgorithm == 1) "Snappy" else "zlib"} sıkıştırma aktif")
             } catch (_: Exception) {
-                compressionEnabled = true; compressionAlgorithm = 0
+                compressionEnabled   = true
+                compressionAlgorithm = 0
             }
         }
 
-        // ✅ FIX: EntityTracker.onPacket() direkt ÇAĞRILMIYOR.
         // EntityTracker, PacketEventBus'a register() ile kayıt olduğundan
         // publish() çağrısı zaten EntityTracker.onPacket()'i tetikler.
-        // Önceki kod: hem direkt hem EventBus → her paket 2 kez işleniyordu
-        // → StartGame 2x, AddPlayer 2x, parse hataları 2x görünüyordu.
         val event = PacketEvent(packetId, data, direction)
-        try { PacketEventBus.publish(event) } catch (e: Exception) {
+        try {
+            PacketEventBus.publish(event)
+        } catch (e: Exception) {
             OverlayLogger.e(TAG, "EventBus hatası pkt=0x${packetId.toString(16)}: ${e.message}", e)
         }
 
@@ -233,10 +252,17 @@ object PacketProcessor {
 
     fun writeVarInt(out: ByteArrayOutputStream, value: Int) {
         var v = value
-        do { var b = v and 0x7F; v = v ushr 7; if (v != 0) b = b or 0x80; out.write(b) } while (v != 0)
+        do {
+            var b = v and 0x7F
+            v = v ushr 7
+            if (v != 0) b = b or 0x80
+            out.write(b)
+        } while (v != 0)
     }
 
     fun writeVarInt(value: Int): ByteArray {
-        val out = ByteArrayOutputStream(4); writeVarInt(out, value); return out.toByteArray()
+        val out = ByteArrayOutputStream(4)
+        writeVarInt(out, value)
+        return out.toByteArray()
     }
 }
