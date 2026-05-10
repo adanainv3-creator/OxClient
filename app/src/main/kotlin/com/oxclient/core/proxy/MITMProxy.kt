@@ -100,6 +100,7 @@ class MITMProxy(
         OverlayLogger.i(TAG, "Başlatılıyor → :$listenPort ↔ $targetHost:$targetPort")
 
         EntityTracker.register()
+        LoginPacketInterceptor.register()   // ✅ EKLENDİ
 
         scope.launch {
             // 1. DNS çözümle
@@ -149,6 +150,7 @@ class MITMProxy(
         if (!running.getAndSet(false)) return
         OverlayLogger.i(TAG, "Durduruluyor…")
         EntityTracker.unregister()
+        LoginPacketInterceptor.unregister() // ✅ EKLENDİ
         InjectionQueue.unbind()
         PacketProcessor.reset()  // ✅ Şifreleme + sıkıştırma state'ini temizle
         scope.cancel()
