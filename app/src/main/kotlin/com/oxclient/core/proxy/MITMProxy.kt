@@ -381,9 +381,12 @@ class MITMProxy(
         // ve bozar; Minecraft bağlantıyı keser.
         if (direction == PacketEvent.Direction.SERVER_TO_CLIENT && !PacketProcessor.encryptionEnabled) {
             try {
-                // Decompress: önce raw deflate (nowrap=true), sonra zlib wrapper (nowrap=false)
+                // Decompress: Bedrock compression header byte'ını strip et, sonra inflate et.
+                // compressionEnabled=true → body = [algorithm_byte][compressed_data]
+                //   0x00 = zlib/raw-deflate, 0x01 = snappy, 0xFF = sıkıştırılmamış
+                // Header yoksa (eski protokol) body direkt compressed data.
                 val rawBody = if (PacketProcessor.compressionEnabled) {
-                    zlibInflateSafe(body)
+                    decompressHandshakeBody(body)
                 } else body
 
                 val (packetId, _) = readVarIntFromBytes(rawBody, 0)
@@ -401,6 +404,45 @@ class MITMProxy(
 
         return if (result == null) null
         else byteArrayOf(0xFE.toByte()) + result
+    }
+
+    /**
+     * Handshake body'sini decompress eder.
+     *
+     * Bedrock 1.20+ compression batch formatı:
+     *   body[0] = algorithm byte (0x00=zlib/deflate, 0x01=snappy, 0xFF=none)
+     *   body[1..] = gerçek sıkıştırılmış veri
+     *
+     * Eğer body[0] tanınan bir header değilse (eski protokol veya header yok),
+     * tüm body'yi decompress etmeye çalışır.
+     */
+    private fun decompressHandshakeBody(body: ByteArray): ByteArray {
+        if (body.isEmpty()) return body
+
+        val first = body[0].toInt() and 0xFF
+
+        // 0xFF = sıkıştırılmamış — body[1..] direkt raw batch
+        if (first == 0xFF) {
+            return if (body.size > 1) body.copyOfRange(1, body.size) else body
+        }
+
+        // 0x00 veya 0x01 = algorithm header var
+        if (first == 0x00 || first == 0x01) {
+            val compressed = body.copyOfRange(1, body.size)
+            if (first == 0x01) {
+                // Snappy
+                try {
+                    return org.iq80.snappy.Snappy.uncompress(compressed, 0, compressed.size)
+                } catch (_: Exception) {}
+            }
+            // 0x00 = raw deflate veya zlib wrapper
+            val result = zlibInflateSafe(compressed)
+            if (result !== compressed) return result  // inflate başarılı
+            // Header'sız dene (fallthrough)
+        }
+
+        // Header yok ya da header'lı inflate başarısız — tüm body'yi dene
+        return zlibInflateSafe(body)
     }
 
     /**
