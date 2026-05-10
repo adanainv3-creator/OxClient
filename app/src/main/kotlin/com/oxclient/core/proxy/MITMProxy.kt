@@ -381,23 +381,22 @@ class MITMProxy(
         // ve bozar; Minecraft bağlantıyı keser.
         if (direction == PacketEvent.Direction.SERVER_TO_CLIENT && !PacketProcessor.encryptionEnabled) {
             try {
-                // Decompress: Bedrock compression header byte'ını strip et, sonra inflate et.
-                // compressionEnabled=true → body = [algorithm_byte][compressed_data]
-                //   0x00 = zlib/raw-deflate, 0x01 = snappy, 0xFF = sıkıştırılmamış
-                // Header yoksa (eski protokol) body direkt compressed data.
                 val rawBody = if (PacketProcessor.compressionEnabled) {
-                    decompressHandshakeBody(body)
+                    val r = decompressHandshakeBody(body)
+                    OverlayLogger.d(TAG, "HS-scan: body[0]=0x${(body[0].toInt() and 0xFF).toString(16)} bodyLen=${body.size} rawLen=${r.size}")
+                    r
                 } else body
 
                 val (packetId, _) = readVarIntFromBytes(rawBody, 0)
+                OverlayLogger.d(TAG, "HS-scan: packetId=0x${packetId.toString(16)}")
+
                 if (packetId == BedrockPacketIds.SERVER_TO_CLIENT_HANDSHAKE) {
                     handleHandshake(rawBody)
-                    // Handshake paketini olduğu gibi istemciye ilet — processBatch ATLA.
-                    // processBatch'e girerse encryptionEnabled=true olduğu için gcmDecrypt
-                    // uygulanır, ham veri bozulur.
                     return payload
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                OverlayLogger.w(TAG, "HS-scan hata: ${e.message}")
+            }
         }
 
         val result = PacketProcessor.processBatch(body, direction)
