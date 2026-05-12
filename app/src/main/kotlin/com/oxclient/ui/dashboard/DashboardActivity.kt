@@ -43,8 +43,6 @@ import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.BedrockRelay
-import com.oxclient.core.relay.LoginRelayInterceptor
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.ModuleManager
 import com.oxclient.session.SessionManager
@@ -64,7 +62,6 @@ class DashboardActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { }
 
-    private var relay: BedrockRelay? = null
     private var pendingPackage: String = SUPPORTED_PACKAGES.first().first
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -109,21 +106,11 @@ class DashboardActivity : ComponentActivity() {
 
     private fun startRelay(targetPkg: String) {
         Log.d("Dashboard", "startRelay → $targetPkg")
-
-        val host = ServerConfig.getHostBlocking()
-        val port = ServerConfig.getPortBlocking()
-
         stopRelay()
-
         ModuleManager.init()
         EntityTracker.register()
-        LoginRelayInterceptor.register()
-
-        relay = BedrockRelay(targetHost = host, targetPort = port).also { it.start() }
-        SessionManager.onSessionStart(host, port)
-
+        SessionManager.start()
         OverlayService.start(this)
-
         window.decorView.postDelayed({
             val intent = packageManager.getLaunchIntentForPackage(targetPkg)
             if (intent != null) {
@@ -139,20 +126,15 @@ class DashboardActivity : ComponentActivity() {
     }
 
     private fun stopRelay() {
-        ModuleManager.disableAll()
-        EntityTracker.unregister()
-        LoginRelayInterceptor.unregister()
+        SessionManager.stop()
         PacketEventBus.clear()
-        relay?.stop()
-        relay = null
-        SessionManager.onSessionStop()
+        EntityTracker.reset()
         OverlayService.stop(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        relay?.stop()
-        relay = null
+        stopRelay()
     }
 
     private fun getInstalledGames(): List<Pair<String, String>> {

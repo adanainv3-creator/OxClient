@@ -23,36 +23,19 @@ object ModuleManager {
     fun init() {
         if (initialized) return
         initialized = true
-
         register(
-            // Combat
-            KillAura(),
-            Criticals(),
-            CrystalAura(),
-            AutoTotem(),
-
-            // Movement
-            TPAura(),
-            Jetpack(),
-
-            // Visual
+            KillAura(), Criticals(), CrystalAura(), AutoTotem(),
+            TPAura(), Jetpack(),
             FullBright()
         )
-
         Log.d(TAG, "${_modules.size} modül yüklendi")
     }
 
-    private fun register(vararg mods: BaseModule) {
-        _modules.addAll(mods)
-    }
+    private fun register(vararg mods: BaseModule) { _modules.addAll(mods) }
 
-    /** Shortcut'ı açık olan modülleri döner */
     fun shortcutModules(): List<BaseModule> =
-        _modules.filter { mod ->
-            mod.settings.filterIsInstance<BoolSetting>()
-                .firstOrNull { it.name == "Shortcut" }
-                ?.value == true
-        }
+        _modules.filter { m -> m.settings.filterIsInstance<BoolSetting>()
+            .any { it.name == "Shortcut" && it.value } }
 
     fun toggle(module: BaseModule) {
         module.setEnabled(!module.isEnabled)
@@ -61,23 +44,16 @@ object ModuleManager {
     }
 
     fun enable(module: BaseModule) {
-        if (!module.isEnabled) {
-            module.setEnabled(true)
-            _version.value++
-        }
+        if (!module.isEnabled) { module.setEnabled(true); _version.value++ }
     }
 
     fun disable(module: BaseModule) {
-        if (module.isEnabled) {
-            module.setEnabled(false)
-            _version.value++
-        }
+        if (module.isEnabled) { module.setEnabled(false); _version.value++ }
     }
 
     fun disableAll() {
         _modules.filter { it.isEnabled }.forEach { it.setEnabled(false) }
         _version.value++
-        Log.d(TAG, "Tüm modüller devre dışı bırakıldı")
     }
 
     fun byName(name: String): BaseModule? =

@@ -1,145 +1,81 @@
 package com.oxclient.module.combat
 
-import android.util.Log
-import com.oxclient.core.proxy.BedrockPacketIds
 import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.proxy.PacketHelper
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
-import com.oxclient.events.PacketListener
 import com.oxclient.module.*
 import kotlinx.coroutines.*
-import kotlin.coroutines.coroutineContext
+import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.action.ItemUseOnEntityInventoryAction
+import org.cloudburstmc.protocol.bedrock.packet.*
 import java.util.concurrent.ConcurrentHashMap
 
 class CrystalAura : BaseModule(
     name        = "CrystalAura",
     category    = ModuleCategory.COMBAT,
     description = "End kristallerini otomatik yerleştirir ve patlatır"
-), PacketListener {
-
-    override val priority: Int = 90
-
+) {
     enum class BreakMode      { Instant, Sequential }
     enum class TargetPriority { Distance, Health }
 
-    // ── Ayarlar ───────────────────────────────────────────────────────────
-    private val autoPlace       = BoolSetting("AutoPlace",       true)
-    private val autoBreak       = BoolSetting("AutoBreak",       true)
-    private val breakMode       = EnumSetting("BreakMode",       BreakMode.Instant,         BreakMode.entries)
-    private val targetPriority  = EnumSetting("Priority",        TargetPriority.Distance,   TargetPriority.entries)
-    private val placeRange      = FloatSetting("PlaceRange",     6f,  1f, 12f)
-    private val breakRange      = FloatSetting("BreakRange",     6f,  1f, 12f)
-    private val wallsRange      = FloatSetting("WallsRange",     5f,  1f, 10f)
-    private val throughWalls    = BoolSetting("ThroughWalls",    true)
-    private val throughBlocks   = BoolSetting("ThroughBlocks",   true)
-    private val placeDelay      = IntSetting("PlaceDelay",       0,   0, 500)
-    private val breakDelay      = IntSetting("BreakDelay",       0,   0, 500)
-    private val maxPlace        = IntSetting("MaxPlace",         25,  1,  50)
-    private val maxBreak        = IntSetting("MaxBreak",         25,  1,  50)
-    private val removeParticles = BoolSetting("RemoveParticles", true)
-    private val shortcut        = BoolSetting("Shortcut",        true)
+    private val autoPlace      = bool ("AutoPlace",       true)
+    private val autoBreak      = bool ("AutoBreak",       true)
+    private val breakMode      = enum ("BreakMode",       BreakMode.Instant)
+    private val targetPriority = enum ("Priority",        TargetPriority.Distance)
+    private val placeRange     = float("PlaceRange",      6f,  1f, 12f)
+    private val breakRange     = float("BreakRange",      6f,  1f, 12f)
+    private val wallsRange     = float("WallsRange",      5f,  1f, 10f)
+    private val throughWalls   = bool ("ThroughWalls",    true)
+    private val placeDelay     = int  ("PlaceDelay",      0,   0,  500)
+    private val breakDelay     = int  ("BreakDelay",      0,   0,  500)
+    private val maxPlace       = int  ("MaxPlace",        25,  1,  50)
+    private val maxBreak       = int  ("MaxBreak",        25,  1,  50)
+    private val removeParticles= bool ("RemoveParticles", true)
+    private val shortcut       = bool ("Shortcut",        true)
 
-    override fun registerSettings() = listOf(
-        autoPlace, autoBreak, breakMode, targetPriority,
-        placeRange, breakRange, wallsRange,
-        throughWalls, throughBlocks,
-        placeDelay, breakDelay, maxPlace, maxBreak,
-        removeParticles, shortcut
-    )
-
-    // ── İç durum ──────────────────────────────────────────────────────────
-    // runtimeId → (x, y, z)
-    private val activeCrystals  = ConcurrentHashMap<Long, Triple<Float, Float, Float>>()
-    // ✅ FIX: RemoveEntity uniqueId → runtimeId eşlemesi için
+    private val activeCrystals  = ConcurrentHashMap<Long, Vector3f>()
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
-
     @Volatile private var lastPlaceMs = 0L
     @Volatile private var lastBreakMs = 0L
-    private var seqBreakIndex   = 0
-
-    private val scope   = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var tickJob : Job? = null
-
-    companion object {
-        private const val TAG = "CrystalAura"
-    }
-
-    // ── Yaşam döngüsü ─────────────────────────────────────────────────────
+    private var seqIndex = 0
+    private var tickJob: Job? = null
 
     override fun onEnable() {
-        activeCrystals.clear()
-        uniqueToRuntime.clear()
-        seqBreakIndex = 0
-        PacketEventBus.register(this)
+        super.onEnable()
+        activeCrystals.clear(); uniqueToRuntime.clear(); seqIndex = 0
         tickJob = scope.launch { tickLoop() }
-        Log.d(TAG, "Etkinleştirildi")
     }
 
     override fun onDisable() {
         tickJob?.cancel()
-        PacketEventBus.unregister(this)
-        activeCrystals.clear()
-        uniqueToRuntime.clear()
+        super.onDisable()
+        activeCrystals.clear(); uniqueToRuntime.clear()
     }
-
-    // ── Paket dinleyici ───────────────────────────────────────────────────
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
-        when (event.packetId) {
-            BedrockPacketIds.ADD_ENTITY    -> parseAddEntity(event)
-            BedrockPacketIds.REMOVE_ENTITY -> parseRemoveEntity(event.data)
-            BedrockPacketIds.LEVEL_EVENT   -> {
-                if (removeParticles.value) suppressCrystalParticles(event)
+        when (val pkt = event.packet) {
+            is AddEntityPacket    -> {
+                if (pkt.identifier.contains("crystal", ignoreCase = true)) {
+                    activeCrystals[pkt.runtimeEntityId] = pkt.position
+                    uniqueToRuntime[pkt.uniqueEntityId] = pkt.runtimeEntityId
+                }
             }
+            is RemoveEntityPacket -> {
+                val rid = uniqueToRuntime.remove(pkt.uniquEntityId)
+                if (rid != null) activeCrystals.remove(rid)
+            }
+            is LevelEventPacket   -> {
+                if (removeParticles.value && (pkt.type == 3001 || pkt.type == 2001))
+                    event.isCancelled = true
+            }
+            else -> {}
         }
     }
 
-    private fun parseAddEntity(event: PacketEvent) {
-        val d = event.data
-        try {
-            var pos = 0
-            val (_, p1)       = PacketHelper.readVarInt(d, pos);           pos = p1
-            // ✅ FIX: AddEntity'de sıra: uniqueId (zigzag) sonra runtimeId
-            val (uid, p2)     = PacketHelper.readZigzagVarLong(d, pos);    pos = p2
-            val (rid, p3)     = PacketHelper.readVarLong(d, pos);          pos = p3
-            val (typeStr, p4) = PacketHelper.readString(d, pos);           pos = p4
-            val x = PacketHelper.readFloatLE(d, pos); pos += 4
-            val y = PacketHelper.readFloatLE(d, pos); pos += 4
-            val z = PacketHelper.readFloatLE(d, pos)
-
-            if (typeStr.contains("crystal", ignoreCase = true)) {
-                activeCrystals[rid] = Triple(x, y, z)
-                uniqueToRuntime[uid] = rid
-                Log.v(TAG, "Kristal eklendi: $rid @ $x,$y,$z")
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun parseRemoveEntity(data: ByteArray) {
-        try {
-            val (_, p1)   = PacketHelper.readVarInt(data, 0)
-            // ✅ FIX: RemoveEntity, uniqueId (zigzag varlong) gönderir — runtimeId değil
-            val (uid, _)  = PacketHelper.readZigzagVarLong(data, p1)
-            val rid = uniqueToRuntime.remove(uid)
-            if (rid != null) activeCrystals.remove(rid)
-        } catch (_: Exception) {}
-    }
-
-    private fun suppressCrystalParticles(event: PacketEvent) {
-        try {
-            var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(event.data, pos); pos = p1
-            val (evtId, _) = PacketHelper.readVarInt(event.data, pos)
-            if (evtId == 3001 || evtId == 2001) event.isCancelled = true
-        } catch (_: Exception) {}
-    }
-
-    // ── Tick ──────────────────────────────────────────────────────────────
-
     private suspend fun tickLoop() {
-        while (coroutineContext.isActive) {
+        while (currentCoroutineContext().isActive) {
             if (isEnabled) {
                 val target = selectTarget()
                 if (target != null) {
@@ -151,121 +87,67 @@ class CrystalAura : BaseModule(
         }
     }
 
-    // ── Hedef seçimi ──────────────────────────────────────────────────────
-
     private fun selectTarget(): EntityTracker.TrackedEntity? {
         val r = if (throughWalls.value) wallsRange.value else placeRange.value
-        val candidates = EntityTracker.getEntitiesInRange(r)
         return when (targetPriority.value) {
-            TargetPriority.Distance -> candidates.minByOrNull { EntityTracker.distanceTo(it) }
-            TargetPriority.Health   -> candidates.minByOrNull { it.health }
+            TargetPriority.Distance -> EntityTracker.getEntitiesInRange(r).minByOrNull { EntityTracker.distanceTo(it) }
+            TargetPriority.Health   -> EntityTracker.getEntitiesInRange(r).minByOrNull { it.health }
         }
     }
-
-    // ── Kristal Yerleştirme ───────────────────────────────────────────────
 
     private fun doPlace(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         if (now - lastPlaceMs < placeDelay.value) return
         lastPlaceMs = now
-
-        val positions = calcPlacePositions(target)
-        var placed = 0
-
-        for ((bx, by, bz) in positions) {
-            if (placed >= maxPlace.value) break
-            val effectiveRange = if (throughWalls.value) wallsRange.value else placeRange.value
-            val distToSelf = dist3(
-                bx.toFloat(), by.toFloat(), bz.toFloat(),
-                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ
-            )
-            if (distToSelf > effectiveRange) continue
-
-            PacketHelper.injectToServer(
-                PacketHelper.buildUseItem(
-                    actionType = 0,
-                    blockX = bx, blockY = by, blockZ = bz,
-                    face = 1,
-                    x = EntityTracker.selfX,
-                    y = EntityTracker.selfY,
-                    z = EntityTracker.selfZ
-                )
-            )
-            placed++
-            Log.v(TAG, "Kristal yerleştirildi: $bx,$by,$bz")
-        }
-    }
-
-    private fun calcPlacePositions(target: EntityTracker.TrackedEntity): List<Triple<Int, Int, Int>> {
-        val positions = mutableListOf<Triple<Int, Int, Int>>()
+        val session = PacketEventBus.currentSession ?: return
         val tx = target.x.toInt(); val ty = target.y.toInt(); val tz = target.z.toInt()
-
-        for (dx in -2..2) for (dz in -2..2) for (dy in -1..1) {
-            val bx = tx + dx; val by = ty + dy; val bz = tz + dz
-            val alreadyPlaced = activeCrystals.values.any { (cx, cy, cz) ->
-                Math.abs(cx - bx - 0.5f) < 0.5f &&
-                Math.abs(cy - by - 1f)   < 0.5f &&
-                Math.abs(cz - bz - 0.5f) < 0.5f
+        var placed = 0
+        outer@ for (dx in -2..2) for (dz in -2..2) for (dy in -1..1) {
+            if (placed >= maxPlace.value) break@outer
+            val bx = tx+dx; val by = ty+dy; val bz = tz+dz
+            val alreadyPlaced = activeCrystals.values.any { c ->
+                Math.abs(c.x - bx - 0.5f) < 0.5f &&
+                Math.abs(c.y - by - 1f)   < 0.5f &&
+                Math.abs(c.z - bz - 0.5f) < 0.5f
             }
-            if (!alreadyPlaced) positions.add(Triple(bx, by, bz))
-        }
-        return positions.sortedBy { (bx, by, bz) ->
-            dist3(bx.toFloat(), by.toFloat(), bz.toFloat(), target.x, target.y, target.z)
+            if (alreadyPlaced) continue
+            val dist = dist3(bx.toFloat(), by.toFloat(), bz.toFloat(),
+                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+            if (dist > (if (throughWalls.value) wallsRange.value else placeRange.value)) continue
+            val use = InventoryTransactionPacket().apply {
+                transactionType = InventoryTransactionType.ITEM_USE
+            }
+            session.serverBound(use)
+            placed++
         }
     }
-
-    // ── Kristal Patlatma ──────────────────────────────────────────────────
 
     private fun doBreak(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         if (now - lastBreakMs < breakDelay.value) return
         lastBreakMs = now
-
-        val crystalsInRange = activeCrystals.entries
-            .filter { (_, pos) ->
-                val (cx, cy, cz) = pos
-                dist3(cx, cy, cz,
-                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ
-                ) <= breakRange.value
-            }
-            .sortedBy { (_, pos) ->
-                val (cx, cy, cz) = pos
-                dist3(cx, cy, cz, target.x, target.y, target.z)
-            }
-
+        val session = PacketEventBus.currentSession ?: return
+        val sorted = activeCrystals.entries
+            .filter { (_, p) -> dist3(p.x, p.y, p.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= breakRange.value }
+            .sortedBy  { (_, p) -> dist3(p.x, p.y, p.z, target.x, target.y, target.z) }
         when (breakMode.value) {
-            BreakMode.Instant    -> breakInstant(crystalsInRange)
-            BreakMode.Sequential -> breakSequential(crystalsInRange)
+            BreakMode.Instant    -> { var b = 0; for ((rid, _) in sorted) { if (b++ >= maxBreak.value) break; attack(rid, session); activeCrystals.remove(rid) } }
+            BreakMode.Sequential -> { if (sorted.isEmpty()) { seqIndex=0; return }; seqIndex %= sorted.size; val (rid,_) = sorted[seqIndex]; attack(rid, session); activeCrystals.remove(rid); seqIndex++ }
         }
     }
 
-    private fun breakInstant(crystals: List<Map.Entry<Long, Triple<Float, Float, Float>>>) {
-        var broken = 0
-        for ((rid, _) in crystals) {
-            if (broken >= maxBreak.value) break
-            PacketHelper.injectToServer(PacketHelper.buildAnimate(EntityTracker.selfRuntimeId))
-            PacketHelper.injectToServer(PacketHelper.buildAttack(rid, EntityTracker.selfRuntimeId))
-            activeCrystals.remove(rid)
-            broken++
-            Log.v(TAG, "Kristal patlatıldı: $rid")
-        }
+    private fun attack(rid: Long, session: com.oxclient.core.relay.OxRelaySession) {
+        session.serverBound(AnimatePacket().apply { action = AnimatePacket.Action.SWING_ARM; runtimeEntityId = EntityTracker.selfRuntimeId })
+        session.serverBound(InventoryTransactionPacket().apply {
+            transactionType = InventoryTransactionType.ITEM_USE_ON_ENTITY
+            val a = ItemUseOnEntityInventoryAction()
+            a.runtimeEntityId = rid; a.actionType = ItemUseOnEntityInventoryAction.TYPE_ATTACK; a.hotbarSlot = 0
+            actions.add(a)
+        })
     }
-
-    private fun breakSequential(crystals: List<Map.Entry<Long, Triple<Float, Float, Float>>>) {
-        if (crystals.isEmpty()) { seqBreakIndex = 0; return }
-        seqBreakIndex = seqBreakIndex % crystals.size
-        val (rid, _) = crystals[seqBreakIndex]
-        PacketHelper.injectToServer(PacketHelper.buildAnimate(EntityTracker.selfRuntimeId))
-        PacketHelper.injectToServer(PacketHelper.buildAttack(rid, EntityTracker.selfRuntimeId))
-        activeCrystals.remove(rid)
-        Log.v(TAG, "Sequential kristal: $rid (idx=$seqBreakIndex)")
-        seqBreakIndex++
-    }
-
-    // ── Yardımcı ──────────────────────────────────────────────────────────
 
     private fun dist3(x1: Float, y1: Float, z1: Float, x2: Float, y2: Float, z2: Float): Float {
-        val dx = x1-x2; val dy = y1-y2; val dz = z1-z2
-        return Math.sqrt((dx*dx + dy*dy + dz*dz).toDouble()).toFloat()
+        val dx=x1-x2; val dy=y1-y2; val dz=z1-z2
+        return Math.sqrt((dx*dx+dy*dy+dz*dz).toDouble()).toFloat()
     }
 }

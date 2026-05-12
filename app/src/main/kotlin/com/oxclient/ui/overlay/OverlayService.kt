@@ -51,7 +51,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.oxclient.R
 import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.RelayInjectionBridge
+import com.oxclient.session.SessionManager
 import com.oxclient.module.*
 import com.oxclient.session.SessionManager
 import com.oxclient.ui.theme.*
@@ -688,7 +688,7 @@ private fun DebugInfoBar() {
     val relayPort   = SessionManager.connectedPortFlow.collectAsState().value
 
     // @Volatile değişkenler — polling gerekiyor
-    var isBound     by remember { mutableStateOf(RelayInjectionBridge.isBound) }
+    var isBound     by remember { mutableStateOf(SessionManager.isActive.value) }
     var selfId      by remember { mutableLongStateOf(EntityTracker.selfRuntimeId) }
     var entityCount by remember { mutableIntStateOf(0) }
     var playerCount by remember { mutableIntStateOf(0) }
@@ -700,7 +700,7 @@ private fun DebugInfoBar() {
     // Her 500ms'de bir güncelle
     LaunchedEffect(Unit) {
         while (true) {
-            isBound     = RelayInjectionBridge.isBound
+            isBound     = SessionManager.isActive.value
             selfId      = EntityTracker.selfRuntimeId
             entityCount = EntityTracker.getEntities().size
             playerCount = EntityTracker.getEntities().values.count { it.isPlayer }

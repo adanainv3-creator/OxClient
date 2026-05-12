@@ -36,13 +36,11 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
-
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
-
         debug {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
@@ -73,7 +71,8 @@ android {
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
                 "META-INF/AL2.0",
-                "META-INF/LGPL2.1"
+                "META-INF/LGPL2.1",
+                "META-INF/versions/**"
             )
         }
     }
@@ -81,46 +80,48 @@ android {
 
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.0")
-
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
-
     implementation("androidx.activity:activity-compose:1.9.0")
-
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     val bom = platform("androidx.compose:compose-bom:2024.06.00")
-
     implementation(bom)
-
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
-
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.foundation:foundation")
-
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("androidx.savedstate:savedstate-ktx:1.2.1")
-
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    implementation("org.iq80.snappy:snappy:0.4")
+    // CloudburstMC Protocol — Bedrock MITM relay
+    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta5-SNAPSHOT") {
+        exclude(group = "io.netty", module = "netty-transport-native-epoll")
+        exclude(group = "io.netty", module = "netty-transport-native-kqueue")
+    }
+
+    // CloudburstMC NBT
+    implementation("org.cloudburstmc:nbt:3.0.0.Final")
+
+    // FastUtil — NbtBlockDefinitionRegistry için
+    implementation("it.unimi.dsi:fastutil-core:8.5.13")
+
+    // jose4j — JWT işleme (login chain imzalama)
+    implementation("org.bitbucket.b_c:jose4j:0.9.6")
 
     testImplementation("junit:junit:4.13.2")
-
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
 

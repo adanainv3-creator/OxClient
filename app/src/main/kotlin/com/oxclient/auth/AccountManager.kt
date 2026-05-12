@@ -9,19 +9,9 @@ import com.google.gson.GsonBuilder
 import java.io.File
 
 /**
- * AccountManager
+ * AccountManager — Minecraft Bedrock hesaplarını diske kaydeder ve yükler.
  *
- * Minecraft Bedrock hesaplarını diske kaydeder ve yükler.
- * [MicrosoftAuthManager] tarafından kullanılır.
- *
- * Depolama: filesDir/ox_accounts/<Gamertag>.json
- * Seçili hesap: filesDir/ox_accounts/selected  (gamertag adı)
- *
- * Kullanım:
- *   AccountManager.init(context)         — uygulama başlangıcında
- *   AccountManager.addAccount(account)   — giriş sonrası
- *   AccountManager.selectAccount(acc)    — aktif hesap
- *   AccountManager.selectedAccount       — null ise hesap yok
+ * currentAccount → LoginPacketListener tarafından kullanılan aktif hesap alias'ı
  */
 object AccountManager {
 
@@ -33,10 +23,11 @@ object AccountManager {
     var selectedAccount: SavedAccount? by mutableStateOf(null)
         private set
 
+    /** LoginPacketListener için alias */
+    val currentAccount: SavedAccount? get() = selectedAccount
+
     private lateinit var cacheDir: File
     private var initialized = false
-
-    // ── Init ──────────────────────────────────────────────────────────────
 
     fun init(context: Context) {
         if (initialized) return
@@ -44,8 +35,6 @@ object AccountManager {
         cacheDir = File(context.filesDir, "ox_accounts").apply { mkdirs() }
         loadFromDisk()
     }
-
-    // ── Public API ────────────────────────────────────────────────────────
 
     fun addAccount(account: SavedAccount) {
         _accounts.removeAll { it.gamertag == account.gamertag }
@@ -72,8 +61,6 @@ object AccountManager {
         selectedAccount = null
         File(cacheDir, "selected").delete()
     }
-
-    // ── Disk I/O ──────────────────────────────────────────────────────────
 
     private fun loadFromDisk() {
         val selectedName = runCatching {

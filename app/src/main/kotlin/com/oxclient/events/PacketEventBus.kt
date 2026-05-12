@@ -1,24 +1,17 @@
+
 package com.oxclient.events
 
 import android.util.Log
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import com.oxclient.core.relay.OxRelaySession
 import java.util.concurrent.CopyOnWriteArrayList
 
-/**
- * PacketEventBus
- *
- * Senkron listener listesi + asenkron Flow arayüzü sağlar.
- * OxVpnService içindeki PacketProcessor tarafından publish edilir,
- * modüller onPacket() ile dinler.
- */
 object PacketEventBus {
     private const val TAG = "PacketEventBus"
 
     private val listeners = CopyOnWriteArrayList<PacketListener>()
-    private val _flow     = MutableSharedFlow<PacketEvent>(replay = 0, extraBufferCapacity = 128)
-    val flow: SharedFlow<PacketEvent> = _flow.asSharedFlow()
+
+    private val _sessionLocal = ThreadLocal<OxRelaySession?>()
+    val currentSession: OxRelaySession? get() = _sessionLocal.get()
 
     fun register(l: PacketListener) {
         if (listeners.contains(l)) return
@@ -31,19 +24,19 @@ object PacketEventBus {
 
     fun clear() { listeners.clear() }
 
-    @JvmStatic
     fun publish(event: PacketEvent) {
+        _sessionLocal.set(event.session)
         for (l in listeners) {
             try { l.onPacket(event) } catch (e: Exception) {
-                Log.e(TAG, "${l.javaClass.simpleName} threw", e)
+                Log.e(TAG, "${l.javaClass.simpleName} hata", e)
             }
             if (event.isCancelled) break
         }
-        _flow.tryEmit(event)
+        _sessionLocal.set(null)
     }
-}
 
-interface PacketListener {
-    val priority: Int get() = 100
-    fun onPacket(event: PacketEvent)
+    interface PacketListener {
+        val priority: Int get() = 100
+        fun onPacket(event: PacketEvent)
+    }
 }

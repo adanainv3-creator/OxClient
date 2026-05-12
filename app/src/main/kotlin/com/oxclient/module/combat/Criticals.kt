@@ -1,125 +1,75 @@
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.proxy.PacketHelper
-import com.oxclient.core.proxy.BedrockPacketIds
 import com.oxclient.events.PacketEvent
-import com.oxclient.events.PacketListener
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.action.ItemUseOnEntityInventoryAction
+import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
+import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 
 class Criticals : BaseModule(
     name        = "Criticals",
     category    = ModuleCategory.COMBAT,
     description = "Her vuruşu kritik hale getirir"
-), PacketListener {
-
-    override val priority = 70  // KillAura'dan önce
-
+) {
     enum class CritMode { Vanilla, MovePacket, Jump, TPJump }
 
-    private val mode     = EnumSetting("Mode", CritMode.Vanilla, CritMode.entries)
-    private val shortcut = BoolSetting("Shortcut", false)
-
-    override fun registerSettings() = listOf(mode, shortcut)
+    private val mode     = enum("Mode",     CritMode.Vanilla)
+    private val shortcut = bool("Shortcut", false)
 
     @Volatile private var lastCritMs = 0L
 
-    override fun onEnable()  { PacketEventBus.register(this) }
-    override fun onDisable() { PacketEventBus.unregister(this) }
-
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
-        // InventoryTransaction USE_ITEM_ON_ENTITY (saldırı paketi) yakala
-        if (event.packetId != BedrockPacketIds.INVENTORY_TRANSACTION) return
+        val pkt = event.packet as? InventoryTransactionPacket ?: return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-
-        val d = event.data
-        if (d.size < 3) return
-        try {
-            var pos = 0
-            val (_, p1) = PacketHelper.readVarInt(d, pos); pos = p1
-            val (_, p2) = PacketHelper.readVarInt(d, pos); pos = p2  // legacyRequestId
-            val (txType, _) = PacketHelper.readVarInt(d, pos)
-            if (txType != 2) return  // USE_ITEM_ON_ENTITY değilse çık
-        } catch (_: Exception) { return }
-
+        if (pkt.transactionType != InventoryTransactionType.ITEM_USE_ON_ENTITY) return
+        val isAttack = pkt.actions.filterIsInstance<ItemUseOnEntityInventoryAction>()
+            .any { it.actionType == ItemUseOnEntityInventoryAction.TYPE_ATTACK }
+        if (!isAttack) return
         val now = System.currentTimeMillis()
         if (now - lastCritMs < 100) return
         lastCritMs = now
-
+        val session = PacketEventBus.currentSession ?: return
         when (mode.value) {
-            CritMode.Vanilla    -> injectVanilla()
-            CritMode.MovePacket -> injectMovePacket()
-            CritMode.Jump       -> injectJump()
-            CritMode.TPJump     -> injectTPJump()
+            CritMode.Vanilla    -> injectVanilla(session)
+            CritMode.MovePacket -> injectMovePacket(session)
+            CritMode.Jump       -> injectJump(session)
+            CritMode.TPJump     -> injectTPJump(session)
         }
     }
 
-    /**
-     * VANILLA — gerçek zıplama yayı simüle eder.
-     * En az ban riski, en doğal davranış.
-     */
-    private fun injectVanilla() {
-        val rid = EntityTracker.selfRuntimeId
-        val x = EntityTracker.selfX; val y = EntityTracker.selfY; val z = EntityTracker.selfZ
-        val yaw = EntityTracker.selfYaw; val pitch = EntityTracker.selfPitch
+    private fun buildMove(dy: Float, onGround: Boolean, teleport: Boolean = false) =
+        MovePlayerPacket().apply {
+            runtimeEntityId       = EntityTracker.selfRuntimeId
+            position              = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY + dy, EntityTracker.selfZ)
+            rotation              = Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, EntityTracker.selfYaw)
+            mode                  = if (teleport) MovePlayerPacket.Mode.TELEPORT else MovePlayerPacket.Mode.NORMAL
+            isOnGround            = onGround
+            ridingRuntimeEntityId = 0L
+        }
 
-        val frames = listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f)
+    private fun injectVanilla(s: com.oxclient.core.relay.OxRelaySession) {
         var cumY = 0f
-        frames.forEach { dy ->
-            cumY += dy
-            PacketHelper.injectToServer(
-                PacketHelper.buildMovePlayer(rid, x, y + cumY, z, yaw, pitch, yaw,
-                    onGround = (dy == 0f), teleport = false)
-            )
+        listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
+            cumY += dy; s.serverBound(buildMove(cumY, dy == 0f))
         }
     }
 
-    /**
-     * MOVE_PACKET — onGround=false ile tek paket.
-     * En hızlı, bazı sunucularda çalışmaz.
-     */
-    private fun injectMovePacket() {
-        val rid = EntityTracker.selfRuntimeId
-        val x = EntityTracker.selfX; val y = EntityTracker.selfY; val z = EntityTracker.selfZ
-        val yaw = EntityTracker.selfYaw; val pitch = EntityTracker.selfPitch
-
-        PacketHelper.injectToServer(
-            PacketHelper.buildMovePlayer(rid, x, y + 0.11f, z, yaw, pitch, yaw, onGround = false))
-        PacketHelper.injectToServer(
-            PacketHelper.buildMovePlayer(rid, x, y, z, yaw, pitch, yaw, onGround = true))
+    private fun injectMovePacket(s: com.oxclient.core.relay.OxRelaySession) {
+        s.serverBound(buildMove(0.11f, false))
+        s.serverBound(buildMove(0f, true))
     }
 
-    /**
-     * JUMP — mikro zıplama, 4 kare.
-     */
-    private fun injectJump() {
-        val rid = EntityTracker.selfRuntimeId
-        val x = EntityTracker.selfX; val y = EntityTracker.selfY; val z = EntityTracker.selfZ
-        val yaw = EntityTracker.selfYaw; val pitch = EntityTracker.selfPitch
-
-        listOf(0.0625f, 0f, 0.0625f, 0f).forEach { dy ->
-            PacketHelper.injectToServer(
-                PacketHelper.buildMovePlayer(rid, x, y + dy, z, yaw, pitch, yaw,
-                    onGround = (dy == 0f), teleport = false))
-        }
+    private fun injectJump(s: com.oxclient.core.relay.OxRelaySession) {
+        listOf(0.0625f, 0f, 0.0625f, 0f).forEach { dy -> s.serverBound(buildMove(dy, dy == 0f)) }
     }
 
-    /**
-     * TP_JUMP — anlık yukarı teleport + aşağı teleport.
-     * Yüksek güç, yüksek tespit riski.
-     */
-    private fun injectTPJump() {
-        val rid = EntityTracker.selfRuntimeId
-        val x = EntityTracker.selfX; val y = EntityTracker.selfY; val z = EntityTracker.selfZ
-        val yaw = EntityTracker.selfYaw; val pitch = EntityTracker.selfPitch
-
-        PacketHelper.injectToServer(
-            PacketHelper.buildMovePlayer(rid, x, y + 0.42f, z, yaw, pitch, yaw,
-                onGround = false, teleport = true))
-        PacketHelper.injectToServer(
-            PacketHelper.buildMovePlayer(rid, x, y, z, yaw, pitch, yaw,
-                onGround = true, teleport = true))
+    private fun injectTPJump(s: com.oxclient.core.relay.OxRelaySession) {
+        s.serverBound(buildMove(0.42f, false, teleport = true))
+        s.serverBound(buildMove(0f, true, teleport = true))
     }
 }
