@@ -3,25 +3,31 @@ package com.oxclient.events
 import com.oxclient.core.relay.OxRelaySession
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
 
-/**
- * PacketEvent — OxRelaySession tarafından publish edilir.
- *
- * Modüller onPacket() içinde:
- *   - isCancelled = true   → paketi durdur (karşı tarafa iletme)
- *   - replacementPacket    → farklı bir paket gönder
- *
- * Önceki versiyon raw ByteArray kullanıyordu.
- * Yeni versiyon doğrudan typed BedrockPacket nesnesi sağlar —
- * modüller cast ederek içeriğe kolayca erişebilir.
- */
-data class PacketEvent(
-    val packetId  : Int,
-    val packet    : BedrockPacket,
-    val direction : Direction,
-    val session   : OxRelaySession
+class PacketEvent(
+    val packet   : BedrockPacket,
+    val direction: Direction,
+    val session  : OxRelaySession
 ) {
-    var isCancelled      : Boolean      = false
+    enum class Direction {
+        CLIENT_TO_SERVER,
+        SERVER_TO_CLIENT
+    }
+
+    var isCancelled: Boolean = false
+        private set
+
     var replacementPacket: BedrockPacket? = null
 
-    enum class Direction { CLIENT_TO_SERVER, SERVER_TO_CLIENT }
+    fun cancel() { isCancelled = true }
+
+    fun cancelAndReplace(pkt: BedrockPacket) {
+        replacementPacket = pkt
+        isCancelled = false
+    }
+
+    val isClientToServer: Boolean get() = direction == Direction.CLIENT_TO_SERVER
+    val isServerToClient: Boolean get() = direction == Direction.SERVER_TO_CLIENT
+    val packetName      : String  get() = packet::class.simpleName ?: "UnknownPacket"
+
+    val effectivePacket: BedrockPacket get() = replacementPacket ?: packet
 }

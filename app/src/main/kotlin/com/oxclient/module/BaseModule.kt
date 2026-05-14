@@ -22,15 +22,24 @@ class BoolSetting(name: String, default: Boolean = false) : ModuleSetting<Boolea
 }
 
 class FloatSetting(name: String, val min: Float, val max: Float, default: Float) : ModuleSetting<Float>(name) {
-    override var value: Float = default
+    override var value: Float = default.coerceIn(min, max)
 }
 
 class IntSetting(name: String, default: Int, val min: Int, val max: Int) : ModuleSetting<Int>(name) {
-    override var value: Int = default
+    override var value: Int = default.coerceIn(min, max)
 }
 
 class EnumSetting<T : Enum<T>>(name: String, default: T, val values: Array<T>) : ModuleSetting<T>(name) {
     override var value: T = default
+    fun next(): T {
+        val idx = (values.indexOf(value) + 1) % values.size
+        value = values[idx]
+        return value
+    }
+}
+
+class StringSetting(name: String, default: String) : ModuleSetting<String>(name) {
+    override var value: String = default
 }
 
 abstract class BaseModule(
@@ -47,11 +56,15 @@ abstract class BaseModule(
     val enabledFlow: StateFlow<Boolean> = _enabledFlow.asStateFlow()
     val isEnabled: Boolean get() = _enabledFlow.value
 
+    open val keybind: String = ""
+
     fun setEnabled(v: Boolean) {
         if (_enabledFlow.value == v) return
         _enabledFlow.value = v
         if (v) onEnable() else onDisable()
     }
+
+    fun toggle() = setEnabled(!isEnabled)
 
     protected open fun onEnable()  { PacketEventBus.register(this) }
     protected open fun onDisable() { PacketEventBus.unregister(this) }
@@ -69,4 +82,14 @@ abstract class BaseModule(
 
     protected inline fun <reified T : Enum<T>> enum(name: String, default: T) =
         EnumSetting(name, default, enumValues<T>()).also { settings.add(it) }
+
+    protected fun string(name: String, default: String) =
+        StringSetting(name, default).also { settings.add(it) }
+
+    fun getSetting(name: String): ModuleSetting<*>? =
+        settings.firstOrNull { it.name.equals(name, ignoreCase = true) }
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> getSettingValue(name: String): T? =
+        getSetting(name)?.value as? T
 }

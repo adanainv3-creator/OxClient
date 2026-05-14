@@ -15,11 +15,13 @@ class FullBright : BaseModule(
     category    = ModuleCategory.VISUAL,
     description = "Geceyi gündüz gibi görünür yapar"
 ) {
-    enum class FbMode { Gamma, NightVision }
+    enum class FbMode { NightVision, TimeForce, Both }
 
-    private val mode     = enum ("Mode",     FbMode.NightVision)
-    private val strength = float("Strength", 100f, 1000f, 1000f)
-    private val shortcut = bool ("Shortcut", false)
+    private val mode        = enum ("Mode",          FbMode.NightVision)
+    private val strength    = float("Strength",      1000f, 1f, 1000f)
+    private val forceTime   = int  ("Force Time",    6000,  0,  24000)
+    private val refreshSec  = int  ("Refresh (s)",   8,     1,  60)
+    private val shortcut    = bool ("Shortcut",      false)
 
     private val TAG = "FullBright"
     private var loop: Job? = null
@@ -30,22 +32,24 @@ class FullBright : BaseModule(
         loop = scope.launch {
             var attempts = 0
             while (currentCoroutineContext().isActive && isEnabled) {
-                if (mode.value == FbMode.NightVision) {
+                val needsNv = mode.value == FbMode.NightVision || mode.value == FbMode.Both
+                if (needsNv) {
                     if (EntityTracker.selfUniqueId == 0L && attempts < 20) {
-                        OverlayLogger.d(TAG, "selfUniqueId=0, bekleniyor ($attempts)")
                         delay(500); attempts++; continue
                     }
                     attempts = 0
                     injectNightVision()
                 }
-                delay(8000)
+                delay(refreshSec.value * 1000L)
             }
         }
     }
 
     override fun onDisable() {
-        loop?.cancel(); loop = null
-        removeNightVision()
+        loop?.cancel()
+        loop = null
+        val needsNv = mode.value == FbMode.NightVision || mode.value == FbMode.Both
+        if (needsNv) removeNightVision()
         super.onDisable()
         OverlayLogger.d(TAG, "Kapandı")
     }
@@ -54,13 +58,15 @@ class FullBright : BaseModule(
         if (!isEnabled) return
         when (event.packet) {
             is StartGamePacket -> {
-                if (mode.value == FbMode.NightVision) {
+                val needsNv = mode.value == FbMode.NightVision || mode.value == FbMode.Both
+                if (needsNv) {
                     scope.launch { delay(200); if (isEnabled) injectNightVision() }
                 }
             }
             is SetTimePacket -> {
-                if (mode.value == FbMode.Gamma && event.direction == PacketEvent.Direction.SERVER_TO_CLIENT)
-                    event.replacementPacket = SetTimePacket().apply { time = 6000 }
+                val needsTime = mode.value == FbMode.TimeForce || mode.value == FbMode.Both
+                if (needsTime && event.direction == PacketEvent.Direction.SERVER_TO_CLIENT)
+                    event.replacementPacket = SetTimePacket().apply { time = forceTime.value }
             }
             else -> {}
         }
@@ -83,11 +89,16 @@ class FullBright : BaseModule(
     }
 
     private fun removeNightVision() {
-        val uid = EntityTracker.selfUniqueId; if (uid == 0L) return
+        val uid = EntityTracker.selfUniqueId
+        if (uid == 0L) return
         val session = PacketEventBus.currentSession ?: return
         session.clientBound(MobEffectPacket().apply {
-            runtimeEntityId = uid; event = MobEffectPacket.Event.REMOVE
-            effectId = 16; amplifier = 0; isParticles = false; duration = 0
+            runtimeEntityId = uid
+            event           = MobEffectPacket.Event.REMOVE
+            effectId        = 16
+            amplifier       = 0
+            isParticles     = false
+            duration        = 0
         })
     }
 }

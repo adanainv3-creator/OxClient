@@ -1,30 +1,39 @@
 package com.oxclient.core.relay.listener
 
+import com.oxclient.core.relay.OxRelaySession
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
 
 /**
- * OxPacketListener — Relay paket dinleyici arayüzü.
- * WRelayPacketListener'dan adapte edildi.
+ * OxPacketListener — relay pipeline'ına eklenen her dinleyicinin implement ettiği arayüz.
  *
- * before* → true döndürürse paket iletilmez (intercept/iptal)
- * after*  → bilgilendirme amaçlı, paket zaten iletildi
+ * Her paket için iki yön metodu çağrılır:
+ *   [onClientPacket] → Client'tan Server'a giden paketler
+ *   [onServerPacket] → Server'dan Client'a gelen paketler
+ *
+ * `false` döndürmek paketi engeller (drop eder); `true` döndürmek iletmeye devam eder.
+ *
+ * Oturum yaşam döngüsü için [onSessionStart] / [onSessionEnd] override edilebilir.
  */
 interface OxPacketListener {
 
-    /** İstemciden (Minecraft) gelen paket sunucuya iletilmeden önce.
-     *  @return true → paketi durdur */
-    fun beforeClientBound(packet: BedrockPacket): Boolean = false
+    /**
+     * Client → Server yönündeki paketi işler.
+     * @return `true` → paketi server'a ilet, `false` → paketi engelle (drop)
+     */
+    fun onClientPacket(packet: BedrockPacket, session: OxRelaySession): Boolean = true
 
-    /** İstemciden gelen paket sunucuya iletildikten sonra. */
-    fun afterClientBound(packet: BedrockPacket) {}
+    /**
+     * Server → Client yönündeki paketi işler.
+     * @return `true` → paketi client'a ilet, `false` → paketi engelle (drop)
+     */
+    fun onServerPacket(packet: BedrockPacket, session: OxRelaySession): Boolean = true
 
-    /** Sunucudan (2b2t) gelen paket istemciye iletilmeden önce.
-     *  @return true → paketi durdur */
-    fun beforeServerBound(packet: BedrockPacket): Boolean = false
+    /** Yeni bir relay oturumu (downstream + upstream bağlantısı) kurulduğunda. */
+    fun onSessionStart(session: OxRelaySession) {}
 
-    /** Sunucudan gelen paket istemciye iletildikten sonra. */
-    fun afterServerBound(packet: BedrockPacket) {}
+    /** Relay oturumu kapandığında / bağlantı kesildiğinde. */
+    fun onSessionEnd(session: OxRelaySession) {}
 
-    /** Bağlantı kesildi (her iki taraftan). */
-    fun onDisconnect(reason: String) {}
+    /** Listener'ın önceliği — düşük sayı = daha erken çağrılır. */
+    val priority: Int get() = 0
 }

@@ -2,44 +2,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-
-
-
-    <!-- Foreground Services -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
-    <!-- Wake Lock — proxy arka planda çalışırken uyumasın -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <!-- Android 11+ Paket Görünürlüğü -->
-    <queries>
-        <package android:name="com.mojang.minecraftpe" />
-        <package android:name="com.netease.mc" />
-        <package android:name="com.mojang.minecrafttrialpe" />
-    </queries>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+        tools:targetApi="34" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:name=".OxClientApp"
         android:allowBackup="false"
         android:icon="@drawable/ic_ox_logo"
-        android:label="OxClient"
+        android:label="@string/app_name"
         android:roundIcon="@drawable/ic_ox_logo"
         android:supportsRtl="true"
         android:theme="@style/Theme.OxClient"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="true"
-        tools:targetApi="35">
+        tools:targetApi="33">
 
-        <!-- Ana Dashboard -->
         <activity
             android:name=".ui.dashboard.DashboardActivity"
             android:exported="true"
@@ -51,22 +35,32 @@
             </intent-filter>
         </activity>
 
-        <!-- Microsoft Auth WebView -->
         <activity
             android:name=".auth.DeviceCodeLoginActivity"
             android:exported="false"
-            android:windowSoftInputMode="adjustResize" />
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.OxClient" />
 
-
-        <!-- Oyun içi Overlay -->
         <service
             android:name=".ui.overlay.OverlayService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse"
+            tools:targetApi="34">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="In-game_HUD_overlay_for_module_control" />
+                android:value="OxClient Relay Overlay" />
         </service>
 
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
+
 </manifest>

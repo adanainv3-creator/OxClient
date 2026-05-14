@@ -1,79 +1,97 @@
 package com.oxclient.core.relay.listener
 
 import android.util.Log
+import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.core.relay.ConnectionManager
 import com.oxclient.core.relay.OxRelaySession
-import com.oxclient.definition.Definitions
-import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
-import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleNamedDefinition
+import com.oxclient.ui.overlay.OverlayLogger
 import org.cloudburstmc.protocol.bedrock.packet.*
-import org.cloudburstmc.protocol.common.NamedDefinition
-import org.cloudburstmc.protocol.common.SimpleDefinitionRegistry
 
-/**
- * GamingPacketListener — Oyun sırasında gerekli tanım senkronizasyonu.
- * WRelay GamingPacketHandler'dan adapte edildi.
- *
- * StartGamePacket    → item/block tanımlarını güncelle
- * CameraPresetsPacket → kamera preset tanımlarını güncelle
- */
-class GamingPacketListener(
-    private val session: OxRelaySession
-) : OxPacketListener {
+class GamingPacketListener : OxPacketListener {
 
-    private val TAG = "GamingPacketListener"
+    companion object {
+        private const val TAG = "GamingPacketListener"
+    }
 
-    override fun beforeServerBound(packet: BedrockPacket): Boolean {
+    override val priority: Int = 100
+
+    @Volatile private var sessionActive = false
+
+    override fun onSessionStart(session: OxRelaySession) {
+        sessionActive = true
+        OverlayLogger.i(TAG, "Gaming listener aktif: ${session.clientAddress}")
+    }
+
+    override fun onSessionEnd(session: OxRelaySession) {
+        sessionActive = false
+        OverlayLogger.i(TAG, "Gaming listener sonlandı: ${session.clientAddress}")
+    }
+
+    override fun onClientPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
+        if (!sessionActive) return true
         when (packet) {
-            is StartGamePacket -> handleStartGame(packet)
-            is CameraPresetsPacket -> handleCameraPresets(packet)
+            is MovePlayerPacket -> {
+            }
+            is PlayerAuthInputPacket -> {
+            }
+            is PlayerActionPacket -> {
+                Log.v(TAG, "PlayerAction: ${packet.action}")
+            }
+            is InteractPacket -> {
+                Log.v(TAG, "Interact: ${packet.action} → entity ${packet.runtimeEntityId}")
+            }
+            is InventoryTransactionPacket -> {
+                Log.v(TAG, "InventoryTransaction: ${packet.transactionType}")
+            }
+            is CommandRequestPacket -> {
+                Log.d(TAG, "Command: ${packet.command}")
+            }
+            is TextPacket -> {
+                Log.d(TAG, "Chat (C→S): ${packet.message}")
+            }
             is DisconnectPacket -> {
-                Log.i(TAG, "Sunucu disconnect gönderdi: ${packet.kickMessage}")
+                OverlayLogger.i(TAG, "Client disconnect talebi: ${packet.kickMessage}")
             }
         }
-        return false  // paketi durdurma, sadece yan etki
+        return true
     }
 
-    private fun handleStartGame(packet: StartGamePacket) {
-        try {
-            // Item tanımlarını güncelle
-            Definitions.itemDefinitions = SimpleDefinitionRegistry.builder<ItemDefinition>()
-                .addAll(packet.itemDefinitions)
-                .build()
-
-            val blockDefs = if (packet.isBlockNetworkIdsHashed)
-                Definitions.blockDefinitionsHashed
-            else
-                Definitions.blockDefinitions
-
-            session.client?.peer?.codecHelper?.apply {
-                itemDefinitions  = Definitions.itemDefinitions
-                blockDefinitions = blockDefs
+    override fun onServerPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
+        if (!sessionActive) return true
+        when (packet) {
+            is StartGamePacket -> {
+                OverlayLogger.i(TAG, "StartGame alındı — oyun içi başladı (entityId=${packet.runtimeEntityId})")
+                ConnectionManager.onGameStarted()
             }
-            session.server.peer.codecHelper.apply {
-                itemDefinitions  = Definitions.itemDefinitions
-                blockDefinitions = blockDefs
+            is RespawnPacket -> {
+                Log.d(TAG, "Respawn: ${packet.position}, state=${packet.state}")
             }
-
-            Log.i(TAG, "StartGame tanımları senkronize edildi (hashed=${packet.isBlockNetworkIdsHashed})")
-        } catch (e: Exception) {
-            Log.e(TAG, "StartGame tanım hatası: ${e.message}", e)
+            is DisconnectPacket -> {
+                OverlayLogger.w(TAG, "Server disconnect: ${packet.kickMessage}")
+            }
+            is TextPacket -> {
+                Log.v(TAG, "Chat (S→C): ${packet.message}")
+            }
+            is SetHealthPacket -> {
+                Log.v(TAG, "Health: ${packet.health}")
+            }
+            is UpdateAttributesPacket -> {
+            }
+            is MoveEntityAbsolutePacket -> {
+            }
+            is AddEntityPacket -> {
+                Log.v(TAG, "AddEntity: type=${packet.identifier}, id=${packet.runtimeEntityId}")
+            }
+            is RemoveEntityPacket -> {
+                Log.v(TAG, "RemoveEntity: id=${packet.uniqueEntityId}")
+            }
+            is PlayerListPacket -> {
+                Log.v(TAG, "PlayerList: action=${packet.action}, count=${packet.entries.size}")
+            }
+            is ChangeDimensionPacket -> {
+                OverlayLogger.i(TAG, "ChangeDimension → dim=${packet.dimension}")
+            }
         }
-    }
-
-    private fun handleCameraPresets(packet: CameraPresetsPacket) {
-        try {
-            val defs = SimpleDefinitionRegistry.builder<NamedDefinition>()
-                .addAll(packet.presets.mapIndexed { i, preset ->
-                    SimpleNamedDefinition(preset.identifier, i)
-                })
-                .build()
-
-            session.client?.peer?.codecHelper?.cameraPresetDefinitions = defs
-            session.server.peer.codecHelper.cameraPresetDefinitions    = defs
-
-            Log.d(TAG, "CameraPresets güncellendi (${packet.presets.size} preset)")
-        } catch (e: Exception) {
-            Log.e(TAG, "CameraPresets hatası: ${e.message}", e)
-        }
+        return true
     }
 }

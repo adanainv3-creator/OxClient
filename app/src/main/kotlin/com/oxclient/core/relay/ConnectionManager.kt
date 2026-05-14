@@ -1,137 +1,73 @@
 package com.oxclient.core.relay
 
 import android.util.Log
-import io.netty.bootstrap.Bootstrap
-import io.netty.channel.Channel
-import io.netty.channel.nio.NioEventLoopGroup
-import io.netty.channel.socket.nio.NioDatagramChannel
-import kotlinx.coroutines.*
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
-import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
-import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
-import org.cloudburstmc.protocol.bedrock.BedrockPeer
-import org.cloudburstmc.protocol.bedrock.PacketDirection
-import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
-import kotlin.random.Random
+import com.oxclient.core.relay.listener.*
+import com.oxclient.events.PacketEventBus
+import com.oxclient.module.ModuleManager
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * ConnectionManager — OxRelay adına sunucuya RakNet bağlantısı kurar.
- * WRelay ConnectionManager'dan adapte edildi.
- */
-class ConnectionManager(
-    private val session: OxRelaySession
-) {
-    private val TAG = "ConnectionManager"
+object ConnectionManager {
 
-    private var isConnecting = false
-    private var eventLoopGroup: NioEventLoopGroup? = null
+    private const val TAG = "ConnectionManager"
 
-    companion object {
-        private const val CONNECTION_TIMEOUT_MS = 15_000L
-        private const val MAX_RETRY             = 3
-        private const val RETRY_DELAY_MS        = 2_000L
+    enum class State {
+        IDLE,
+        CONNECTING,
+        HANDSHAKING,
+        PLAYING,
+        DISCONNECTED
     }
 
-    fun cleanup() {
-        eventLoopGroup?.shutdownGracefully()
-        eventLoopGroup = null
-        isConnecting   = false
+    private val _state = MutableStateFlow(State.IDLE)
+    val state: StateFlow<State> = _state.asStateFlow()
+
+    private val _ping = MutableStateFlow(-1L)
+    val ping: StateFlow<Long> = _ping.asStateFlow()
+
+    fun setupSession(session: OxRelaySession) {
+        Log.d(TAG, "Session kuruluyor: ${session.clientAddress}")
+
+        PacketEventBus.setSession(session)
+
+        val listeners = listOf(
+            AutoCodecListener(),
+            LoginPacketListener(),
+            GamingPacketListener(),
+        )
+
+        listeners.sortedBy { it.priority }.forEach { listener ->
+            session.listeners.add(listener)
+            Log.v(TAG, "Listener eklendi: ${listener::class.simpleName} (priority=${listener.priority})")
+        }
+
+        ModuleManager.registerToSession(session)
+
+        _state.value = State.CONNECTING
     }
 
-    suspend fun connectToServer(
-        host: String,
-        port: Int,
-        onConnected: OxRelaySession.ClientSession.() -> Unit
-    ): Result<OxRelaySession.ClientSession> = withContext(Dispatchers.IO) {
-
-        if (isConnecting) {
-            return@withContext Result.failure(IllegalStateException("Zaten bağlanılıyor"))
-        }
-        isConnecting = true
-
-        try {
-            var lastEx: Exception? = null
-            repeat(MAX_RETRY) { attempt ->
-                try {
-                    Log.i(TAG, "Bağlantı denemesi ${attempt + 1}/$MAX_RETRY → $host:$port")
-                    val client = attemptConnection(host, port, onConnected)
-                    Log.i(TAG, "Bağlantı başarılı: $host:$port")
-                    return@withContext Result.success(client)
-                } catch (e: Exception) {
-                    lastEx = e
-                    Log.w(TAG, "Deneme ${attempt + 1} başarısız: ${e.message}")
-                    if (attempt < MAX_RETRY - 1) delay(RETRY_DELAY_MS)
-                }
-            }
-            Result.failure(lastEx ?: Exception("$MAX_RETRY denemede bağlantı kurulamadı"))
-        } finally {
-            isConnecting = false
-        }
+    fun onGameStarted() {
+        _state.value = State.PLAYING
+        Log.i(TAG, "Oyun başladı")
     }
 
-    private suspend fun attemptConnection(
-        host: String,
-        port: Int,
-        onConnected: OxRelaySession.ClientSession.() -> Unit
-    ): OxRelaySession.ClientSession = suspendCoroutine { cont ->
-
-        if (eventLoopGroup == null || eventLoopGroup!!.isShuttingDown) {
-            eventLoopGroup = NioEventLoopGroup()
-        }
-
-        val bootstrap = Bootstrap()
-            .group(eventLoopGroup)
-            .channelFactory(RakChannelFactory.client(NioDatagramChannel::class.java))
-            .option(RakChannelOption.RAK_PROTOCOL_VERSION, 11)
-            .option(RakChannelOption.RAK_GUID, Random.nextLong())
-            .option(RakChannelOption.RAK_CONNECT_TIMEOUT, CONNECTION_TIMEOUT_MS)
-            .option(RakChannelOption.RAK_SESSION_TIMEOUT, 30_000L)
-            .option(RakChannelOption.RAK_COMPATIBILITY_MODE, true)
-            .option(RakChannelOption.RAK_MTU, 1400)
-            .handler(object : BedrockChannelInitializer<OxRelaySession.ClientSession>() {
-
-                override fun createSession0(peer: BedrockPeer, subClientId: Int): OxRelaySession.ClientSession =
-                    session.ClientSession(peer, subClientId)
-
-                override fun initSession(clientSession: OxRelaySession.ClientSession) {
-                    session.client = clientSession
-                    if (!cont.context.isActive) return
-                    try {
-                        cont.resume(clientSession)
-                        onConnected(clientSession)
-                    } catch (_: Exception) {}
-                }
-
-                override fun preInitChannel(channel: Channel) {
-                    channel.attr(PacketDirection.ATTRIBUTE).set(PacketDirection.SERVER_BOUND)
-                    super.preInitChannel(channel)
-                }
-            })
-            .remoteAddress(host, port)
-
-        val future = bootstrap.connect()
-
-        // Timeout job
-        val timeoutJob = CoroutineScope(Dispatchers.IO).launch {
-            delay(CONNECTION_TIMEOUT_MS + 5_000)
-            if (!future.isDone) {
-                future.cancel(true)
-                try { cont.resumeWithException(Exception("Bağlantı zaman aşımı: $host:$port")) }
-                catch (_: Exception) {}
-            }
-        }
-
-        future.addListener { f ->
-            timeoutJob.cancel()
-            if (!f.isSuccess) {
-                try {
-                    cont.resumeWithException(
-                        f.cause() ?: Exception("Bağlantı başarısız: $host:$port")
-                    )
-                } catch (_: Exception) {}
-            }
-        }
+    fun onHandshaking() {
+        _state.value = State.HANDSHAKING
     }
+
+    fun onDisconnected(reason: String = "") {
+        _state.value = State.DISCONNECTED
+        _ping.value  = -1L
+        Log.i(TAG, "Bağlantı kesildi: $reason")
+        PacketEventBus.setSession(null)
+        _state.value = State.IDLE
+    }
+
+    fun updatePing(ms: Long) {
+        _ping.value = ms
+    }
+
+    val isPlaying   : Boolean get() = _state.value == State.PLAYING
+    val isConnected : Boolean get() = _state.value == State.PLAYING || _state.value == State.HANDSHAKING
 }

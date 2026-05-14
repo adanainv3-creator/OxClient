@@ -1,219 +1,180 @@
 package com.oxclient.core.relay
 
+import android.util.Log
 import com.oxclient.core.relay.listener.OxPacketListener
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
-import io.netty.util.internal.PlatformDependent
+import io.netty.bootstrap.Bootstrap
+import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.socket.nio.NioDatagramChannel
+import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
 import org.cloudburstmc.protocol.bedrock.BedrockClientSession
-import org.cloudburstmc.protocol.bedrock.BedrockPeer
 import org.cloudburstmc.protocol.bedrock.BedrockServerSession
-import org.cloudburstmc.protocol.bedrock.netty.BedrockPacketWrapper
+import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
+import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockClientInitializer
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
-import org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler
-import org.cloudburstmc.protocol.bedrock.packet.UnknownPacket
-import java.util.*
+import org.cloudburstmc.protocol.bedrock.packet.DisconnectPacket
+import java.net.InetSocketAddress
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * OxRelaySession — İstemci (Minecraft) ↔ Sunucu (2b2t) köprüsü.
- *
- * İki iç sınıf:
- *   ServerSession — istemciden gelen paketleri alır (C→S yönü)
- *   ClientSession — sunucudan gelen paketleri alır (S→C yönü)
- *
- * Her iki yönde de:
- *   1. OxPacketListener.before* → modifiye etme / iptal etme şansı
- *   2. PacketEventBus.publish() → OxClient modülleri (KillAura vb.)
- *   3. Paket karşı tarafa iletilir (UnknownPacket olarak — ham bytes)
- *   4. OxPacketListener.after* → son işlemler
- */
-class OxRelaySession internal constructor(
-    peer: BedrockPeer,
-    subClientId: Int,
-    val relay: OxRelay
+class OxRelaySession(
+    val clientSession: BedrockServerSession,
+    val remoteHost   : String,
+    val remotePort   : Int,
+    private val relay: OxRelay
 ) {
-    val server = ServerSession(peer, subClientId)
+    companion object {
+        private const val TAG = "OxRelaySession"
+    }
 
-    var client: ClientSession? = null
-        internal set(value) {
-            value?.let { cs ->
-                try {
-                    cs.codec = server.codec
-                    cs.peer.codecHelper.blockDefinitions    = server.peer.codecHelper.blockDefinitions
-                    cs.peer.codecHelper.itemDefinitions     = server.peer.codecHelper.itemDefinitions
-                    cs.peer.codecHelper.cameraPresetDefinitions = server.peer.codecHelper.cameraPresetDefinitions
-                    cs.peer.codecHelper.encodingSettings    = server.peer.codecHelper.encodingSettings
+    @Volatile var serverSession: BedrockClientSession? = null
+        private set
 
-                    // Client bağlandıktan önce kuyruğa alınan paketleri gönder
-                    var processed = 0
-                    var item: Pair<BedrockPacket, Boolean>?
-                    while (packetQueue.poll().also { item = it } != null) {
-                        runCatching {
-                            if (item!!.second) cs.sendPacketImmediately(item!!.first)
-                            else               cs.sendPacket(item!!.first)
-                            processed++
-                        }
+    private val closed = AtomicBoolean(false)
+
+    val listeners = CopyOnWriteArrayList<OxPacketListener>()
+
+    @Volatile var activeCodec: BedrockCodec = OxRelay.RELAY_CODEC
+        internal set
+
+    private val clientEventLoop = NioEventLoopGroup(2)
+
+    fun init() {
+        clientSession.setPacketHandler(ClientPacketHandler())
+        clientSession.addDisconnectHandler { reason ->
+            Log.i(TAG, "Client bağlantısı kesildi: $reason")
+            onClientDisconnect(reason.toString())
+        }
+        Log.i(TAG, "OxRelaySession init: ${clientSession.socketAddress} → $remoteHost:$remotePort")
+        connectToServer()
+    }
+
+    private fun connectToServer() {
+        val remoteAddress = InetSocketAddress(remoteHost, remotePort)
+        Bootstrap()
+            .channelFactory(RakChannelFactory.client(NioDatagramChannel::class.java))
+            .group(clientEventLoop)
+            .handler(object : BedrockClientInitializer() {
+                override fun initSession(session: BedrockClientSession) {
+                    serverSession = session
+                    session.setCodec(activeCodec)
+                    session.setPacketHandler(ServerPacketHandler())
+                    session.addDisconnectHandler { reason ->
+                        Log.i(TAG, "Server bağlantısı kesildi: $reason")
+                        onServerDisconnect(reason.toString())
                     }
-                    if (processed > 0)
-                        android.util.Log.d("OxRelaySession", "Kuyruktan $processed paket gönderildi")
-                } catch (e: Exception) {
-                    android.util.Log.e("OxRelaySession", "Client init hatası: ${e.message}")
+                    Log.i(TAG, "Server'a bağlandı: $remoteAddress")
+                    notifyListenersConnected()
+                }
+            })
+            .connect(remoteAddress)
+            .addListener { future ->
+                if (!future.isSuccess) {
+                    Log.e(TAG, "Server'a bağlanılamadı: ${future.cause()?.message}")
+                    disconnect("Server'a bağlanılamadı")
                 }
             }
-            field = value
-        }
-
-    val listeners: MutableList<OxPacketListener> = ArrayList()
-
-    private val packetQueue: Queue<Pair<BedrockPacket, Boolean>> =
-        PlatformDependent.newMpscQueue()
-
-    // ── Yardımcı göndericiler ─────────────────────────────────────────────
-
-    /** Paketi istemciye (Minecraft) gönder */
-    fun clientBound(packet: BedrockPacket) {
-        runCatching { server.sendPacket(packet) }
-            .onFailure { android.util.Log.e("OxRelaySession", "clientBound hatası: ${it.message}") }
     }
 
-    fun clientBoundImmediately(packet: BedrockPacket) {
-        runCatching { server.sendPacketImmediately(packet) }
-            .onFailure { android.util.Log.e("OxRelaySession", "clientBoundImm hatası: ${it.message}") }
-    }
+    fun handleClientPacket(packet: BedrockPacket): Boolean {
+        val event = PacketEvent(packet, PacketEvent.Direction.CLIENT_TO_SERVER, this)
+        PacketEventBus.publish(event)
 
-    /** Paketi sunucuya (2b2t) gönder */
-    fun serverBound(packet: BedrockPacket) {
-        val c = client
-        if (c != null) {
-            runCatching { c.sendPacket(packet) }
-                .onFailure { android.util.Log.e("OxRelaySession", "serverBound hatası: ${it.message}") }
-        } else {
-            if (packetQueue.size < 1000) packetQueue.add(packet to false)
-            else android.util.Log.w("OxRelaySession", "Kuyruk dolu, paket atıldı")
-        }
-    }
+        val effective = event.replacementPacket ?: packet
 
-    fun serverBoundImmediately(packet: BedrockPacket) {
-        val c = client
-        if (c != null) {
-            runCatching { c.sendPacketImmediately(packet) }
-                .onFailure { android.util.Log.e("OxRelaySession", "serverBoundImm hatası: ${it.message}") }
-        } else {
-            if (packetQueue.size < 1000) packetQueue.add(packet to true)
-            else android.util.Log.w("OxRelaySession", "Kuyruk dolu, paket atıldı")
-        }
-    }
+        if (event.isCancelled) return false
 
-    // ── İstemciden gelen paketler (C→S) ──────────────────────────────────
-
-    inner class ServerSession(peer: BedrockPeer, subClientId: Int) :
-        BedrockServerSession(peer, subClientId) {
-
-        init {
-            packetHandler = object : BedrockPacketHandler {
-                override fun onDisconnect(reason: CharSequence) {
-                    android.util.Log.i("OxRelaySession", "İstemci bağlantısı kesildi: $reason")
-                    runCatching { client?.disconnect() }
-                    listeners.forEach { runCatching { it.onDisconnect(reason.toString()) } }
-                    relay.connectionManager?.cleanup()
-                }
-            }
+        for (listener in listeners) {
+            if (!listener.onClientPacket(effective, this)) return false
         }
 
-        override fun onPacket(wrapper: BedrockPacketWrapper) {
-            try {
-                // 1. Listener'lar: before → iptal edilirse ilet
-                for (l in listeners) {
-                    try { if (l.beforeClientBound(wrapper.packet)) return }
-                    catch (e: Throwable) { android.util.Log.e("OxRelaySession", "beforeClientBound: ${e.message}") }
-                }
+        if (event.replacementPacket != null) {
+            sendToServer(event.replacementPacket!!)
+            return false
+        }
+        return true
+    }
 
-                // 2. PacketEventBus — C→S yönü (modüller görsün)
-                val event = PacketEvent(
-                    packetId  = wrapper.packetId,
-                    packet    = wrapper.packet,
-                    direction = PacketEvent.Direction.CLIENT_TO_SERVER,
-                    session   = this@OxRelaySession
-                )
-                PacketEventBus.publish(event)
+    fun handleServerPacket(packet: BedrockPacket): Boolean {
+        val event = PacketEvent(packet, PacketEvent.Direction.SERVER_TO_CLIENT, this)
+        PacketEventBus.publish(event)
 
-                // 3. Ham paketi sunucuya ilet (modifiye edilmediyse orijinal)
-                if (!event.isCancelled) {
-                    val outPacket = event.replacementPacket ?: run {
-                        val buf = wrapper.packetBuffer
-                            .retainedSlice()
-                            .skipBytes(wrapper.headerLength)
-                        UnknownPacket().also {
-                            it.payload  = buf
-                            it.packetId = wrapper.packetId
-                        }
-                    }
-                    serverBound(outPacket)
-                }
+        val effective = event.replacementPacket ?: packet
 
-                // 4. after
-                for (l in listeners) {
-                    runCatching { l.afterClientBound(wrapper.packet) }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("OxRelaySession", "C→S paket hatası: ${e.message}")
-            }
+        if (event.isCancelled) return false
+
+        for (listener in listeners) {
+            if (!listener.onServerPacket(effective, this)) return false
+        }
+
+        if (event.replacementPacket != null) {
+            sendToClient(event.replacementPacket!!)
+            return false
+        }
+        return true
+    }
+
+    fun sendToClient(packet: BedrockPacket) {
+        if (closed.get()) return
+        try { clientSession.sendPacketImmediately(packet) }
+        catch (e: Exception) { Log.w(TAG, "Client'a paket gönderilemedi: ${e.message}") }
+    }
+
+    fun sendToServer(packet: BedrockPacket) {
+        if (closed.get()) return
+        val srv = serverSession ?: return
+        try { srv.sendPacketImmediately(packet) }
+        catch (e: Exception) { Log.w(TAG, "Server'a paket gönderilemedi: ${e.message}") }
+    }
+
+    fun clientBound(packet: BedrockPacket) = sendToClient(packet)
+
+    fun serverBound(packet: BedrockPacket) = sendToServer(packet)
+
+    fun disconnect(reason: String = "Relay kapatıldı") {
+        if (!closed.compareAndSet(false, true)) return
+        Log.i(TAG, "Session kapatılıyor: $reason")
+        try {
+            val pkt = DisconnectPacket()
+            pkt.kickMessage     = reason
+            pkt.isMessageSkipped = false
+            clientSession.sendPacketImmediately(pkt)
+        } catch (_: Exception) {}
+        try { clientSession.disconnect() }           catch (_: Exception) {}
+        try { serverSession?.disconnect() }          catch (_: Exception) {}
+        try { clientEventLoop.shutdownGracefully() } catch (_: Exception) {}
+        relay.removeSession(this)
+        listeners.forEach { it.onSessionEnd(this) }
+        listeners.clear()
+    }
+
+    private fun onClientDisconnect(reason: String) {
+        try { serverSession?.disconnect() } catch (_: Exception) {}
+        relay.removeSession(this)
+        listeners.forEach { it.onSessionEnd(this) }
+    }
+
+    private fun onServerDisconnect(reason: String) { disconnect(reason) }
+
+    private fun notifyListenersConnected() {
+        listeners.forEach { it.onSessionStart(this) }
+    }
+
+    inner class ClientPacketHandler : org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler {
+        override fun handlePacket(packet: BedrockPacket): Boolean {
+            if (handleClientPacket(packet)) sendToServer(packet)
+            return true
         }
     }
 
-    // ── Sunucudan gelen paketler (S→C) ────────────────────────────────────
-
-    inner class ClientSession(peer: BedrockPeer, subClientId: Int) :
-        BedrockClientSession(peer, subClientId) {
-
-        init {
-            packetHandler = object : BedrockPacketHandler {
-                override fun onDisconnect(reason: CharSequence) {
-                    android.util.Log.i("OxRelaySession", "Sunucu bağlantısı kesildi: $reason")
-                    runCatching { server.disconnect(reason.toString()) }
-                    listeners.forEach { runCatching { it.onDisconnect(reason.toString()) } }
-                    relay.connectionManager?.cleanup()
-                }
-            }
-        }
-
-        override fun onPacket(wrapper: BedrockPacketWrapper) {
-            try {
-                // 1. before
-                for (l in listeners) {
-                    try { if (l.beforeServerBound(wrapper.packet)) return }
-                    catch (e: Throwable) { android.util.Log.e("OxRelaySession", "beforeServerBound: ${e.message}") }
-                }
-
-                // 2. PacketEventBus — S→C yönü
-                val event = PacketEvent(
-                    packetId  = wrapper.packetId,
-                    packet    = wrapper.packet,
-                    direction = PacketEvent.Direction.SERVER_TO_CLIENT,
-                    session   = this@OxRelaySession
-                )
-                PacketEventBus.publish(event)
-
-                // 3. Ham paketi istemciye ilet
-                if (!event.isCancelled) {
-                    val outPacket = event.replacementPacket ?: run {
-                        val buf = wrapper.packetBuffer
-                            .retainedSlice()
-                            .skipBytes(wrapper.headerLength)
-                        UnknownPacket().also {
-                            it.payload  = buf
-                            it.packetId = wrapper.packetId
-                        }
-                    }
-                    clientBound(outPacket)
-                }
-
-                // 4. after
-                for (l in listeners) {
-                    runCatching { l.afterServerBound(wrapper.packet) }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("OxRelaySession", "S→C paket hatası: ${e.message}")
-            }
+    inner class ServerPacketHandler : org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler {
+        override fun handlePacket(packet: BedrockPacket): Boolean {
+            if (handleServerPacket(packet)) sendToClient(packet)
+            return true
         }
     }
+
+    val isClosed: Boolean get() = closed.get()
+    val clientAddress: String get() = clientSession.socketAddress?.toString() ?: "unknown"
 }

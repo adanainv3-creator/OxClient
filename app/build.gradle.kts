@@ -2,20 +2,20 @@ import java.util.concurrent.TimeUnit
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.android") version "2.0.0"
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.0"
 }
 
 android {
-    namespace = "com.oxclient"
+    namespace  = "com.oxclient"
     compileSdk = 35
 
     defaultConfig {
         applicationId = "com.oxclient"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "2.0.0"
+        minSdk        = 26
+        targetSdk     = 35
+        versionCode   = 2
+        versionName   = "3.0.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -24,33 +24,34 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file(System.getenv("KEYSTORE_PATH") ?: "debug.jks")
+            storeFile     = file(System.getenv("KEYSTORE_PATH") ?: "debug.jks")
             storePassword = System.getenv("KEYSTORE_PASS") ?: "oxclient"
-            keyAlias = System.getenv("KEY_ALIAS") ?: "oxclient"
-            keyPassword = System.getenv("KEY_PASS") ?: "oxclient"
+            keyAlias      = System.getenv("KEY_ALIAS")     ?: "oxclient"
+            keyPassword   = System.getenv("KEY_PASS")      ?: "oxclient"
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled   = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig     = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
         debug {
-            isMinifyEnabled = false
+            isMinifyEnabled     = false
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-DEBUG"
+            versionNameSuffix   = "-DEBUG"
         }
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility          = JavaVersion.VERSION_17
+        targetCompatibility          = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -59,7 +60,6 @@ android {
 
     buildFeatures {
         compose = true
-        buildConfig = true
     }
 
     packaging {
@@ -72,10 +72,25 @@ android {
                 "META-INF/NOTICE*",
                 "META-INF/AL2.0",
                 "META-INF/LGPL2.1",
-                "META-INF/versions/**"
+                "META-INF/versions/**",
+                "META-INF/native-image/**",
+                "META-INF/proguard/**",
+                "google/protobuf/**",
+                "DebugProbesKt.bin"
             )
         }
+        jniLibs {
+            excludes += listOf("**/libnetty_transport_native_epoll*.so")
+        }
     }
+}
+
+repositories {
+    google()
+    mavenCentral()
+    maven("https://repo.opencollab.dev/maven-snapshots/")
+    maven("https://repo.opencollab.dev/maven-releases/")
+    maven("https://jitpack.io")
 }
 
 dependencies {
@@ -101,25 +116,28 @@ dependencies {
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.foundation:foundation")
     debugImplementation("androidx.compose.ui:ui-tooling")
-
     implementation("androidx.savedstate:savedstate-ktx:1.2.1")
+
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    // CloudburstMC Protocol — Bedrock MITM relay
-    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta5-SNAPSHOT") {
+    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta6-SNAPSHOT") {
         exclude(group = "io.netty", module = "netty-transport-native-epoll")
         exclude(group = "io.netty", module = "netty-transport-native-kqueue")
+        exclude(group = "io.netty.incubator", module = "netty-incubator-transport-native-io_uring")
     }
-
-    // CloudburstMC NBT
+    implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta6-SNAPSHOT")
     implementation("org.cloudburstmc:nbt:3.0.0.Final")
-
-    // FastUtil — NbtBlockDefinitionRegistry için
     implementation("it.unimi.dsi:fastutil-core:8.5.13")
 
-    // jose4j — JWT işleme (login chain imzalama)
+    implementation("io.netty:netty-transport:4.1.111.Final")
+    implementation("io.netty:netty-codec:4.1.111.Final")
+    implementation("io.netty:netty-handler:4.1.111.Final")
+    implementation("io.netty:netty-buffer:4.1.111.Final")
+
     implementation("org.bitbucket.b_c:jose4j:0.9.6")
+
+    coreLibraryDesugaring("com.android.tools.build:desugaring:2.0.4")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

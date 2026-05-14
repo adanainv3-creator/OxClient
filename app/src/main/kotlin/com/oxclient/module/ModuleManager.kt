@@ -1,9 +1,7 @@
 package com.oxclient.module
 
 import android.util.Log
-import com.oxclient.module.combat.*
-import com.oxclient.module.movement.*
-import com.oxclient.module.visual.*
+import com.oxclient.core.relay.OxRelaySession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,22 +18,29 @@ object ModuleManager {
 
     private var initialized = false
 
-    fun init() {
-        if (initialized) return
+    fun registerAll(vararg mods: BaseModule) {
+        if (initialized) {
+            Log.w(TAG, "registerAll() zaten çağrıldı, atlanıyor")
+            return
+        }
         initialized = true
-        register(
-            KillAura(), Criticals(), CrystalAura(), AutoTotem(),
-            TPAura(), Jetpack(),
-            FullBright()
-        )
+        _modules.addAll(mods)
         Log.d(TAG, "${_modules.size} modül yüklendi")
     }
 
-    private fun register(vararg mods: BaseModule) { _modules.addAll(mods) }
+    fun register(vararg mods: BaseModule) = registerAll(*mods)
+
+    fun getAll(): List<BaseModule> = _modules
+
+    fun registerToSession(session: OxRelaySession) {
+        Log.d(TAG, "registerToSession: ${_modules.count { it.isEnabled }} aktif modül PacketEventBus'ta")
+    }
 
     fun shortcutModules(): List<BaseModule> =
-        _modules.filter { m -> m.settings.filterIsInstance<BoolSetting>()
-            .any { it.name == "Shortcut" && it.value } }
+        _modules.filter { m ->
+            m.settings.filterIsInstance<BoolSetting>()
+                .any { it.name == "Shortcut" && it.value }
+        }
 
     fun toggle(module: BaseModule) {
         module.setEnabled(!module.isEnabled)
@@ -61,4 +66,11 @@ object ModuleManager {
 
     fun byCategory(cat: ModuleCategory): List<BaseModule> =
         _modules.filter { it.category == cat }
+
+    fun enabledCount(): Int = _modules.count { it.isEnabled }
+
+    fun combatModules()   = byCategory(ModuleCategory.COMBAT)
+    fun movementModules() = byCategory(ModuleCategory.MOVEMENT)
+    fun visualModules()   = byCategory(ModuleCategory.VISUAL)
+    fun miscModules()     = byCategory(ModuleCategory.MISC)
 }
