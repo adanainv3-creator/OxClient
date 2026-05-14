@@ -23,6 +23,9 @@ dependencyResolutionManagement {
         maven {
             url = uri("https://repo.opencollab.dev/maven-releases")
         }
+        maven {
+            url = uri("https://jitpack.io")
+        }
     }
 }
 

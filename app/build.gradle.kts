@@ -2,20 +2,20 @@ import java.util.concurrent.TimeUnit
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android") version "2.0.0"
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.0"
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
-    namespace  = "com.oxclient"
+    namespace = "com.oxclient"
     compileSdk = 35
 
     defaultConfig {
         applicationId = "com.oxclient"
-        minSdk        = 26
-        targetSdk     = 35
-        versionCode   = 2
-        versionName   = "3.0.0"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 2
+        versionName = "3.0.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -24,33 +24,33 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile     = file(System.getenv("KEYSTORE_PATH") ?: "debug.jks")
+            storeFile = file(System.getenv("KEYSTORE_PATH") ?: "debug.jks")
             storePassword = System.getenv("KEYSTORE_PASS") ?: "oxclient"
-            keyAlias      = System.getenv("KEY_ALIAS")     ?: "oxclient"
-            keyPassword   = System.getenv("KEY_PASS")      ?: "oxclient"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "oxclient"
+            keyPassword = System.getenv("KEY_PASS") ?: "oxclient"
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled   = true
+            isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig     = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
         debug {
-            isMinifyEnabled     = false
+            isMinifyEnabled = false
             applicationIdSuffix = ".debug"
-            versionNameSuffix   = "-DEBUG"
+            versionNameSuffix = "-DEBUG"
         }
     }
 
     compileOptions {
-        sourceCompatibility          = JavaVersion.VERSION_17
-        targetCompatibility          = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -83,14 +83,6 @@ android {
             excludes += listOf("**/libnetty_transport_native_epoll*.so")
         }
     }
-}
-
-repositories {
-    google()
-    mavenCentral()
-    maven("https://repo.opencollab.dev/maven-snapshots/")
-    maven("https://repo.opencollab.dev/maven-releases/")
-    maven("https://jitpack.io")
 }
 
 dependencies {
