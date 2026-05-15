@@ -28,8 +28,12 @@ class Criticals : BaseModule(
         val pkt = event.packet as? InventoryTransactionPacket ?: return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
         if (pkt.transactionType != InventoryTransactionType.ITEM_USE_ON_ENTITY) return
-        val isAttack = pkt.actions.filterIsInstance<ItemUseOnEntityInventoryAction>()
-            .any { it.actionType == ItemUseOnEntityInventoryAction.TYPE_ATTACK }
+
+        // FIX: 3.x — actions list contains InventoryAction subtypes; filter and check type
+        val isAttack = pkt.actions
+            .filterIsInstance<ItemUseOnEntityInventoryAction>()
+            .any { it.type == ItemUseOnEntityInventoryAction.TYPE_ATTACK }
+
         if (!isAttack) return
         val now = System.currentTimeMillis()
         if (now - lastCritMs < cooldown.value) return

@@ -17,6 +17,9 @@ android {
         versionCode = 2
         versionName = "3.0.0"
 
+        // FIX: BuildConfig üretimi için gerekli
+        buildConfigField("String", "VERSION_NAME", "\"3.0.0\"")
+
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -60,6 +63,8 @@ android {
 
     buildFeatures {
         compose = true
+        // FIX: BuildConfig sınıfını üret (OxClientApp.kt'deki BuildConfig.VERSION_NAME için)
+        buildConfig = true
     }
 
     packaging {
@@ -113,15 +118,25 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
+    // ── CloudburstMC Protocol ──────────────────────────────────────────────
+    // Versiyon: 3.0.0.Beta6-SNAPSHOT — resmi README'deki en güncel versiyon.
+    // FIX: cloudburstmc kendi fastutil'ini (org.cloudburstmc.fastutil:core:8.5.15)
+    //      getiriyor. it.unimi.dsi:fastutil-core çakışmasını önlemek için exclude et.
     implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta6-SNAPSHOT") {
         exclude(group = "io.netty", module = "netty-transport-native-epoll")
         exclude(group = "io.netty", module = "netty-transport-native-kqueue")
         exclude(group = "io.netty.incubator", module = "netty-incubator-transport-native-io_uring")
+        // FIX: fastutil duplicate'i tam olarak kapat
+        exclude(group = "it.unimi.dsi", module = "fastutil-core")
+        exclude(group = "it.unimi.dsi", module = "fastutil")
     }
-    implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta6-SNAPSHOT")
+    implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta6-SNAPSHOT") {
+        exclude(group = "it.unimi.dsi", module = "fastutil-core")
+        exclude(group = "it.unimi.dsi", module = "fastutil")
+    }
     implementation("org.cloudburstmc:nbt:3.0.0.Final")
-    implementation("it.unimi.dsi:fastutil-core:8.5.14")
 
+    // ── Netty ──────────────────────────────────────────────────────────────
     implementation("io.netty:netty-transport:4.1.115.Final")
     implementation("io.netty:netty-codec:4.1.115.Final")
     implementation("io.netty:netty-handler:4.1.115.Final")
@@ -140,5 +155,12 @@ configurations.all {
     resolutionStrategy {
         cacheChangingModulesFor(0, TimeUnit.SECONDS)
         force("io.netty:netty-common:4.1.115.Final")
+        force("io.netty:netty-buffer:4.1.115.Final")
+        force("io.netty:netty-transport:4.1.115.Final")
+        force("io.netty:netty-codec:4.1.115.Final")
+        force("io.netty:netty-handler:4.1.115.Final")
+        // FIX: cloudburstmc fastutil'i kullanılsın, vanilla fastutil değil
+        // Eğer hâlâ çakışma çıkarsa bu satırı aç:
+        // force("org.cloudburstmc.fastutil:core:8.5.15")
     }
 }

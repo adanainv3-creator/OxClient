@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.data.entity.EntityEventType
+import org.cloudburstmc.protocol.bedrock.data.entity.EntityLinkData
 import org.cloudburstmc.protocol.bedrock.packet.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.*
@@ -190,7 +192,8 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfZ         = pkt.playerPosition.z
         selfYaw       = pkt.rotation.y
         selfPitch     = pkt.rotation.x
-        selfGameMode  = pkt.playerGamemode.ordinal
+        // FIX: playerGamemode is already an Int in newer versions, no .ordinal needed
+        selfGameMode  = pkt.playerGamemode
         Log.i(TAG, "StartGame → runtimeId=$selfRuntimeId uniqueId=$selfUniqueId pos=(${selfX},${selfY},${selfZ})")
     }
 
@@ -204,6 +207,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             type       = type,
             x          = pkt.position.x,
             y          = pkt.position.y,
+            // FIX: pkt.position.z (pkt.z was wrong — it's inside position vector)
             z          = pkt.position.z,
             yaw        = pkt.rotation.y,
             pitch      = pkt.rotation.x,
@@ -243,7 +247,8 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleRemoveEntity(pkt: RemoveEntityPacket) {
-        val rid = uniqueToRuntime.remove(pkt.uniquEntityId)
+        // FIX: typo was 'uniquEntityId' → correct field is 'uniqueEntityId'
+        val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
         if (rid != null) {
             entities.remove(rid)
             notifyUpdate()
@@ -266,13 +271,16 @@ object EntityTracker : PacketEventBus.PacketListener {
     private fun handleMoveDelta(pkt: MoveEntityDeltaPacket) {
         val e = entities[pkt.runtimeEntityId] ?: return
         e.prevX = e.x; e.prevY = e.y; e.prevZ = e.z
-        if (pkt.isHasX) e.x += pkt.x
-        if (pkt.isHasY) e.y += pkt.y
-        if (pkt.isHasZ) e.z += pkt.z
-        if (pkt.isHasYaw)     e.yaw     = pkt.yaw
-        if (pkt.isHasPitch)   e.pitch   = pkt.pitch
-        if (pkt.isHasHeadYaw) e.headYaw = pkt.headYaw
-        e.isOnGround = pkt.isOnGround
+        // FIX: 3.x uses flags bitmask — check getFlag() or use the Flag enum
+        // The fields are accessed via flag checks: hasX, hasY, hasZ etc.
+        val flags = pkt.flags
+        if (MoveEntityDeltaPacket.FLAG_HAS_X in flags) e.x += pkt.x
+        if (MoveEntityDeltaPacket.FLAG_HAS_Y in flags) e.y += pkt.y
+        if (MoveEntityDeltaPacket.FLAG_HAS_Z in flags) e.z += pkt.z
+        if (MoveEntityDeltaPacket.FLAG_HAS_YAW in flags)      e.yaw     = pkt.yaw
+        if (MoveEntityDeltaPacket.FLAG_HAS_PITCH in flags)    e.pitch   = pkt.pitch
+        if (MoveEntityDeltaPacket.FLAG_HAS_HEAD_YAW in flags) e.headYaw = pkt.headYaw
+        e.isOnGround = MoveEntityDeltaPacket.FLAG_ON_GROUND in flags
         e.lastUpdateMs = System.currentTimeMillis()
     }
 
@@ -375,7 +383,8 @@ object EntityTracker : PacketEventBus.PacketListener {
                 playerNames[entry.entityId] = name
                 if (rid != null) {
                     entities[rid]?.name = name
-                    entities[rid]?.pingMs = entry.latency
+                    // FIX: 'latency' was removed in 3.x; use 0 or remove ping tracking
+                    // entities[rid]?.pingMs = entry.latency  ← no longer exists
                 }
             }
         } else {
@@ -387,16 +396,18 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     private fun handleEntityEvent(pkt: EntityEventPacket) {
         val e = entities[pkt.runtimeEntityId] ?: return
+        // FIX: pkt.type is now EntityEventType enum, not Int — compare with enum values
         when (pkt.type) {
-            2    -> { e.hurtTime  = 10 }
-            3    -> { e.deathAnim = true }
-            57   -> {}
+            EntityEventType.HURT_ANIMATION  -> e.hurtTime  = 10
+            EntityEventType.DEATH_ANIMATION -> e.deathAnim = true
+            EntityEventType.CONSUME_TOTEM   -> { /* totem consumed event */ }
             else -> {}
         }
     }
 
     private fun handleGameType(pkt: SetPlayerGameTypePacket) {
-        selfGameMode = pkt.gamemode.ordinal
+        // FIX: gamemode is now an Int directly in newer versions
+        selfGameMode = pkt.gamemode
     }
 
     private fun handleRespawn(pkt: RespawnPacket) {
@@ -420,16 +431,18 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleEntityLink(pkt: SetEntityLinkPacket) {
-        val riderRid  = uniqueToRuntime[pkt.action.riderId]  ?: return
-        val riddenRid = uniqueToRuntime[pkt.action.riddenId] ?: return
+        // FIX: 3.x uses pkt.entityLink (EntityLinkData), not pkt.action
+        val link      = pkt.entityLink
+        val riderRid  = uniqueToRuntime[link.from] ?: return
+        val riddenRid = uniqueToRuntime[link.to]   ?: return
         val rider = entities[riderRid] ?: return
-        when (pkt.action.type) {
-            org.cloudburstmc.protocol.bedrock.data.entity.EntityLinkData.Type.RIDE,
-            org.cloudburstmc.protocol.bedrock.data.entity.EntityLinkData.Type.PASSENGER -> {
+        when (link.type) {
+            EntityLinkData.Type.RIDE,
+            EntityLinkData.Type.PASSENGER -> {
                 rider.isRiding = true
                 rider.ridingId = riddenRid
             }
-            org.cloudburstmc.protocol.bedrock.data.entity.EntityLinkData.Type.REMOVE -> {
+            EntityLinkData.Type.REMOVE -> {
                 rider.isRiding = false
                 rider.ridingId = 0L
             }

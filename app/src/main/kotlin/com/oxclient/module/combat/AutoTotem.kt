@@ -7,6 +7,7 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.*
+import org.cloudburstmc.protocol.bedrock.data.entity.EntityEventType
 import org.cloudburstmc.protocol.bedrock.packet.*
 
 class AutoTotem : BaseModule(
@@ -63,7 +64,10 @@ class AutoTotem : BaseModule(
             is InventoryContentPacket -> parseInventoryContent(pkt)
             is InventorySlotPacket    -> parseInventorySlot(pkt)
             is EntityEventPacket      -> {
-                if (pkt.runtimeEntityId == EntityTracker.selfRuntimeId && pkt.type == 57) {
+                // FIX: pkt.type is EntityEventType enum, not Int (57)
+                // CONSUME_TOTEM is the totem activation event
+                if (pkt.runtimeEntityId == EntityTracker.selfRuntimeId &&
+                    pkt.type == EntityEventType.CONSUME_TOTEM) {
                     offhandHasTotem = false
                 }
             }
@@ -76,7 +80,10 @@ class AutoTotem : BaseModule(
         totemSlot = -1
         offhandHasTotem = false
         pkt.contents.forEachIndexed { slot, item ->
-            if (item.id == TOTEM_ITEM_ID) {
+            // FIX: In 3.x ItemData uses getDefinition().getRuntimeId() or networkId
+            // The simplest compat approach: use item.definition.runtimeId (networkId)
+            val itemId = item.definition?.runtimeId ?: 0
+            if (itemId == TOTEM_ITEM_ID) {
                 when {
                     slot == InventoryUtil.OFFHAND_SLOT && !offhandHasTotem -> offhandHasTotem = true
                     totemSlot == -1 -> totemSlot = slot
@@ -87,12 +94,13 @@ class AutoTotem : BaseModule(
 
     private fun parseInventorySlot(pkt: InventorySlotPacket) {
         if (pkt.containerId != 0) return
+        val itemId = pkt.item.definition?.runtimeId ?: 0
         when (pkt.slot) {
             InventoryUtil.OFFHAND_SLOT -> {
-                offhandHasTotem = (pkt.item.id == TOTEM_ITEM_ID)
+                offhandHasTotem = (itemId == TOTEM_ITEM_ID)
             }
             in 0..35 -> {
-                if (pkt.item.id == TOTEM_ITEM_ID && totemSlot == -1) totemSlot = pkt.slot
+                if (itemId == TOTEM_ITEM_ID && totemSlot == -1) totemSlot = pkt.slot
             }
         }
     }

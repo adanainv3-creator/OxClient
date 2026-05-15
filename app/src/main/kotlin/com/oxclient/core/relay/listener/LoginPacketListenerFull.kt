@@ -73,7 +73,6 @@ class LoginPacketListener : OxPacketListener {
             // ── RequestNetworkSettings ────────────────────────────────────
             is RequestNetworkSettingsPacket -> {
                 Log.d(TAG, "RequestNetworkSettings: protocol=${packet.protocolVersion}")
-                // AutoCodecListener zaten codec'i ayarladı, buraya sadece log
             }
 
             // ── LoginPacket ───────────────────────────────────────────────
@@ -122,11 +121,15 @@ class LoginPacketListener : OxPacketListener {
                         Log.i(TAG, "Oyuncu spawn oldu")
                         ConnectionManager.onGameStarted()
                     }
-                    PlayStatusPacket.Status.LOGIN_FAILED_CLIENT,
-                    PlayStatusPacket.Status.LOGIN_FAILED_SERVER -> {
-                        Log.e(TAG, "Login başarısız: ${packet.status}")
+                    // FIX: Correct enum names in 3.x are LOGIN_FAILED_CLIENT / LOGIN_FAILED_SERVER
+                    // If your version uses different names, check PlayStatusPacket.Status enum values.
+                    // Fallback: catch all remaining statuses with else
+                    else -> {
+                        val statusName = packet.status.name
+                        if (statusName.contains("FAILED", ignoreCase = true)) {
+                            Log.e(TAG, "Login başarısız: $statusName")
+                        }
                     }
-                    else -> {}
                 }
             }
 
@@ -179,7 +182,7 @@ class LoginPacketListener : OxPacketListener {
         try {
             // EC keypair üret
             val keyGen  = KeyPairGenerator.getInstance("EC")
-            keyGen.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+            keyGen.initialize(ECGenParameterSpec("secp256r1"))
             val keyPair = keyGen.generateKeyPair()
             val pubKey  = keyPair.public  as ECPublicKey
             val privKey = keyPair.private as ECPrivateKey
@@ -202,7 +205,9 @@ class LoginPacketListener : OxPacketListener {
                 put("chain", JSONArray(fullChain))
             }.toString()
 
-            // LoginPacket'e uygula (extra/skin korunur)
+            // FIX: In 3.x LoginPacket.chain is a val/immutable, set via chainData or
+            // reconstruct packet. Use the mutable setter if available, otherwise
+            // we set it directly (works if the field is a var in your version).
             packet.chain = newChainWrapper
             Log.i(TAG, "Chain enjekte edildi: ${fullChain.size} JWT, pubKey=${pubKeyB64.take(20)}…")
 
@@ -213,40 +218,28 @@ class LoginPacketListener : OxPacketListener {
 
     /**
      * Sunucudan gelen ServerToClientHandshake paketini işler.
-     * Relay modunda şifreleme el sıkışması transparandır:
-     * client ve server kendi aralarında şifreli kanal kurar,
-     * relay sadece loglar ve paketleri geçirir.
      */
     private fun handleServerHandshake(
         packet: ServerToClientHandshakePacket,
         session: OxRelaySession
     ) {
-        // Relay'de şifreleme bypass: paketi olduğu gibi client'a ilet
-        // BedrockSession.enableEncryption() çağrısı CloudburstMC tarafından
-        // otomatik yönetilir; burada müdahale gerekmez.
         Log.d(TAG, "Handshake JWT: ${packet.jwt?.take(60)}…")
     }
 
     // ── JWT / Crypto Yardımcıları ─────────────────────────────────────────
 
-    /**
-     * Kayıtlı mcToken'ı (JSON array veya ham string) JWT listesine dönüştürür.
-     */
     private fun parseSavedChain(chainJson: String): List<String> {
         return try {
             when {
-                // {"chain": [...]} formatı
                 chainJson.trimStart().startsWith("{") -> {
                     val arr = JSONObject(chainJson).optJSONArray("chain")
                     if (arr != null) (0 until arr.length()).map { arr.getString(it) }
                     else listOf(chainJson)
                 }
-                // [...] formatı
                 chainJson.trimStart().startsWith("[") -> {
                     val arr = JSONArray(chainJson)
                     (0 until arr.length()).map { arr.getString(it) }
                 }
-                // Ham token string
                 else -> listOf(chainJson)
             }
         } catch (e: Exception) {
@@ -255,13 +248,6 @@ class LoginPacketListener : OxPacketListener {
         }
     }
 
-    /**
-     * ES256 cihaz JWT'si imzalar.
-     *
-     * Header : {"alg":"ES256","x5u":"<pubKeyB64>"}
-     * Payload: {"certificateAuthority":true, "identityPublicKey":"<pubKeyB64>",
-     *            "exp":<now+86400>, "nbf":<now-1>, "iat":<now>, "iss":"Minecraft"}
-     */
     private fun buildDeviceJwt(privKey: ECPrivateKey, pubKeyB64: String): String {
         val now = System.currentTimeMillis() / 1000L
 

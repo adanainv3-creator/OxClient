@@ -14,6 +14,7 @@ import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockClientInitializer
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
 import org.cloudburstmc.protocol.bedrock.packet.DisconnectPacket
+import org.cloudburstmc.protocol.common.PacketSignal
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -42,7 +43,8 @@ class OxRelaySession(
 
     fun init() {
         clientSession.setPacketHandler(ClientPacketHandler())
-        clientSession.addDisconnectHandler { reason ->
+        // 3.x API: disconnectHandler is a property/setter, not addDisconnectHandler
+        clientSession.disconnectHandler = { reason ->
             Log.i(TAG, "Client bağlantısı kesildi: $reason")
             onClientDisconnect(reason.toString())
         }
@@ -60,7 +62,7 @@ class OxRelaySession(
                     serverSession = session
                     session.setCodec(activeCodec)
                     session.setPacketHandler(ServerPacketHandler())
-                    session.addDisconnectHandler { reason ->
+                    session.disconnectHandler = { reason ->
                         Log.i(TAG, "Server bağlantısı kesildi: $reason")
                         onServerDisconnect(reason.toString())
                     }
@@ -161,17 +163,18 @@ class OxRelaySession(
         listeners.forEach { it.onSessionStart(this) }
     }
 
+    // 3.x: handlePacket returns PacketSignal, not Boolean
     inner class ClientPacketHandler : org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler {
-        override fun handlePacket(packet: BedrockPacket): Boolean {
+        override fun handlePacket(packet: BedrockPacket): PacketSignal {
             if (handleClientPacket(packet)) sendToServer(packet)
-            return true
+            return PacketSignal.HANDLED
         }
     }
 
     inner class ServerPacketHandler : org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler {
-        override fun handlePacket(packet: BedrockPacket): Boolean {
+        override fun handlePacket(packet: BedrockPacket): PacketSignal {
             if (handleServerPacket(packet)) sendToClient(packet)
-            return true
+            return PacketSignal.HANDLED
         }
     }
 

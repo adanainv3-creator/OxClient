@@ -21,10 +21,16 @@ object PacketUtil {
     fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = 0) {
         session.serverBound(InventoryTransactionPacket().apply {
             transactionType = InventoryTransactionType.ITEM_USE_ON_ENTITY
-            val a = ItemUseOnEntityInventoryAction()
-            a.runtimeEntityId = targetRid
-            a.actionType      = ItemUseOnEntityInventoryAction.TYPE_ATTACK
-            a.hotbarSlot      = hotbarSlot
+            // FIX: In 3.x, ItemUseOnEntityInventoryAction constructor takes params directly
+            // The action is added to the 'actions' list on the transaction packet
+            val a = ItemUseOnEntityInventoryAction(
+                targetRid,
+                ItemUseOnEntityInventoryAction.TYPE_ATTACK,
+                hotbarSlot,
+                org.cloudburstmc.protocol.bedrock.data.inventory.ItemData.AIR,
+                org.cloudburstmc.protocol.bedrock.data.inventory.ItemData.AIR,
+                Vector3f.ZERO
+            )
             actions.add(a)
         })
     }
