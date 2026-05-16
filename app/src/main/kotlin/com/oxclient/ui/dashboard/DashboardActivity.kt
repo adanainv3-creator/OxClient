@@ -82,7 +82,8 @@ class DashboardActivity : ComponentActivity() {
 
                 LaunchedEffect(authState) {
                     if (authState is AuthState.WaitingForUser) {
-                        val url = (authState as? AuthState.WaitingForUser)?.url
+                        // FIX: cast url to String explicitly
+                        val url = (authState as AuthState.WaitingForUser).url as? String
                         if (!url.isNullOrBlank()) {
                             startActivity(
                                 Intent(Intent.ACTION_VIEW, Uri.parse(url))

@@ -115,9 +115,9 @@ object SessionManager {
 
     private fun installSessionCloseListener(session: OxRelaySession) {
         try {
-            session.clientSession.channel()
-                ?.closeFuture()
-                ?.addListener {
+            session.clientSession.peer.channel
+                .closeFuture()
+                .addListener {
                     onSessionEnded(session, "channel closed")
                 }
         } catch (e: Exception) {

@@ -123,7 +123,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             is UpdateAttributesPacket   -> handleAttributes(p)
             is PlayerListPacket         -> handlePlayerList(p)
             is EntityEventPacket        -> handleEntityEvent(p)
-            is SetPlayerGameTypePacket  -> selfGameMode = p.gamemode.ordinal
+            is SetPlayerGameTypePacket  -> selfGameMode = try { p.gamemode.ordinal() } catch (_: Exception) { p.gamemode.ordinal }
             is RespawnPacket            -> if (p.state == RespawnPacket.State.SERVER_SEARCHING) { selfX = p.position.x; selfY = p.position.y; selfZ = p.position.z }
             is ChangeDimensionPacket    -> handleDimension(p)
             is SetEntityLinkPacket      -> handleEntityLink(p)
@@ -136,18 +136,26 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfRuntimeId = p.runtimeEntityId; selfUniqueId = p.uniqueEntityId
         selfX = p.playerPosition.x; selfY = p.playerPosition.y; selfZ = p.playerPosition.z
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
-        selfGameMode = p.playerGameType.ordinal
+        selfGameMode = try { p.playerGameType.ordinal() } catch (_: Exception) { p.playerGameType.ordinal }
         Log.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ)")
     }
 
     private fun handleAddEntity(p: AddEntityPacket) {
         if (p.runtimeEntityId == selfRuntimeId) return
         val e = TrackedEntity(
-            runtimeId = p.runtimeEntityId, uniqueId = p.uniqueEntityId,
-            identifier = p.identifier, type = resolveType(p.identifier),
-            x = p.position.x, y = p.position.y, z = p.position.z,
-            yaw = p.rotation.y, pitch = p.rotation.x, headYaw = p.rotation.z,
-            velX = p.motion.x, velY = p.motion.y, velZ = p.motion.z,
+            runtimeId  = p.runtimeEntityId,
+            uniqueId   = p.uniqueEntityId,
+            identifier = p.identifier,
+            type       = resolveType(p.identifier),
+            x          = p.position.x,
+            y          = p.position.y,
+            z          = p.position.z,
+            yaw        = p.rotation.y,
+            pitch      = p.rotation.x,
+            headYaw    = try { p.rotation.z } catch (_: Exception) { p.rotation.y },
+            velX       = p.motion.x,
+            velY       = p.motion.y,
+            velZ       = p.motion.z,
         )
         applyMetadata(e, p.metadata)
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
@@ -157,12 +165,20 @@ object EntityTracker : PacketEventBus.PacketListener {
     private fun handleAddPlayer(p: AddPlayerPacket) {
         if (p.runtimeEntityId == selfRuntimeId) return
         val e = TrackedEntity(
-            runtimeId = p.runtimeEntityId, uniqueId = p.uniqueEntityId,
-            identifier = "minecraft:player", type = EntityType.PLAYER,
-            x = p.position.x, y = p.position.y, z = p.position.z,
-            yaw = p.rotation.y, pitch = p.rotation.x, headYaw = p.rotation.z,
-            velX = p.motion.x, velY = p.motion.y, velZ = p.motion.z,
-            name = p.username ?: "",
+            runtimeId  = p.runtimeEntityId,
+            uniqueId   = p.uniqueEntityId,
+            identifier = "minecraft:player",
+            type       = EntityType.PLAYER,
+            x          = p.position.x,
+            y          = p.position.y,
+            z          = p.position.z,
+            yaw        = p.rotation.y,
+            pitch      = p.rotation.x,
+            headYaw    = try { p.rotation.z } catch (_: Exception) { p.rotation.y },
+            velX       = p.motion.x,
+            velY       = p.motion.y,
+            velZ       = p.motion.z,
+            name       = p.username ?: "",
         )
         applyMetadata(e, p.metadata)
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
@@ -186,9 +202,10 @@ object EntityTracker : PacketEventBus.PacketListener {
         val e = entities[p.runtimeEntityId] ?: return
         e.prevX = e.x; e.prevY = e.y; e.prevZ = e.z
 
-        val flags = try { p.deltaFlags } catch (_: Exception) { null }
+        // 3.0: deltaFlags → flags
+        val flags: Set<*>? = try { p.flags } catch (_: Exception) { null }
 
-        if (flags != null) {
+        if (flags != null && flags.isNotEmpty()) {
             for (flag in flags) {
                 when (flag.toString().uppercase()) {
                     "HAS_X"        -> e.x       += p.x
@@ -271,8 +288,14 @@ object EntityTracker : PacketEventBus.PacketListener {
             val name = entry.name ?: return@forEach
             playerNames[entry.entityId] = name
             if (rid != null) {
-                entities[rid]?.name   = name
-                try { entities[rid]?.pingMs = entry.latency } catch (_: Exception) {}
+                entities[rid]?.name = name
+                // 3.0: latency → latencyMs
+                try {
+                    val ping = try { entry.latencyMs } catch (_: Exception) {
+                        try { entry.latency } catch (_: Exception) { 0 }
+                    }
+                    entities[rid]?.pingMs = ping
+                } catch (_: Exception) {}
             }
         }
     }
@@ -298,19 +321,21 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     private fun handleEntityLink(p: SetEntityLinkPacket) {
         try {
-            val links = p.links ?: return
-            links.forEach { link ->
-                val riderRid = uniqueToRuntime[link.riderId] ?: return@forEach
-                val rider    = entities[riderRid]            ?: return@forEach
-                val typeStr  = link.type?.toString()?.uppercase() ?: ""
-                when {
-                    typeStr.contains("RIDER") || typeStr.contains("PASSENGER") -> {
-                        rider.isRiding = true
-                        rider.ridingId = uniqueToRuntime[link.riddenId] ?: 0L
-                    }
-                    typeStr.contains("REMOVE") -> {
-                        rider.isRiding = false; rider.ridingId = 0L
-                    }
+            // 3.0: SetEntityLinkPacket taşır tek bir EntityLinkData (p.entityLink)
+            // entityLink alanı: from = ridden (binek), to = rider (binen)
+            val link = try { p.entityLink } catch (_: Exception) { null } ?: return
+
+            val riderRid  = uniqueToRuntime[link.to]   ?: return
+            val rider     = entities[riderRid]          ?: return
+            val typeStr   = link.type?.toString()?.uppercase() ?: ""
+
+            when {
+                typeStr.contains("RIDER") || typeStr.contains("PASSENGER") || typeStr.contains("VEHICLE") -> {
+                    rider.isRiding = true
+                    rider.ridingId = uniqueToRuntime[link.from] ?: 0L
+                }
+                typeStr.contains("REMOVE") -> {
+                    rider.isRiding = false; rider.ridingId = 0L
                 }
             }
         } catch (e: Exception) { Log.v(TAG, "EntityLink hatası: ${e.message}") }

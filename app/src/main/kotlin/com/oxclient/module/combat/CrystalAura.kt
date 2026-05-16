@@ -9,6 +9,7 @@ import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.*
 import java.util.concurrent.ConcurrentHashMap
 
@@ -140,7 +141,7 @@ class CrystalAura : BaseModule(
                 PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
             }
             session.serverBound(InventoryTransactionPacket().apply {
-                transactionType = InventoryTransactionPacket.TYPE_ITEM_USE
+                transactionType = InventoryTransactionType.ITEM_USE
             })
             placedPositions[bKey] = now
             placed++

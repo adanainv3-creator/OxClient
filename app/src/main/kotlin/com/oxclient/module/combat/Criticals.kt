@@ -4,6 +4,8 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.PacketUtil
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseOnEntityData
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 
 class Criticals : BaseModule(
@@ -25,10 +27,11 @@ class Criticals : BaseModule(
         val pkt = event.packet as? InventoryTransactionPacket ?: return
 
         val isAttack = try {
-            pkt.transactionType == InventoryTransactionPacket.TYPE_ITEM_USE_ON_ENTITY &&
-            pkt.actionType      == InventoryTransactionPacket.ACTION_ENTITY_ATTACK
+            val data = pkt.transactionData as? ItemUseOnEntityData
+            pkt.transactionType == InventoryTransactionType.ITEM_USE_ON_ENTITY &&
+            data?.actionType    == ItemUseOnEntityData.ActionType.ATTACK
         } catch (_: Exception) {
-            pkt.transactionType == InventoryTransactionPacket.TYPE_ITEM_USE_ON_ENTITY
+            pkt.transactionType == InventoryTransactionType.ITEM_USE_ON_ENTITY
         }
         if (!isAttack) return
 

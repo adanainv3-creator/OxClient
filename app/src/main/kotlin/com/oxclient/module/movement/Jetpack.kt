@@ -54,16 +54,14 @@ class Jetpack : BaseModule(
         val newY = calcNewY(pkt.position.y)
         if (newY == pkt.position.y) return
 
-        val replacement = PlayerAuthInputPacket().apply {
-            tick             = pkt.tick
-            position         = Vector3f.from(pkt.position.x, newY, pkt.position.z)
-            rotation         = pkt.rotation
-            delta            = pkt.delta
-            inputData        = pkt.inputData
-            analogMoveVector = pkt.analogMoveVector
-        }
-        try { replacement.motionX = pkt.motionX } catch (_: Exception) {}
-        try { replacement.motionZ = pkt.motionZ } catch (_: Exception) {}
+        val replacement = PlayerAuthInputPacket()
+        replacement.tick             = pkt.tick
+        replacement.position         = Vector3f.from(pkt.position.x, newY, pkt.position.z)
+        replacement.rotation         = pkt.rotation
+        replacement.delta            = pkt.delta
+        replacement.inputData        = pkt.inputData?.toMutableSet()
+        replacement.analogMoveVector = pkt.analogMoveVector
+
         event.cancelAndReplace(replacement)
     }
 

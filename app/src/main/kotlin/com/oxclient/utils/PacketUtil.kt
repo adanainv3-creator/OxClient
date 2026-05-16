@@ -3,6 +3,9 @@ package com.oxclient.utils
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.OxRelaySession
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseOnEntityData
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseOnEntityData.ActionType
 import org.cloudburstmc.protocol.bedrock.packet.AnimatePacket
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
@@ -18,10 +21,12 @@ object PacketUtil {
 
     fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = 0) {
         session.serverBound(InventoryTransactionPacket().apply {
-            transactionType = InventoryTransactionPacket.TYPE_ITEM_USE_ON_ENTITY
-            actionType      = InventoryTransactionPacket.ACTION_ENTITY_ATTACK
-            this.runtimeEntityId = targetRid
-            this.hotbarSlot      = hotbarSlot
+            transactionType = InventoryTransactionType.ITEM_USE_ON_ENTITY
+            transactionData = ItemUseOnEntityData().apply {
+                runtimeEntityId = targetRid
+                actionType      = ActionType.ATTACK
+                hotbarSlot      = hotbarSlot
+            }
         })
     }
 

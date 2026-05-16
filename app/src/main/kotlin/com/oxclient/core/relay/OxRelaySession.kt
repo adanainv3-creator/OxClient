@@ -52,9 +52,9 @@ class OxRelaySession(
 
     private fun installClientDisconnectHandler() {
         try {
-            clientSession.channel()
-                ?.pipeline()
-                ?.addLast("ox-client-disconnect", object : ChannelInboundHandlerAdapter() {
+            clientSession.peer.channel
+                .pipeline()
+                .addLast("ox-client-disconnect", object : ChannelInboundHandlerAdapter() {
                     override fun channelInactive(ctx: ChannelHandlerContext) {
                         Log.i(TAG, "Client bağlantısı kesildi (channelInactive)")
                         onClientDisconnect("channelInactive")
@@ -75,9 +75,9 @@ class OxRelaySession(
 
     private fun installServerDisconnectHandler(session: BedrockClientSession) {
         try {
-            session.channel()
-                ?.pipeline()
-                ?.addLast("ox-server-disconnect", object : ChannelInboundHandlerAdapter() {
+            session.peer.channel
+                .pipeline()
+                .addLast("ox-server-disconnect", object : ChannelInboundHandlerAdapter() {
                     override fun channelInactive(ctx: ChannelHandlerContext) {
                         Log.i(TAG, "Server bağlantısı kesildi (channelInactive)")
                         onServerDisconnect("channelInactive")
