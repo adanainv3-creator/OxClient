@@ -2,7 +2,6 @@ package com.oxclient.session
 
 import android.util.Log
 import com.oxclient.auth.AccountManager
-import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.ConnectionManager
@@ -20,19 +19,19 @@ object SessionManager {
 
     private const val TAG = "SessionManager"
 
-    private val _isActive = MutableStateFlow(false)
+    private val _isActive        = MutableStateFlow(false)
     val isActive: StateFlow<Boolean> = _isActive.asStateFlow()
 
-    private val _connectedHost = MutableStateFlow("")
+    private val _connectedHost   = MutableStateFlow("")
     val connectedHostFlow: StateFlow<String> = _connectedHost.asStateFlow()
 
-    private val _connectedPort = MutableStateFlow(0)
+    private val _connectedPort   = MutableStateFlow(0)
     val connectedPortFlow: StateFlow<Int> = _connectedPort.asStateFlow()
 
-    private val _statusMessage = MutableStateFlow("Kapalı")
+    private val _statusMessage   = MutableStateFlow("Kapalı")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
-    private val _sessionCount = MutableStateFlow(0)
+    private val _sessionCount    = MutableStateFlow(0)
     val sessionCount: StateFlow<Int> = _sessionCount.asStateFlow()
 
     val connectedHost: String get() = _connectedHost.value
@@ -41,10 +40,7 @@ object SessionManager {
     private var relay: OxRelay? = null
 
     fun start() {
-        if (_isActive.value) {
-            Log.w(TAG, "Relay zaten çalışıyor")
-            return
-        }
+        if (_isActive.value) { Log.w(TAG, "Relay zaten çalışıyor"); return }
 
         val account = AccountManager.getRelayReadyAccount()
         if (account == null) {
@@ -57,7 +53,7 @@ object SessionManager {
         val port      = ServerConfig.getPortBlocking()
         val localPort = ServerConfig.LOCAL_PROXY_PORT
 
-        OverlayLogger.i(TAG, "Relay başlatılıyor: ${account.gamertag} → $host:$port (local:$localPort)")
+        OverlayLogger.i(TAG, "Relay başlatılıyor: ${account.gamertag} → $host:$port")
         _statusMessage.value = "Bağlanıyor..."
 
         try {
@@ -82,14 +78,13 @@ object SessionManager {
             OverlayLogger.e(TAG, "Relay başlatılamadı: ${e.message}", e)
             _isActive.value      = false
             _statusMessage.value = "Hata: ${e.message}"
-            relay = null
+            relay                = null
         }
     }
 
     fun stop() {
         if (!_isActive.value) return
         OverlayLogger.i(TAG, "Relay durduruluyor")
-
         try {
             ModuleManager.disableAll()
             relay?.stop()
@@ -102,7 +97,6 @@ object SessionManager {
             _connectedPort.value = 0
             _statusMessage.value = "Kapalı"
             _sessionCount.value  = 0
-
             PacketEventBus.setSession(null)
             EntityTracker.reset()
             BlockTracker.clear()
@@ -114,12 +108,20 @@ object SessionManager {
         _sessionCount.value++
         OverlayLogger.i(TAG, "Yeni session #${_sessionCount.value}: ${session.clientAddress}")
         _statusMessage.value = "Session #${_sessionCount.value} — ${session.clientAddress}"
-
         PacketEventBus.setSession(session)
         ConnectionManager.setupSession(session)
+        installSessionCloseListener(session)
+    }
 
-        session.clientSession.addDisconnectHandler { reason ->
-            onSessionEnded(session, reason?.toString() ?: "")
+    private fun installSessionCloseListener(session: OxRelaySession) {
+        try {
+            session.clientSession.channel()
+                ?.closeFuture()
+                ?.addListener {
+                    onSessionEnded(session, "channel closed")
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "Session close listener eklenemedi: ${e.message}")
         }
     }
 

@@ -2,23 +2,20 @@ import java.util.concurrent.TimeUnit
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.android") version "2.0.0"
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.0"
 }
 
 android {
-    namespace = "com.oxclient"
+    namespace  = "com.oxclient"
     compileSdk = 35
 
     defaultConfig {
         applicationId = "com.oxclient"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 2
-        versionName = "3.0.0"
-
-        // FIX: BuildConfig üretimi için gerekli
-        buildConfigField("String", "VERSION_NAME", "\"3.0.0\"")
+        minSdk        = 26
+        targetSdk     = 35
+        versionCode   = 2
+        versionName   = "3.0.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -27,33 +24,33 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file(System.getenv("KEYSTORE_PATH") ?: "debug.jks")
+            storeFile     = file(System.getenv("KEYSTORE_PATH") ?: "debug.jks")
             storePassword = System.getenv("KEYSTORE_PASS") ?: "oxclient"
-            keyAlias = System.getenv("KEY_ALIAS") ?: "oxclient"
-            keyPassword = System.getenv("KEY_PASS") ?: "oxclient"
+            keyAlias      = System.getenv("KEY_ALIAS")     ?: "oxclient"
+            keyPassword   = System.getenv("KEY_PASS")      ?: "oxclient"
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled   = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig     = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
         debug {
-            isMinifyEnabled = false
+            isMinifyEnabled     = false
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-DEBUG"
+            versionNameSuffix   = "-DEBUG"
         }
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility            = JavaVersion.VERSION_17
+        targetCompatibility            = JavaVersion.VERSION_17
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -62,8 +59,7 @@ android {
     }
 
     buildFeatures {
-        compose = true
-        // FIX: BuildConfig sınıfını üret (OxClientApp.kt'deki BuildConfig.VERSION_NAME için)
+        compose     = true
         buildConfig = true
     }
 
@@ -91,19 +87,19 @@ android {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.20")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
-    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
+    implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
-    val bom = platform("androidx.compose:compose-bom:2024.10.01")
+    val bom = platform("androidx.compose:compose-bom:2024.06.00")
     implementation(bom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
@@ -118,49 +114,31 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    // ── CloudburstMC Protocol ──────────────────────────────────────────────
-    // Versiyon: 3.0.0.Beta6-SNAPSHOT — resmi README'deki en güncel versiyon.
-    // FIX: cloudburstmc kendi fastutil'ini (org.cloudburstmc.fastutil:core:8.5.15)
-    //      getiriyor. it.unimi.dsi:fastutil-core çakışmasını önlemek için exclude et.
     implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta6-SNAPSHOT") {
         exclude(group = "io.netty", module = "netty-transport-native-epoll")
         exclude(group = "io.netty", module = "netty-transport-native-kqueue")
         exclude(group = "io.netty.incubator", module = "netty-incubator-transport-native-io_uring")
-        // FIX: fastutil duplicate'i tam olarak kapat
         exclude(group = "it.unimi.dsi", module = "fastutil-core")
-        exclude(group = "it.unimi.dsi", module = "fastutil")
     }
     implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta6-SNAPSHOT") {
         exclude(group = "it.unimi.dsi", module = "fastutil-core")
-        exclude(group = "it.unimi.dsi", module = "fastutil")
     }
     implementation("org.cloudburstmc:nbt:3.0.0.Final")
 
-    // ── Netty ──────────────────────────────────────────────────────────────
-    implementation("io.netty:netty-transport:4.1.115.Final")
-    implementation("io.netty:netty-codec:4.1.115.Final")
-    implementation("io.netty:netty-handler:4.1.115.Final")
-    implementation("io.netty:netty-buffer:4.1.115.Final")
-    implementation("io.netty:netty-common:4.1.115.Final")
+    implementation("io.netty:netty-transport:4.1.111.Final")
+    implementation("io.netty:netty-codec:4.1.111.Final")
+    implementation("io.netty:netty-handler:4.1.111.Final")
+    implementation("io.netty:netty-buffer:4.1.111.Final")
 
     implementation("org.bitbucket.b_c:jose4j:0.9.6")
 
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    coreLibraryDesugaring("com.android.tools.build:desugaring:2.0.4")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
 
 configurations.all {
-    resolutionStrategy {
-        cacheChangingModulesFor(0, TimeUnit.SECONDS)
-        force("io.netty:netty-common:4.1.115.Final")
-        force("io.netty:netty-buffer:4.1.115.Final")
-        force("io.netty:netty-transport:4.1.115.Final")
-        force("io.netty:netty-codec:4.1.115.Final")
-        force("io.netty:netty-handler:4.1.115.Final")
-        // FIX: cloudburstmc fastutil'i kullanılsın, vanilla fastutil değil
-        // Eğer hâlâ çakışma çıkarsa bu satırı aç:
-        // force("org.cloudburstmc.fastutil:core:8.5.15")
-    }
+    resolutionStrategy.cacheChangingModulesFor(0, TimeUnit.SECONDS)
+    resolutionStrategy.force("org.cloudburstmc.fastutil:core:8.5.15")
 }

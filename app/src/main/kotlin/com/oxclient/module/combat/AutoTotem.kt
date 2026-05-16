@@ -7,7 +7,7 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.*
-import org.cloudburstmc.protocol.bedrock.data.entity.EntityEventType
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
 
 class AutoTotem : BaseModule(
@@ -23,6 +23,11 @@ class AutoTotem : BaseModule(
     private val reEquipAlways   = bool ("Re-Equip Always",  false)
     private val shortcut        = bool ("Shortcut",         false)
 
+    companion object {
+        private const val TAG              = "AutoTotem"
+        private const val TOTEM_NETWORK_ID = 702
+    }
+
     @Volatile private var currentHealth   = 20f
     @Volatile private var totemSlot       = -1
     @Volatile private var offhandHasTotem = false
@@ -31,23 +36,13 @@ class AutoTotem : BaseModule(
 
     private var watchJob: Job? = null
 
-    companion object {
-        private const val TAG           = "AutoTotem"
-        private const val TOTEM_ITEM_ID = 702
-    }
-
     override fun onEnable() {
         super.onEnable()
-        currentHealth   = 20f
-        totemSlot       = -1
-        offhandHasTotem = false
+        currentHealth = 20f; totemSlot = -1; offhandHasTotem = false
         watchJob = scope.launch { watchLoop() }
     }
 
-    override fun onDisable() {
-        watchJob?.cancel()
-        super.onDisable()
-    }
+    override fun onDisable() { watchJob?.cancel(); super.onDisable() }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
@@ -55,54 +50,40 @@ class AutoTotem : BaseModule(
             is UpdateAttributesPacket -> {
                 if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
                 val prev = currentHealth
-                pkt.attributes.firstOrNull { it.name == "minecraft:health" }
-                    ?.let {
-                        if (it.value < prev) lastDamageMs = System.currentTimeMillis()
-                        currentHealth = it.value
-                    }
-            }
-            is InventoryContentPacket -> parseInventoryContent(pkt)
-            is InventorySlotPacket    -> parseInventorySlot(pkt)
-            is EntityEventPacket      -> {
-                // FIX: pkt.type is EntityEventType enum, not Int (57)
-                // CONSUME_TOTEM is the totem activation event
-                if (pkt.runtimeEntityId == EntityTracker.selfRuntimeId &&
-                    pkt.type == EntityEventType.CONSUME_TOTEM) {
-                    offhandHasTotem = false
+                pkt.attributes.firstOrNull { it.name == "minecraft:health" }?.let {
+                    if (it.value < prev) lastDamageMs = System.currentTimeMillis()
+                    currentHealth = it.value
                 }
+            }
+            is InventoryContentPacket -> {
+                if (pkt.containerId != 0) return
+                totemSlot = -1; offhandHasTotem = false
+                pkt.contents.forEachIndexed { slot, item ->
+                    if (isTotem(item)) when {
+                        slot == InventoryUtil.OFFHAND_SLOT && !offhandHasTotem -> offhandHasTotem = true
+                        totemSlot == -1 -> totemSlot = slot
+                    }
+                }
+            }
+            is InventorySlotPacket -> {
+                if (pkt.containerId != 0) return
+                when (pkt.slot) {
+                    InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = isTotem(pkt.item)
+                    in 0..35 -> if (isTotem(pkt.item) && totemSlot == -1) totemSlot = pkt.slot
+                }
+            }
+            is EntityEventPacket -> {
+                if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
+                val t = try { pkt.type?.toString()?.uppercase() ?: "" } catch (_: Exception) { "" }
+                if (t.contains("CONSUME") || t.contains("TOTEM")) offhandHasTotem = false
             }
             else -> {}
         }
     }
 
-    private fun parseInventoryContent(pkt: InventoryContentPacket) {
-        if (pkt.containerId != 0) return
-        totemSlot = -1
-        offhandHasTotem = false
-        pkt.contents.forEachIndexed { slot, item ->
-            // FIX: In 3.x ItemData uses getDefinition().getRuntimeId() or networkId
-            // The simplest compat approach: use item.definition.runtimeId (networkId)
-            val itemId = item.definition?.runtimeId ?: 0
-            if (itemId == TOTEM_ITEM_ID) {
-                when {
-                    slot == InventoryUtil.OFFHAND_SLOT && !offhandHasTotem -> offhandHasTotem = true
-                    totemSlot == -1 -> totemSlot = slot
-                }
-            }
-        }
-    }
-
-    private fun parseInventorySlot(pkt: InventorySlotPacket) {
-        if (pkt.containerId != 0) return
-        val itemId = pkt.item.definition?.runtimeId ?: 0
-        when (pkt.slot) {
-            InventoryUtil.OFFHAND_SLOT -> {
-                offhandHasTotem = (itemId == TOTEM_ITEM_ID)
-            }
-            in 0..35 -> {
-                if (itemId == TOTEM_ITEM_ID && totemSlot == -1) totemSlot = pkt.slot
-            }
-        }
+    private fun isTotem(item: ItemData?): Boolean {
+        if (item == null || item == ItemData.AIR) return false
+        return try { item.netId == TOTEM_NETWORK_ID } catch (_: Exception) { false }
     }
 
     private suspend fun watchLoop() {
@@ -111,16 +92,12 @@ class AutoTotem : BaseModule(
                 val shouldEquip = when (triggerMode.value) {
                     TriggerMode.HealthBased -> currentHealth <= healthThreshold.value && !offhandHasTotem
                     TriggerMode.Always      -> !offhandHasTotem || reEquipAlways.value
-                    TriggerMode.OnDamage    -> {
-                        val now = System.currentTimeMillis()
-                        !offhandHasTotem && (now - lastDamageMs < 2000L)
-                    }
+                    TriggerMode.OnDamage    -> !offhandHasTotem && (System.currentTimeMillis() - lastDamageMs < 2000L)
                 }
                 if (shouldEquip && totemSlot >= 0) {
                     val now = System.currentTimeMillis()
                     if (now - lastEquipMs >= delay.value) {
-                        lastEquipMs = now
-                        equipTotem()
+                        lastEquipMs = now; equipTotem()
                     }
                 }
             }
@@ -129,11 +106,10 @@ class AutoTotem : BaseModule(
     }
 
     private fun equipTotem() {
-        val slot = totemSlot
-        if (slot < 0) return
+        val slot    = totemSlot; if (slot < 0) return
         val session = PacketEventBus.currentSession ?: return
-        Log.d(TAG, "Totem takılıyor (slot=$slot)")
-        InventoryUtil.sendOffhandEquip(session, slot, TOTEM_ITEM_ID)
+        Log.d(TAG, "Totem takılıyor slot=$slot")
+        InventoryUtil.sendOffhandEquip(session, slot, TOTEM_NETWORK_ID)
         offhandHasTotem = true
     }
 }

@@ -3,6 +3,7 @@ package com.oxclient.module.movement
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.module.*
+import com.oxclient.utils.PacketUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
@@ -21,12 +22,11 @@ class Jetpack : BaseModule(
     private val hoverHeight     = float("Hover Height",     1.0f,  0.1f,  5f)
     private val boostMultiplier = float("Boost Multiplier", 2.0f,  1.0f, 10f)
     private val pressJump       = bool ("Press Jump",       true)
-    private val antiKick        = bool ("Anti Kick",        false)
     private val shortcut        = bool ("Shortcut",         false)
 
-    @Volatile private var jumpPressed  = false
-    @Volatile private var tickCount    = 0
-    @Volatile private var hoverBaseY   = 0f
+    @Volatile private var jumpPressed = false
+    @Volatile private var tickCount   = 0
+    @Volatile private var hoverBaseY  = 0f
 
     override fun onEnable() {
         super.onEnable()
@@ -45,22 +45,26 @@ class Jetpack : BaseModule(
 
     private fun handleAuthInput(event: PacketEvent, pkt: PlayerAuthInputPacket) {
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        jumpPressed = pkt.inputData?.contains(
-            org.cloudburstmc.protocol.bedrock.data.PlayerAuthInputData.JUMP_DOWN
-        ) == true
+
+        jumpPressed = try {
+            pkt.inputData?.any { it.toString().uppercase().contains("JUMP") } == true
+        } catch (_: Exception) { false }
+
         tickCount++
         val newY = calcNewY(pkt.position.y)
         if (newY == pkt.position.y) return
-        event.replacementPacket = PlayerAuthInputPacket().apply {
+
+        val replacement = PlayerAuthInputPacket().apply {
             tick             = pkt.tick
             position         = Vector3f.from(pkt.position.x, newY, pkt.position.z)
             rotation         = pkt.rotation
             delta            = pkt.delta
             inputData        = pkt.inputData
-            motionX          = pkt.motionX
-            motionZ          = pkt.motionZ
             analogMoveVector = pkt.analogMoveVector
         }
+        try { replacement.motionX = pkt.motionX } catch (_: Exception) {}
+        try { replacement.motionZ = pkt.motionZ } catch (_: Exception) {}
+        event.cancelAndReplace(replacement)
     }
 
     private fun handleMovePlayer(event: PacketEvent, pkt: MovePlayerPacket) {
@@ -69,7 +73,8 @@ class Jetpack : BaseModule(
         tickCount++
         val newY = calcNewY(pkt.position.y)
         if (newY == pkt.position.y) return
-        event.replacementPacket = MovePlayerPacket().apply {
+
+        event.cancelAndReplace(MovePlayerPacket().apply {
             runtimeEntityId       = pkt.runtimeEntityId
             position              = Vector3f.from(pkt.position.x, newY, pkt.position.z)
             rotation              = pkt.rotation
@@ -77,7 +82,7 @@ class Jetpack : BaseModule(
                                     else MovePlayerPacket.Mode.NORMAL
             isOnGround            = false
             ridingRuntimeEntityId = 0L
-        }
+        })
     }
 
     private fun calcNewY(currentY: Float): Float {
@@ -90,10 +95,7 @@ class Jetpack : BaseModule(
             JetMode.Motion   -> currentY + v * 0.05f + a
             JetMode.Teleport -> currentY + v * 0.5f
             JetMode.Jump     -> if (tickCount % 10 == 0) currentY + 0.42f else currentY + a
-            JetMode.Hover    -> {
-                val target = hoverBaseY + hoverHeight.value
-                currentY + (target - currentY) * 0.15f
-            }
+            JetMode.Hover    -> currentY + ((hoverBaseY + hoverHeight.value) - currentY) * 0.15f
             JetMode.Boost    -> {
                 val mult = boostMultiplier.value
                 if (pressJump.value && jumpPressed) currentY + v * 0.05f * mult else currentY + a
