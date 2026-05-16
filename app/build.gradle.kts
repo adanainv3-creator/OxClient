@@ -132,7 +132,7 @@ dependencies {
 
     implementation("org.bitbucket.b_c:jose4j:0.9.6")
 
-    coreLibraryDesugaring("com.android.tools.build:desugaring:2.0.4")
+    coreLibraryDesugaring("com.android.tools.build:desugar_jdk_libs:2.0.4")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
