@@ -83,18 +83,6 @@ class DashboardActivity : ComponentActivity() {
                 val authState   by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
                 val relayActive by SessionManager.isActive.collectAsStateWithLifecycle()
 
-                LaunchedEffect(authState) {
-                    if (authState is AuthState.WaitingForUser) {
-                        val uri = (authState as AuthState.WaitingForUser).verificationUri
-                        if (uri.isNotBlank()) {
-                            startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                        }
-                    }
-                }
-
                 DashboardScreen(
                     installedApps = getInstalledGames(),
                     relayActive   = relayActive,
@@ -622,10 +610,62 @@ private fun AuthDialog(
                             Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
                         }
                     }
-                    is AuthState.Loading, is AuthState.WaitingForUser -> {
+                    is AuthState.WaitingForUser -> {
+                        val waiting = authState as AuthState.WaitingForUser
+                        val context = androidx.compose.ui.platform.LocalContext.current
+
+                        // Kod kutusu
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(OxSurfaceVar)
+                                .border(1.dp, OxPurple, RoundedCornerShape(12.dp))
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Microsoft giriş kodu",
+                                    fontSize = 11.sp, color = OxOnSurface.copy(0.6f),
+                                    fontFamily = FontFamily.Monospace)
+                                Text(waiting.userCode,
+                                    fontSize = 28.sp, fontWeight = FontWeight.ExtraBold,
+                                    color = OxPurpleLight, fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 4.sp)
+                                Text("Aşağıdaki sayfada bu kodu girin",
+                                    fontSize = 11.sp, color = OxOnSurface.copy(0.5f),
+                                    fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center)
+                            }
+                        }
+
+                        // Tarayıcıda aç butonu
+                        Button(
+                            onClick = {
+                                val uri = waiting.verificationUri
+                                if (uri.isNotBlank()) {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("🌐  Tarayıcıda Aç", fontFamily = FontFamily.Monospace) }
+
+                        CircularProgressIndicator(color = OxPurple, modifier = Modifier.size(24.dp))
+                        Text("Onay bekleniyor…",
+                            color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+
+                        TextButton(onClick = onCancel) {
+                            Text("İptal", color = OxError, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                    is AuthState.Loading -> {
                         CircularProgressIndicator(color = OxPurple)
-                        Text(if (authState is AuthState.WaitingForUser) "Tarayıcıda giriş yapılıyor…"
-                             else "Bağlanıyor…",
+                        Text("Bağlanıyor…",
                             color = OxOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                         TextButton(onClick = onCancel) {
                             Text("İptal", color = OxError, fontFamily = FontFamily.Monospace)
