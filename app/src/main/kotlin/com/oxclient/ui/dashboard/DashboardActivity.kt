@@ -41,6 +41,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.oxclient.auth.AuthState
+import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.proxy.EntityTracker
@@ -75,8 +76,15 @@ class DashboardActivity : ComponentActivity() {
             )
         }
 
-        // MicrosoftAuthManager.init() burada çağrılmıyor —
-        // OxClientApp.onCreate()'de zaten çağrılıyor, tekrar çağırmak gereksiz.
+        // WaitingForWebView state'ini izle — WebView aktivitesini burada aç
+        // (Compose tarafından değil Activity tarafından, doğru lifecycle için)
+        lifecycleScope.launch {
+            MicrosoftAuthManager.authState.collect { state ->
+                if (state is AuthState.WaitingForWebView) {
+                    startActivity(Intent(this@DashboardActivity, DeviceCodeLoginActivity::class.java))
+                }
+            }
+        }
 
         setContent {
             OxClientTheme {
@@ -100,8 +108,6 @@ class DashboardActivity : ComponentActivity() {
         stopRelay()
         EntityTracker.init()
 
-        // ✅ SessionManager.start() IO thread'de çalıştırılıyor.
-        // getHostBlocking() / getPortBlocking() ana thread'i bloklamamalı.
         lifecycleScope.launch(Dispatchers.IO) {
             SessionManager.start()
         }
@@ -167,6 +173,11 @@ fun DashboardScreen(
     var showAppPicker  by remember { mutableStateOf(false) }
     var showServerEdit by remember { mutableStateOf(false) }
     var selectedApp    by remember { mutableStateOf(installedApps.firstOrNull() ?: SUPPORTED_PACKAGES.first()) }
+
+    // WaitingForWebView state'inde dialog kapat (WebView açıldı)
+    LaunchedEffect(authState) {
+        if (authState is AuthState.WaitingForWebView) showSignIn = false
+    }
 
     if (showSignIn) {
         AuthDialog(
@@ -586,7 +597,7 @@ private fun AuthDialog(
     onSignOut : () -> Unit,
     onCancel  : () -> Unit
 ) {
-    val canDismiss = authState !is AuthState.Loading && authState !is AuthState.WaitingForUser
+    val canDismiss = authState !is AuthState.Loading && authState !is AuthState.WaitingForWebView
     Dialog(onDismissRequest = { if (canDismiss) onDismiss() }) {
         Card(shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = OxSurface)) {
@@ -610,63 +621,17 @@ private fun AuthDialog(
                             Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
                         }
                     }
-                    is AuthState.WaitingForUser -> {
-                        val waiting = authState as AuthState.WaitingForUser
-                        val context = androidx.compose.ui.platform.LocalContext.current
-
-                        // Kod kutusu
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(OxSurfaceVar)
-                                .border(1.dp, OxPurple, RoundedCornerShape(12.dp))
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("Microsoft giriş kodu",
-                                    fontSize = 11.sp, color = OxOnSurface.copy(0.6f),
-                                    fontFamily = FontFamily.Monospace)
-                                Text(waiting.userCode,
-                                    fontSize = 28.sp, fontWeight = FontWeight.ExtraBold,
-                                    color = OxPurpleLight, fontFamily = FontFamily.Monospace,
-                                    letterSpacing = 4.sp)
-                                Text("Aşağıdaki sayfada bu kodu girin",
-                                    fontSize = 11.sp, color = OxOnSurface.copy(0.5f),
-                                    fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center)
-                            }
-                        }
-
-                        // Tarayıcıda aç butonu
-                        Button(
-                            onClick = {
-                                val uri = waiting.verificationUri
-                                if (uri.isNotBlank()) {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("🌐  Tarayıcıda Aç", fontFamily = FontFamily.Monospace) }
-
-                        CircularProgressIndicator(color = OxPurple, modifier = Modifier.size(24.dp))
-                        Text("Onay bekleniyor…",
-                            color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-
-                        TextButton(onClick = onCancel) {
-                            Text("İptal", color = OxError, fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                    is AuthState.Loading -> {
+                    is AuthState.WaitingForWebView, is AuthState.Loading -> {
+                        // WebView açılıyor veya token işleniyor
                         CircularProgressIndicator(color = OxPurple)
-                        Text("Bağlanıyor…",
-                            color = OxOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                        Text(
+                            if (authState is AuthState.WaitingForWebView)
+                                "Microsoft giriş penceresi açılıyor…"
+                            else
+                                "Hesap doğrulanıyor…",
+                            color = OxOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                            textAlign = TextAlign.Center
+                        )
                         TextButton(onClick = onCancel) {
                             Text("İptal", color = OxError, fontFamily = FontFamily.Monospace)
                         }
@@ -683,7 +648,8 @@ private fun AuthDialog(
                         }
                     }
                     else -> {
-                        Text("Xbox/Microsoft hesabınla giriş yap.\nKod tarayıcıda gösterilecek.",
+                        // Idle veya WaitingForUser (eski flow uyumluluğu)
+                        Text("Xbox/Microsoft hesabınla giriş yap.\nGiriş sayfası uygulama içinde açılacak.",
                             color = OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace,
                             textAlign = TextAlign.Center, fontSize = 13.sp)
                         Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth(),

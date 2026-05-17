@@ -16,6 +16,14 @@ sealed class AuthState {
     object Loading : AuthState()
 
     /**
+     * WebView'ın açılması bekleniyor.
+     * DashboardActivity bu state'i izleyip DeviceCodeLoginActivity'yi başlatır,
+     * ardından state Loading'e geçer.
+     */
+    object WaitingForWebView : AuthState()
+
+    /**
+     * [Eski device code flow — artık kullanılmıyor, geriye dönük uyumluluk için bırakıldı]
      * Cihaz kodu üretildi; kullanıcının [verificationUri] adresine gidip
      * [userCode]'u girmesi bekleniyor.
      */
@@ -45,7 +53,7 @@ sealed class AuthState {
     // ── Yardımcı kontroller ───────────────────────────────────────────────
 
     val isLoggedIn: Boolean get() = this is Success
-    val isLoading:  Boolean get() = this is Loading || this is WaitingForUser
+    val isLoading:  Boolean get() = this is Loading || this is WaitingForUser || this is WaitingForWebView
 
     /** Oturumu relay için geçerli kabul et (token var ve boş değil). */
     fun isRelayReady(): Boolean =
