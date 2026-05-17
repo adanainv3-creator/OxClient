@@ -27,6 +27,8 @@ class OxClientApp : Application() {
         super.onCreate()
         instance = this
         ServerConfig.init(applicationContext)
+        AccountManager.init(applicationContext)
+        MicrosoftAuthManager.init(applicationContext)
         registerModules()
     }
 
@@ -39,6 +41,7 @@ class OxClientApp : Application() {
             Jetpack(),
             TPAura(),
             FullBright()
+            ESP()
         )
     }
 }

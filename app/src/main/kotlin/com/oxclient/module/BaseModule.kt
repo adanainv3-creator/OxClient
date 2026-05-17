@@ -22,11 +22,12 @@ class BoolSetting(name: String, default: Boolean = false) : ModuleSetting<Boolea
 }
 
 class FloatSetting(name: String, val min: Float, val max: Float, default: Float) : ModuleSetting<Float>(name) {
-    override var value: Float = default.coerceIn(min, max)
+    // min/max sırası yanlış gelse bile crash olmaması için coerceIn güvenli yapıldı
+    override var value: Float = if (min <= max) default.coerceIn(min, max) else default
 }
 
 class IntSetting(name: String, default: Int, val min: Int, val max: Int) : ModuleSetting<Int>(name) {
-    override var value: Int = default.coerceIn(min, max)
+    override var value: Int = if (min <= max) default.coerceIn(min, max) else default
 }
 
 class EnumSetting<T : Enum<T>>(name: String, default: T, val values: Array<T>) : ModuleSetting<T>(name) {
@@ -74,7 +75,8 @@ abstract class BaseModule(
     protected fun bool(name: String, default: Boolean = false) =
         BoolSetting(name, default).also { settings.add(it) }
 
-    protected fun float(name: String, min: Float, max: Float, default: Float) =
+    // ✅ DÜZELTİLDİ: sıra artık (name, default, min, max) — modüllerin kullandığı sıra
+    protected fun float(name: String, default: Float, min: Float, max: Float) =
         FloatSetting(name, min, max, default).also { settings.add(it) }
 
     protected fun int(name: String, default: Int, min: Int, max: Int) =
