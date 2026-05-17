@@ -13,9 +13,11 @@ class Jetpack : BaseModule(
     category    = ModuleCategory.MOVEMENT,
     description = "Paket tabanlı uçuş / jetpack hareketi"
 ) {
+    // FIX: 'mode' ismi BaseModule'deki bir field ile çakışıyor olabilir;
+    // modül setting'leri için farklı isimler kullanıldı (jetMode, vSpeed, hSpeed vb.)
     enum class JetMode { Jetpack, Glide, YPort, Motion, Teleport, Jump, Hover, Boost }
 
-    private val mode            = enum ("Mode",             JetMode.Jetpack)
+    private val jetMode         = enum ("Mode",             JetMode.Jetpack)
     private val verticalSpeed   = float("Vertical Speed",   1.5f,  0.1f, 10f)
     private val horizontalSpeed = float("Horizontal Speed", 1.5f,  0.1f, 10f)
     private val add             = float("Add",             -0.02f,-0.5f,  0.5f)
@@ -54,13 +56,21 @@ class Jetpack : BaseModule(
         val newY = calcNewY(pkt.position.y)
         if (newY == pkt.position.y) return
 
-        val replacement = PlayerAuthInputPacket()
-        replacement.tick             = pkt.tick
-        replacement.position         = Vector3f.from(pkt.position.x, newY, pkt.position.z)
-        replacement.rotation         = pkt.rotation
-        replacement.delta            = pkt.delta
-        replacement.inputData        = pkt.inputData?.toMutableSet()
-        replacement.analogMoveVector = pkt.analogMoveVector
+        // FIX: PlayerAuthInputPacket'te inputData val'dır, doğrudan atama yapılamaz.
+        // Yeni bir paket oluşturulurken inputData set edilmez; bunun yerine
+        // orijinal paketin inputData'sı clone edilerek replacement'e verilir.
+        // inputMode ve playMode da kopyalanır.
+        val replacement = PlayerAuthInputPacket().apply {
+            tick             = pkt.tick
+            position         = Vector3f.from(pkt.position.x, newY, pkt.position.z)
+            rotation         = pkt.rotation
+            delta            = pkt.delta
+            analogMoveVector = pkt.analogMoveVector
+            inputMode        = pkt.inputMode
+            playMode         = pkt.playMode
+            // inputData: EnumSet — addAll ile kopyala
+            pkt.inputData?.let { inputData.addAll(it) }
+        }
 
         event.cancelAndReplace(replacement)
     }
@@ -76,7 +86,9 @@ class Jetpack : BaseModule(
             runtimeEntityId       = pkt.runtimeEntityId
             position              = Vector3f.from(pkt.position.x, newY, pkt.position.z)
             rotation              = pkt.rotation
-            mode                  = if (mode.value == JetMode.Teleport) MovePlayerPacket.Mode.TELEPORT
+            // FIX: 'mode' adı bu scope'ta Jetpack setting'i ile çakışıyordu.
+            // jetMode kullanılarak çakışma çözüldü.
+            mode                  = if (jetMode.value == JetMode.Teleport) MovePlayerPacket.Mode.TELEPORT
                                     else MovePlayerPacket.Mode.NORMAL
             isOnGround            = false
             ridingRuntimeEntityId = 0L
@@ -86,7 +98,7 @@ class Jetpack : BaseModule(
     private fun calcNewY(currentY: Float): Float {
         val v = verticalSpeed.value
         val a = add.value
-        return when (mode.value) {
+        return when (jetMode.value) {
             JetMode.Jetpack  -> if (pressJump.value && jumpPressed) currentY + v * 0.05f else currentY + a
             JetMode.Glide    -> if (currentY > EntityTracker.selfY) currentY else currentY - 0.05f
             JetMode.YPort    -> if (tickCount % 20 < 10) currentY + v * 0.1f else currentY - v * 0.08f

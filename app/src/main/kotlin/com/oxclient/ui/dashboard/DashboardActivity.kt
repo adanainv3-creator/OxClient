@@ -82,11 +82,12 @@ class DashboardActivity : ComponentActivity() {
 
                 LaunchedEffect(authState) {
                     if (authState is AuthState.WaitingForUser) {
-                        // FIX: cast url to String explicitly
-                        val url = (authState as AuthState.WaitingForUser).url as? String
-                        if (!url.isNullOrBlank()) {
+                        // FIX: AuthState.WaitingForUser'da 'url' field'ı yok.
+                        // Doğru field adı 'verificationUri'dir.
+                        val uri = (authState as AuthState.WaitingForUser).verificationUri
+                        if (uri.isNotBlank()) {
                             startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                Intent(Intent.ACTION_VIEW, Uri.parse(uri))
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
                         }
@@ -472,7 +473,8 @@ private fun ServerEditDialog(
                     textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground)
                 )
                 OutlinedTextField(
-                    value = portInput, onValueChange = { portInput = it; portError = it.toIntOrNull()?.let { p -> p < 1 || p > 65535 } ?: true },
+                    value = portInput,
+                    onValueChange = { portInput = it; portError = it.toIntOrNull()?.let { p -> p < 1 || p > 65535 } ?: true },
                     label = { Text("Port", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                     singleLine = true, isError = portError,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

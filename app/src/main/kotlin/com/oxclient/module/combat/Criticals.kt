@@ -5,8 +5,12 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.PacketUtil
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseOnEntityData
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
+
+// FIX: ItemUseOnEntityData sınıfı yeni Cloudburst API'sinde (3.x) kaldırıldı.
+// Saldırı tespiti artık InventoryTransactionPacket üzerinden yapılır:
+//   - transactionType == ITEM_USE_ON_ENTITY  → entity'ye kullanım
+//   - actionType == 1                        → ATTACK (0=Interact, 1=Attack, 2=ItemInteract)
 
 class Criticals : BaseModule(
     name        = "Criticals",
@@ -26,13 +30,11 @@ class Criticals : BaseModule(
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
         val pkt = event.packet as? InventoryTransactionPacket ?: return
 
-        val isAttack = try {
-            val data = pkt.transactionData as? ItemUseOnEntityData
-            pkt.transactionType == InventoryTransactionType.ITEM_USE_ON_ENTITY &&
-            data?.actionType    == ItemUseOnEntityData.ActionType.ATTACK
-        } catch (_: Exception) {
-            pkt.transactionType == InventoryTransactionType.ITEM_USE_ON_ENTITY
-        }
+        // FIX: transactionData + ItemUseOnEntityData yerine direkt packet field'ları kullanılıyor.
+        // actionType: 0 = Interact, 1 = Attack, 2 = ItemInteract
+        val isAttack = pkt.transactionType == InventoryTransactionType.ITEM_USE_ON_ENTITY &&
+                       pkt.actionType == 1
+
         if (!isAttack) return
 
         val now = System.currentTimeMillis()
