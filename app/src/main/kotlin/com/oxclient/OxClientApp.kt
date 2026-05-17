@@ -27,6 +27,7 @@ class OxClientApp : Application() {
         super.onCreate()
         instance = this
         ServerConfig.init(applicationContext)
+        registerModules()
     }
 
     private fun registerModules() {
