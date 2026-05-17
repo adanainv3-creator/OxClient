@@ -73,7 +73,6 @@ class DashboardActivity : ComponentActivity() {
             )
         }
 
-        MicrosoftAuthManager.init(this)
 
         setContent {
             OxClientTheme {
