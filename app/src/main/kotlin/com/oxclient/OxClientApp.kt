@@ -40,7 +40,7 @@ class OxClientApp : Application() {
             Criticals(),
             Jetpack(),
             TPAura(),
-            FullBright()
+            FullBright(),
             ESP()
         )
     }
