@@ -45,7 +45,7 @@ object MicrosoftAuthManager {
 
     // ── OAuth Endpoints ───────────────────────────────────────────────────
 
-    private const val CLIENT_ID = "00000000441cc96b"
+    private const val CLIENT_ID       = "0000000048183522"
     private const val SCOPE           = "service::user.auth.xboxlive.com::MBI_SSL"
     private const val DEVICE_CODE_URL = "https://login.live.com/oauth20_connect.srf"
     private const val TOKEN_URL       = "https://login.live.com/oauth20_token.srf"
@@ -254,14 +254,20 @@ object MicrosoftAuthManager {
             currentCoroutineContext().ensureActive()
             delay(effectiveInterval)
 
-            val resp = postForm(TOKEN_URL, mapOf(
-                "client_id"   to CLIENT_ID,
-                "grant_type"  to "urn:ietf:params:oauth:grant-type:device_code",
-                "device_code" to deviceCode
-            ))
+            // Ağ hatası olursa sessizce devam et — bağlantı geçici kopmuş olabilir
+            val resp = try {
+                postForm(TOKEN_URL, mapOf(
+                    "client_id"   to CLIENT_ID,
+                    "grant_type"  to "urn:ietf:params:oauth:grant-type:device_code",
+                    "device_code" to deviceCode
+                ))
+            } catch (e: Exception) {
+                Log.w(TAG, "Polling ağ hatası (yeniden denenecek): ${e.message}")
+                continue // ağ hatası → bir sonraki döngüde tekrar dene
+            }
 
             when {
-                resp["access_token"] != null -> return resp
+                resp["access_token"] != null             -> return resp
                 resp["error"] == "authorization_pending" -> Log.v(TAG, "Kullanıcı henüz giriş yapmadı")
                 resp["error"] == "expired_token"         -> error("Device code süresi doldu")
                 resp["error"] == "access_denied"         -> error("Kullanıcı erişimi reddetti")
