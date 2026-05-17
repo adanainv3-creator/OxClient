@@ -45,7 +45,7 @@ object MicrosoftAuthManager {
 
     // ── OAuth Endpoints ───────────────────────────────────────────────────
 
-    private const val CLIENT_ID       = "0000000048183522"
+    private const val CLIENT_ID = "00000000441cc96b"
     private const val SCOPE           = "service::user.auth.xboxlive.com::MBI_SSL"
     private const val DEVICE_CODE_URL = "https://login.live.com/oauth20_connect.srf"
     private const val TOKEN_URL       = "https://login.live.com/oauth20_token.srf"
