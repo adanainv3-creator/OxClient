@@ -123,8 +123,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             is UpdateAttributesPacket   -> handleAttributes(p)
             is PlayerListPacket         -> handlePlayerList(p)
             is EntityEventPacket        -> handleEntityEvent(p)
-            // FIX: ordinal property'dir, fonksiyon değil — parantez kaldırıldı
-            is SetPlayerGameTypePacket  -> selfGameMode = try { p.gamemode.ordinal } catch (_: Exception) { 0 }
+            is SetPlayerGameTypePacket  -> selfGameMode = p.gamemode
             is RespawnPacket            -> if (p.state == RespawnPacket.State.SERVER_SEARCHING) { selfX = p.position.x; selfY = p.position.y; selfZ = p.position.z }
             is ChangeDimensionPacket    -> handleDimension(p)
             is SetEntityLinkPacket      -> handleEntityLink(p)
@@ -137,8 +136,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfRuntimeId = p.runtimeEntityId; selfUniqueId = p.uniqueEntityId
         selfX = p.playerPosition.x; selfY = p.playerPosition.y; selfZ = p.playerPosition.z
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
-        // FIX: ordinal property'dir, fonksiyon değil — parantez kaldırıldı
-        selfGameMode = try { p.playerGameType.ordinal } catch (_: Exception) { 0 }
+        selfGameMode = p.playerGameType
         Log.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ)")
     }
 
@@ -154,9 +152,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             z          = p.position.z,
             yaw        = p.rotation.y,
             pitch      = p.rotation.x,
-            // FIX: Vector3f'te .z getter üzerinden erişilir, doğrudan field değil
-            // AddEntityPacket.rotation Vector3f: x=pitch, y=yaw, z=headYaw
-            headYaw    = try { p.rotation.z } catch (_: Exception) { p.rotation.y },
+            headYaw    = p.headRotation,
             velX       = p.motion.x,
             velY       = p.motion.y,
             velZ       = p.motion.z,
@@ -178,8 +174,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             z          = p.position.z,
             yaw        = p.rotation.y,
             pitch      = p.rotation.x,
-            // FIX: Vector3f.z getter — try/catch korundu
-            headYaw    = try { p.rotation.z } catch (_: Exception) { p.rotation.y },
+            headYaw    = p.rotation.z,
             velX       = p.motion.x,
             velY       = p.motion.y,
             velZ       = p.motion.z,
@@ -214,8 +209,6 @@ object EntityTracker : PacketEventBus.PacketListener {
                 when (flag.toString().uppercase()) {
                     "HAS_X"        -> e.x       += p.x
                     "HAS_Y"        -> e.y       += p.y
-                    // FIX: MoveEntityDeltaPacket.z — bu field var, hata başka bir yerden gelmiş olmalı
-                    // (muhtemelen eski kodda p.z değil p.deltaZ kullanılıyordu)
                     "HAS_Z"        -> e.z       += p.z
                     "HAS_YAW"      -> e.yaw      = p.yaw
                     "HAS_PITCH"    -> e.pitch    = p.pitch
