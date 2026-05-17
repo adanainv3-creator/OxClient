@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.oxclient.auth.AuthState
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
@@ -48,6 +49,7 @@ import com.oxclient.module.ModuleManager
 import com.oxclient.session.SessionManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 val SUPPORTED_PACKAGES = listOf(
@@ -73,6 +75,8 @@ class DashboardActivity : ComponentActivity() {
             )
         }
 
+        // MicrosoftAuthManager.init() burada çağrılmıyor —
+        // OxClientApp.onCreate()'de zaten çağrılıyor, tekrar çağırmak gereksiz.
 
         setContent {
             OxClientTheme {
@@ -81,8 +85,6 @@ class DashboardActivity : ComponentActivity() {
 
                 LaunchedEffect(authState) {
                     if (authState is AuthState.WaitingForUser) {
-                        // FIX: AuthState.WaitingForUser'da 'url' field'ı yok.
-                        // Doğru field adı 'verificationUri'dir.
                         val uri = (authState as AuthState.WaitingForUser).verificationUri
                         if (uri.isNotBlank()) {
                             startActivity(
@@ -109,8 +111,15 @@ class DashboardActivity : ComponentActivity() {
     private fun startRelay(targetPkg: String) {
         stopRelay()
         EntityTracker.init()
-        SessionManager.start()
+
+        // ✅ SessionManager.start() IO thread'de çalıştırılıyor.
+        // getHostBlocking() / getPortBlocking() ana thread'i bloklamamalı.
+        lifecycleScope.launch(Dispatchers.IO) {
+            SessionManager.start()
+        }
+
         OverlayService.start(this)
+
         window.decorView.postDelayed({
             val intent = packageManager.getLaunchIntentForPackage(targetPkg)
             if (intent != null) {

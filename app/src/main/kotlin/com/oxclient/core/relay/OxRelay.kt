@@ -40,21 +40,37 @@ class OxRelay(
         val RELAY_CODEC: BedrockCodec = resolveLatestCodec()
 
         private fun resolveLatestCodec(): BedrockCodec {
-            // CloudburstMC Protocol 3.x — codec listesi dinamik; en son versiyon alınır.
-            return try {
-                val clazz = Class.forName("org.cloudburstmc.protocol.bedrock.codec.v786.Bedrock_v786")
-                clazz.getField("CODEC").get(null) as BedrockCodec
-            } catch (_: Exception) {
+            // Bilinen codec class'larını sırayla dene — ilk bulunanı kullan
+            val candidates = listOf(
+                "org.cloudburstmc.protocol.bedrock.codec.v786.Bedrock_v786",
+                "org.cloudburstmc.protocol.bedrock.codec.v748.Bedrock_v748",
+                "org.cloudburstmc.protocol.bedrock.codec.v729.Bedrock_v729",
+                "org.cloudburstmc.protocol.bedrock.codec.v712.Bedrock_v712",
+                "org.cloudburstmc.protocol.bedrock.codec.v686.Bedrock_v686",
+                "org.cloudburstmc.protocol.bedrock.codec.v671.Bedrock_v671",
+                "org.cloudburstmc.protocol.bedrock.codec.v662.Bedrock_v662",
+                "org.cloudburstmc.protocol.bedrock.codec.v649.Bedrock_v649",
+                "org.cloudburstmc.protocol.bedrock.codec.v630.Bedrock_v630",
+            )
+
+            for (className in candidates) {
                 try {
-                    val clazz = Class.forName("org.cloudburstmc.protocol.bedrock.codec.v748.Bedrock_v748")
-                    clazz.getField("CODEC").get(null) as BedrockCodec
-                } catch (_: Exception) {
-                    // Son çare: ilk kayıtlı codec
-                    org.cloudburstmc.protocol.bedrock.codec.BedrockCodec.builder()
-                        .protocolVersion(748)
-                        .build()
-                }
+                    val codec = Class.forName(className)
+                        .getField("CODEC")
+                        .get(null) as? BedrockCodec
+                    if (codec != null) {
+                        Log.i(TAG, "Codec bulundu: $className (protocol=${codec.protocolVersion})")
+                        return codec
+                    }
+                } catch (_: Exception) { /* bu versiyon yok, devam et */ }
             }
+
+            // Son çare — minecraftVersion boş bırakılmıyor, NPE önlenir
+            Log.w(TAG, "Hiçbir codec bulunamadı, fallback codec kullanılıyor")
+            return BedrockCodec.builder()
+                .protocolVersion(729)
+                .minecraftVersion("1.21.0")
+                .build()
         }
     }
 
@@ -99,7 +115,7 @@ class OxRelay(
             .maximumPlayerCount(1)
             .gameType("Survival")
             .protocolVersion(RELAY_CODEC.protocolVersion)
-            .version(RELAY_CODEC.minecraftVersion)
+            .version(RELAY_CODEC.minecraftVersion ?: "1.21.0")  // null guard eklendi
             .ipv4Port(localPort)
 
         bossGroup  = NioEventLoopGroup(1)
