@@ -37,7 +37,7 @@ class OxRelay(
          * Client'ın gönderdiği LoginPacket'ten otomatik algılanır (AutoCodecListener),
          * bu değer sadece pong advertise için kullanılır.
          */
-        val RELAY_CODEC: BedrockCodec = resolveLatestCodec()
+        val RELAY_CODEC: BedrockCodec by lazy { resolveLatestCodec() }
 
         private fun resolveLatestCodec(): BedrockCodec {
             // Bilinen codec class'larını sırayla dene — ilk bulunanı kullan
