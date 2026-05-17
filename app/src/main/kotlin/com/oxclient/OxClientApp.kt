@@ -26,16 +26,6 @@ class OxClientApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-
-        Log.i(TAG, "OxClient v${BuildConfig.VERSION_NAME} başlatılıyor")
-
-        AccountManager.init(applicationContext)
-        MicrosoftAuthManager.init(applicationContext)
-        ServerConfig.init(applicationContext)
-
-        registerModules()
-
-        Log.i(TAG, "OxClient hazır — ${ModuleManager.getAll().size} modül")
     }
 
     private fun registerModules() {
