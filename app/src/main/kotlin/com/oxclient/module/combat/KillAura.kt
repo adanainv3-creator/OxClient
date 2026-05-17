@@ -36,11 +36,11 @@ class KillAura : BaseModule(
     private val autoBlock       = bool ("Auto Block",       false)
     private val shortcut        = bool ("Shortcut",         false)
 
-    private var currentTargetId  = 0L
-    private var lastSwitchMs     = 0L
-    private var lastAttackMs     = 0L
+    private var currentTargetId   = 0L
+    private var lastSwitchMs      = 0L
+    private var lastAttackMs      = 0L
     private var consecutiveMisses = 0
-    private var tickJob: Job?    = null
+    private var tickJob: Job?     = null
 
     override fun onEnable() {
         super.onEnable()
@@ -95,9 +95,7 @@ class KillAura : BaseModule(
             .take(maxTargets.value)
         if (targets.isEmpty()) return
         lastAttackMs = now
-        targets.forEach { e ->
-            if (!shouldFail()) doAttack(e)
-        }
+        targets.forEach { e -> if (!shouldFail()) doAttack(e) }
     }
 
     private fun doAttack(e: EntityTracker.TrackedEntity) {
@@ -142,7 +140,10 @@ class KillAura : BaseModule(
             PriorityMode.Distance     -> candidates.sortedBy { EntityTracker.distanceTo(it) }
             PriorityMode.Health       -> candidates.sortedBy { it.health }
             PriorityMode.LowestHealth -> candidates.sortedBy { it.health }
-            PriorityMode.Direction    -> candidates.sortedBy { EntityTracker.angleToEntity(it) }
+            // FIX: use EntityTracker.angleToEntity (was unresolved in old version)
+            PriorityMode.Direction    -> candidates.sortedBy { entity: EntityTracker.TrackedEntity ->
+                EntityTracker.angleToEntity(entity)
+            }
         }
 
         val result = if (reversePriority.value) sorted.lastOrNull() else sorted.firstOrNull()
