@@ -136,7 +136,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfRuntimeId = p.runtimeEntityId; selfUniqueId = p.uniqueEntityId
         selfX = p.playerPosition.x; selfY = p.playerPosition.y; selfZ = p.playerPosition.z
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
-        selfGameMode = p.playerGameType
+        selfGameMode = p.playerGameType.ordinal
         Log.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ)")
     }
 
