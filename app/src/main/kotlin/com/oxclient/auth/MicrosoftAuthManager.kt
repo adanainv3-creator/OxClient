@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * Auth Akışı (WebView OAuth):
- *   1. startSignIn()           → AuthState.Loading → DashboardActivity WebView açar
+ *   1. startSignIn()           → AuthState.WaitingForWebView → DeviceCodeLoginActivity açılır
  *   2. WebView redirect kodu yakalar → exchangeCodeForToken(code) çağrılır
  *   3. /oauth20_token.srf      → access_token + refresh_token
  *   4. XBL /user/authenticate  → Xbox Live token + uhs
@@ -33,6 +33,13 @@ import java.util.concurrent.TimeUnit
  *   6. multiplayer.minecraft.net → Bedrock JWT chain (EC keypair ile)
  *   7. Chain kaydedilir → LoginPacketListener enjekte eder
  * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Düzeltmeler (v2):
+ *  - fetchXblToken / fetchXsts: Gson LinkedTreeMap cast hatası giderildi;
+ *    tüm XBL/XSTS yanıtları artık JSONObject ile parse ediliyor.
+ *  - postJsonRaw: HTTP hata kodu (4xx/5xx) body ile birlikte loglanıyor.
+ *  - fetchXblToken: RpsTicket "d=<token>" prefix korundu (authorization code flow için doğru).
+ *  - fetchXsts: XErr yanıtı JSONObject üzerinden güvenle okunuyor.
  */
 object MicrosoftAuthManager {
 
@@ -82,22 +89,12 @@ object MicrosoftAuthManager {
 
     // ── Public API ────────────────────────────────────────────────────────
 
-    /**
-     * Giriş akışını başlatır.
-     * State → AuthState.WaitingForWebView
-     * DashboardActivity bu state'i izleyip DeviceCodeLoginActivity'yi açar.
-     */
     fun startSignIn() {
         if (_authState.value.isLoading) return
-        // WebView'ın açılmasını bekle sinyali ver
         _authState.value = AuthState.WaitingForWebView
         Log.i(TAG, "WebView giriş bekleniyor")
     }
 
-    /**
-     * DeviceCodeLoginActivity'den gelen authorization code ile token exchange yapar.
-     * Bu metod WebView redirect sonrası çağrılır.
-     */
     fun exchangeCodeForToken(code: String) {
         if (activeJob?.isActive == true) return
         _authState.value = AuthState.Loading
@@ -127,9 +124,6 @@ object MicrosoftAuthManager {
         Log.i(TAG, "Çıkış yapıldı")
     }
 
-    /**
-     * Relay'in LoginPacketListener'ı için aktif JWT chain'i döndürür.
-     */
     fun getActiveChainForRelay(): String? {
         val account = AccountManager.selectedAccount ?: return null
         if (account.isExpired()) {
@@ -161,10 +155,12 @@ object MicrosoftAuthManager {
         // ── 2. XBL Token ──────────────────────────────────────────────────
         val xblResult = fetchXblToken(accessToken)
         currentCoroutineContext().ensureActive()
+        Log.d(TAG, "XBL token alındı ✓  uhs=${xblResult.userHash}  gtg=${xblResult.gamertag}")
 
         // ── 3. XSTS Token ─────────────────────────────────────────────────
         val xstsResult = fetchXsts(xblResult.token, "https://multiplayer.minecraft.net/")
         currentCoroutineContext().ensureActive()
+        Log.d(TAG, "XSTS token alındı ✓  uhs=${xstsResult.userHash}  gtg=${xstsResult.gamertag}")
 
         // ── 4. Minecraft Bedrock Chain ────────────────────────────────────
         val mcResult = fetchMinecraftChain(xstsResult.token, xstsResult.userHash)
@@ -236,49 +232,104 @@ object MicrosoftAuthManager {
 
     // ── Auth Aşamaları ────────────────────────────────────────────────────
 
+    /**
+     * XBL token alır.
+     *
+     * DÜZELTME: Gson ile parse yerine JSONObject kullanılıyor.
+     * Gson, nested objeleri LinkedTreeMap'e dönüştürür; Kotlin "as? Map<*, *>" cast'ı
+     * LinkedTreeMap'i kabul etse de iç List<Map> cast'ı runtime'da ClassCastException
+     * veya silent null üretiyordu.
+     *
+     * RpsTicket "d=<token>" prefix'i authorization code flow için zorunlu.
+     * (Device code / consumer MSA tokenları için de aynı prefix gerekir.)
+     */
     private fun fetchXblToken(accessToken: String): XblAuthResult {
-        val body = JSONObject().apply {
+        val bodyJson = JSONObject().apply {
             put("Properties", JSONObject().apply {
                 put("AuthMethod", "RPS")
                 put("SiteName",   "user.auth.xboxlive.com")
-                put("RpsTicket",  "d=$accessToken")
+                put("RpsTicket",  "d=$accessToken")   // "d=" prefix zorunlu
             })
             put("RelyingParty", "http://auth.xboxlive.com")
             put("TokenType",    "JWT")
+        }.toString()
+
+        val respText = postJsonRaw(XBL_URL, bodyJson)
+        Log.d(TAG, "XBL yanıt (ilk 300): ${respText.take(300)}")
+
+        val resp = JSONObject(respText)
+
+        // Hata kontrolü
+        if (resp.has("error")) {
+            val err = resp.optString("error")
+            val desc = resp.optString("error_description", "")
+            error("XBL hatası: $err — $desc")
         }
 
-        val resp     = postJson(XBL_URL, body.toString())
-        val token    = resp["Token"] as? String ?: resp["token"] as? String
-            ?: error("XBL Token alınamadı")
-        val xui      = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<*>)
-            ?.firstOrNull() as? Map<*, *>
-        val uhs      = xui?.get("uhs") as? String ?: ""
-        val gamertag = xui?.get("gtg") as? String ?: ""
+        val token = resp.optString("Token").takeIf { it.isNotBlank() }
+            ?: error("XBL Token alanı boş — yanıt: ${respText.take(400)}")
 
-        Log.d(TAG, "XBL → uhs=$uhs, gtg=$gamertag")
+        val xui      = resp.optJSONObject("DisplayClaims")
+            ?.optJSONArray("xui")
+            ?.optJSONObject(0)
+
+        val uhs      = xui?.optString("uhs") ?: ""
+        val gamertag = xui?.optString("gtg") ?: ""
+
+        Log.d(TAG, "XBL XUI: uhs=$uhs  gtg=$gamertag")
         return XblAuthResult(token, uhs, gamertag)
     }
 
+    /**
+     * XSTS token alır.
+     *
+     * DÜZELTME: Gson parse → JSONObject parse.
+     * XErr alanı Gson'da Double olarak geliyordu (Long overflow riski);
+     * JSONObject.optLong() doğru okur.
+     */
     private fun fetchXsts(xblToken: String, relyingParty: String): XblAuthResult {
-        val body = JSONObject().apply {
+        val bodyJson = JSONObject().apply {
             put("Properties", JSONObject().apply {
                 put("SandboxId",  "RETAIL")
                 put("UserTokens", JSONArray().apply { put(xblToken) })
             })
             put("RelyingParty", relyingParty)
             put("TokenType",    "JWT")
+        }.toString()
+
+        val respText = postJsonRaw(XSTS_URL, bodyJson)
+        Log.d(TAG, "XSTS yanıt (ilk 300): ${respText.take(300)}")
+
+        val resp = JSONObject(respText)
+
+        // XSTS hata yanıtı: { "XErr": 2148916233, "Message": "...", "Redirect": "..." }
+        if (resp.has("XErr")) {
+            val xerr = resp.optLong("XErr")
+            val msg = when (xerr) {
+                2148916233L -> "Xbox hesabı yok. Lütfen xbox.com'dan oluşturun."
+                2148916238L -> "Çocuk hesabı — ebeveyn onayı gerekli."
+                else        -> "XSTS hatası: $xerr — ${resp.optString("Message")}"
+            }
+            error(msg)
         }
 
-        val resp     = postJson(XSTS_URL, body.toString())
-        val token    = resp["Token"] as? String ?: resp["token"] as? String
-            ?: error("XSTS Token alınamadı")
-        val xui      = ((resp["DisplayClaims"] as? Map<*, *>)?.get("xui") as? List<*>)
-            ?.firstOrNull() as? Map<*, *>
-        val uhs      = xui?.get("uhs") as? String ?: ""
-        val gamertag = xui?.get("gtg") as? String ?: ""
+        val token = resp.optString("Token").takeIf { it.isNotBlank() }
+            ?: error("XSTS Token alanı boş — yanıt: ${respText.take(400)}")
 
+        val xui      = resp.optJSONObject("DisplayClaims")
+            ?.optJSONArray("xui")
+            ?.optJSONObject(0)
+            ?: error("XSTS DisplayClaims.xui[0] yok — yanıt: ${respText.take(400)}")
+
+        val uhs      = xui.optString("uhs").takeIf { it.isNotBlank() }
+            ?: error("XSTS uhs boş")
+        val gamertag = xui.optString("gtg") ?: ""
+
+        Log.d(TAG, "XSTS XUI: uhs=$uhs  gtg=$gamertag")
         return XblAuthResult(token, uhs, gamertag)
     }
+
+    // ── Minecraft Chain ───────────────────────────────────────────────────
 
     private fun fetchMinecraftChain(xstsToken: String, userHash: String): McAuthResult {
         val keyGen  = KeyPairGenerator.getInstance("EC")
@@ -308,8 +359,11 @@ object MicrosoftAuthManager {
             .build()
 
         val responseText = http.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("MC /authentication HTTP ${resp.code}")
-            resp.body?.string() ?: error("MC /authentication yanıtı boş")
+            val body = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) {
+                error("MC /authentication HTTP ${resp.code} — $body")
+            }
+            body.ifBlank { error("MC /authentication yanıtı boş") }
         }
 
         Log.d(TAG, "MC /authentication yanıtı: ${responseText.take(200)}…")
@@ -349,10 +403,23 @@ object MicrosoftAuthManager {
         xblGamertag: String,
         xblToken: String
     ): String {
-        if (chainResult.gamertag.isNotBlank()) return chainResult.gamertag
-        if (xstsGamertag.isNotBlank())         return xstsGamertag
-        if (xblGamertag.isNotBlank())           return xblGamertag
+        // Kaynak 1: MC chain extraData.displayName (en güvenilir)
+        if (chainResult.gamertag.isNotBlank()) {
+            Log.d(TAG, "Gamertag kaynağı: MC chain → ${chainResult.gamertag}")
+            return chainResult.gamertag
+        }
+        // Kaynak 2: XSTS DisplayClaims.xui[0].gtg
+        if (xstsGamertag.isNotBlank()) {
+            Log.d(TAG, "Gamertag kaynağı: XSTS gtg → $xstsGamertag")
+            return xstsGamertag
+        }
+        // Kaynak 3: XBL DisplayClaims.xui[0].gtg
+        if (xblGamertag.isNotBlank()) {
+            Log.d(TAG, "Gamertag kaynağı: XBL gtg → $xblGamertag")
+            return xblGamertag
+        }
 
+        // Kaynak 4: Xbox Profile API
         return try {
             val xboxXsts = fetchXsts(xblToken, "http://xboxlive.com")
             val profileReq = Request.Builder()
@@ -362,16 +429,21 @@ object MicrosoftAuthManager {
                 .header("Accept",                 "application/json")
                 .build()
 
-            val body  = http.newCall(profileReq).execute().use { it.body?.string() } ?: ""
-            val root  = JSONObject(body)
-            val users = root.optJSONArray("profileUsers")
+            val body     = http.newCall(profileReq).execute().use { it.body?.string() } ?: ""
+            val root     = JSONObject(body)
+            val users    = root.optJSONArray("profileUsers")
             val settings = users?.optJSONObject(0)?.optJSONArray("settings")
             if (settings != null) {
                 for (i in 0 until settings.length()) {
                     val s = settings.getJSONObject(i)
-                    if (s.optString("id") == "Gamertag") return s.optString("value")
+                    if (s.optString("id") == "Gamertag") {
+                        val gt = s.optString("value")
+                        Log.d(TAG, "Gamertag kaynağı: Profile API → $gt")
+                        return gt
+                    }
                 }
             }
+            Log.w(TAG, "Profile API'den gamertag alınamadı")
             "OxPlayer"
         } catch (e: Exception) {
             Log.w(TAG, "Profile API hatası: ${e.message}")
@@ -399,11 +471,12 @@ object MicrosoftAuthManager {
 
     private fun derToRaw(der: ByteArray): ByteArray {
         var i = 2
-        assert(der[0] == 0x30.toByte())
-        assert(der[i] == 0x02.toByte()); i++
+        check(der[i] == 0x02.toByte()) { "DER: r tag bekleniyor" }
+        i++
         val rLen = der[i++].toInt() and 0xFF
         val r    = der.copyOfRange(i, i + rLen); i += rLen
-        assert(der[i] == 0x02.toByte()); i++
+        check(der[i] == 0x02.toByte()) { "DER: s tag bekleniyor" }
+        i++
         val sLen = der[i++].toInt() and 0xFF
         val s    = der.copyOfRange(i, i + sLen)
         return padOrTrim(BigInteger(1, r).toByteArray(), 32) +
@@ -426,10 +499,13 @@ object MicrosoftAuthManager {
                 if (parts.size < 2) continue
                 val padded = parts[1].let { it + "=".repeat((4 - it.length % 4) % 4) }
                     .replace('-', '+').replace('_', '/')
-                val payload = JSONObject(String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8))
-                val extra   = payload.optJSONObject("extraData")
-                val name    = extra?.optString("displayName")?.takeIf { it.isNotBlank() }
+                val payload = JSONObject(
+                    String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+                )
+                val name = payload.optJSONObject("extraData")?.optString("displayName")
+                    ?.takeIf { it.isNotBlank() }
                     ?: payload.optString("displayName").takeIf { it.isNotBlank() }
+                    ?: payload.optString("username").takeIf { it.isNotBlank() }
                 if (name != null) return name
             } catch (_: Exception) {}
         }
@@ -438,21 +514,47 @@ object MicrosoftAuthManager {
 
     // ── HTTP Yardımcıları ─────────────────────────────────────────────────
 
+    /**
+     * Form POST — token endpoint için.
+     * Yanıt her zaman form-urlencoded veya JSON olabilir; ikisi de desteklenir.
+     */
     private fun postForm(url: String, params: Map<String, String>): Map<String, Any?> {
         val body = FormBody.Builder().apply { params.forEach { (k, v) -> add(k, v) } }.build()
         val text = http.newCall(Request.Builder().url(url).post(body).build())
-            .execute().use { it.body?.string() ?: error("Boş yanıt: $url") }
+            .execute().use { resp ->
+                val b = resp.body?.string() ?: ""
+                if (!resp.isSuccessful) {
+                    Log.e(TAG, "postForm HTTP ${resp.code} [$url]: $b")
+                    error("HTTP ${resp.code}: $b")
+                }
+                b
+            }
         return parseJsonOrForm(text)
     }
 
-    private fun postJson(url: String, json: String): Map<String, Any?> {
+    /**
+     * JSON POST — XBL/XSTS için ham string döndürür.
+     * fetchXblToken ve fetchXsts JSONObject ile parse eder (Gson LinkedTreeMap cast sorunu yok).
+     *
+     * DÜZELTME: Başarısız HTTP yanıtları artık body ile birlikte loglanıyor ve
+     * anlaşılır hata mesajı fırlatılıyor; önceden body yutulup parse hatası çıkıyordu.
+     */
+    private fun postJsonRaw(url: String, json: String): String {
         val body = json.toRequestBody("application/json".toMediaType())
         val req  = Request.Builder().url(url).post(body)
             .header("Content-Type", "application/json")
             .header("Accept",       "application/json")
             .build()
-        val text = http.newCall(req).execute().use { it.body?.string() ?: error("Boş yanıt: $url") }
-        return parseJsonOrForm(text)
+        return http.newCall(req).execute().use { resp ->
+            val text = resp.body?.string() ?: ""
+            if (!resp.isSuccessful && !resp.body.let { text.contains("Token") || text.contains("XErr") }) {
+                // 401 ama body'de Token veya XErr varsa normal yanıt — devam et
+                Log.e(TAG, "postJsonRaw HTTP ${resp.code} [$url]: ${text.take(400)}")
+                error("HTTP ${resp.code}: ${text.take(300)}")
+            }
+            Log.d(TAG, "postJsonRaw HTTP ${resp.code} [$url]")
+            text
+        }
     }
 
     @Suppress("UNCHECKED_CAST")
