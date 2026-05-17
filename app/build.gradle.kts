@@ -114,14 +114,13 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    // ✅ Beta6 → 3.0.9-SNAPSHOT olarak güncellendi
-    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.9-SNAPSHOT") {
+    implementation("org.cloudburstmc.protocol:bedrock-connection:3.0.0.Beta6-SNAPSHOT") {
         exclude(group = "io.netty", module = "netty-transport-native-epoll")
         exclude(group = "io.netty", module = "netty-transport-native-kqueue")
         exclude(group = "io.netty.incubator", module = "netty-incubator-transport-native-io_uring")
         exclude(group = "it.unimi.dsi", module = "fastutil-core")
     }
-    implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.9-SNAPSHOT") {
+    implementation("org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta6-SNAPSHOT") {
         exclude(group = "it.unimi.dsi", module = "fastutil-core")
     }
     implementation("org.cloudburstmc:nbt:3.0.0.Final")
@@ -141,5 +140,5 @@ dependencies {
 
 configurations.all {
     resolutionStrategy.cacheChangingModulesFor(0, TimeUnit.SECONDS)
-    // ✅ force satırı kaldırıldı — 3.0.9-SNAPSHOT kendi fastutil versiyonunu doğru çekiyor
+    resolutionStrategy.force("org.cloudburstmc.fastutil:core:8.5.15")
 }

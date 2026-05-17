@@ -22,10 +22,10 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven {
-            url = uri("https://repo.opencollab.dev/maven-snapshots")
+            url = uri("https://repo.opencollab.dev/maven-snapshots/")
         }
         maven {
-            url = uri("https://repo.opencollab.dev/maven-releases")
+            url = uri("https://repo.opencollab.dev/maven-releases/")
         }
         maven {
             url = uri("https://jitpack.io")
