@@ -293,7 +293,9 @@ object MicrosoftAuthManager {
         }
 
         val resp = postJson(XBL_URL, body.toString())
-        val token = resp.str("Token")
+        val token = resp["Token"] as? String
+            ?: resp["token"] as? String
+            ?: error("XBL Token alınamadı")
 
         val displayClaims = resp["DisplayClaims"] as? Map<*, *>
         val xuiList       = displayClaims?.get("xui") as? List<*>
@@ -320,7 +322,9 @@ object MicrosoftAuthManager {
         }
 
         val resp  = postJson(XSTS_URL, body.toString())
-        val token = resp.str("Token")
+        val token = resp["Token"] as? String
+            ?: resp["token"] as? String
+            ?: error("XSTS Token alınamadı")
 
         val displayClaims = resp["DisplayClaims"] as? Map<*, *>
         val xuiList       = displayClaims?.get("xui") as? List<*>
