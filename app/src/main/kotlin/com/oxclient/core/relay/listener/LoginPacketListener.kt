@@ -116,12 +116,12 @@ class LoginPacketListener : OxPacketListener {
         return try {
             val raw = packet.chain
             when {
-                raw == null                    -> "{}"
-                raw is String                  -> raw
-                raw is List<*>                 -> JSONObject().apply {
+                raw == null    -> "{}"
+                raw is String  -> raw
+                raw is List<*> -> JSONObject().apply {
                     put("chain", JSONArray(raw.map { it.toString() }))
                 }.toString()
-                else                           -> raw.toString()
+                else           -> raw.toString()
             }
         } catch (e: Exception) {
             Log.w(TAG, "chain extract hatası: ${e.message}")
@@ -131,8 +131,7 @@ class LoginPacketListener : OxPacketListener {
 
     private fun extractExtraJson(packet: LoginPacket): String {
         return try {
-            val raw = packet.extra
-            raw?.toString() ?: ""
+            packet.extra?.toString() ?: ""
         } catch (e: Exception) {
             Log.w(TAG, "extra extract hatası: ${e.message}")
             ""
@@ -147,11 +146,11 @@ class LoginPacketListener : OxPacketListener {
         }
 
         try {
-            val keyGen  = KeyPairGenerator.getInstance("EC")
+            val keyGen    = KeyPairGenerator.getInstance("EC")
             keyGen.initialize(ECGenParameterSpec("secp256r1"))
-            val keyPair = keyGen.generateKeyPair()
-            val pubKey  = keyPair.public  as ECPublicKey
-            val privKey = keyPair.private as ECPrivateKey
+            val keyPair   = keyGen.generateKeyPair()
+            val pubKey    = keyPair.public  as ECPublicKey
+            val privKey   = keyPair.private as ECPrivateKey
             val pubKeyB64 = Base64.encodeToString(
                 pubKey.encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
             )
@@ -167,18 +166,24 @@ class LoginPacketListener : OxPacketListener {
                 put("chain", JSONArray(fullChain))
             }.toString()
 
+            // Önce reflection, sonra setter dene
+            var injected = false
             try {
-                @Suppress("UNCHECKED_CAST")
                 val chainField = packet.javaClass.getDeclaredField("chain")
                 chainField.isAccessible = true
                 chainField.set(packet, newChainWrapper)
                 Log.i(TAG, "Chain enjekte edildi (reflection): ${fullChain.size} JWT")
+                injected = true
             } catch (rf: Exception) {
-                Log.w(TAG, "Reflection chain set başarısız, doğrudan deneniyor: ${rf.message}")
+                Log.w(TAG, "Reflection başarısız: ${rf.message}")
+            }
+
+            if (!injected) {
                 try {
-                    (packet as Any).javaClass.getMethod("setChain", String::class.java)
+                    packet.javaClass.getMethod("setChain", String::class.java)
                         .invoke(packet, newChainWrapper)
                     Log.i(TAG, "Chain enjekte edildi (setter): ${fullChain.size} JWT")
+                    injected = true
                 } catch (me: Exception) {
                     Log.e(TAG, "Chain enjeksiyonu tamamen başarısız: ${me.message}")
                 }
@@ -223,12 +228,33 @@ class LoginPacketListener : OxPacketListener {
         return "$sigInput.${b64Url(derToRaw(signer.sign()))}"
     }
 
+    /**
+     * DER formatındaki ECDSA imzasını JWT raw (r‖s) formatına çevirir.
+     *
+     * DER yapısı:
+     *   30 <total_len>           ← SEQUENCE
+     *     02 <r_len> <r_bytes>   ← INTEGER r
+     *     02 <s_len> <s_bytes>   ← INTEGER s
+     *
+     * Önceki kodda `var i = 2; i++` ile i=3'ten başlıyordu → r_len byte'ı yanlış okunuyordu.
+     * Doğru: SEQUENCE (1) + total_len (1) = offset 2'den başla, orası 0x02 (r tag).
+     */
     private fun derToRaw(der: ByteArray): ByteArray {
-        var i = 2; i++
+        // der[0] = 0x30 (SEQUENCE), der[1] = total_len
+        var i = 2
+        // der[i] = 0x02 (INTEGER tag for r)
+        check(der[i] == 0x02.toByte()) { "DER: r tag bekleniyor, got 0x${der[i].toString(16)}" }
+        i++ // tag'i atla
         val rLen = der[i++].toInt() and 0xFF
-        val r    = der.copyOfRange(i, i + rLen); i += rLen; i++
+        val r    = der.copyOfRange(i, i + rLen)
+        i += rLen
+
+        // der[i] = 0x02 (INTEGER tag for s)
+        check(der[i] == 0x02.toByte()) { "DER: s tag bekleniyor, got 0x${der[i].toString(16)}" }
+        i++ // tag'i atla
         val sLen = der[i++].toInt() and 0xFF
         val s    = der.copyOfRange(i, i + sLen)
+
         return padOrTrim(BigInteger(1, r).toByteArray(), 32) +
                padOrTrim(BigInteger(1, s).toByteArray(), 32)
     }

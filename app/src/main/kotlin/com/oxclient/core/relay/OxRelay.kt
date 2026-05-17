@@ -9,7 +9,6 @@ import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
 import org.cloudburstmc.protocol.bedrock.BedrockPong
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockServerInitializer
-import org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler
 import org.cloudburstmc.protocol.bedrock.BedrockServerSession
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
@@ -32,15 +31,9 @@ class OxRelay(
     companion object {
         private const val TAG = "OxRelay"
 
-        /**
-         * Relay'in hangi Bedrock codec versiyonunu kullanacağı.
-         * Client'ın gönderdiği LoginPacket'ten otomatik algılanır (AutoCodecListener),
-         * bu değer sadece pong advertise için kullanılır.
-         */
         val RELAY_CODEC: BedrockCodec by lazy { resolveLatestCodec() }
 
         private fun resolveLatestCodec(): BedrockCodec {
-            // Bilinen codec class'larını sırayla dene — ilk bulunanı kullan
             val candidates = listOf(
                 "org.cloudburstmc.protocol.bedrock.codec.v786.Bedrock_v786",
                 "org.cloudburstmc.protocol.bedrock.codec.v748.Bedrock_v748",
@@ -62,10 +55,9 @@ class OxRelay(
                         Log.i(TAG, "Codec bulundu: $className (protocol=${codec.protocolVersion})")
                         return codec
                     }
-                } catch (_: Exception) { /* bu versiyon yok, devam et */ }
+                } catch (_: Exception) {}
             }
 
-            // Son çare — minecraftVersion boş bırakılmıyor, NPE önlenir
             Log.w(TAG, "Hiçbir codec bulunamadı, fallback codec kullanılıyor")
             return BedrockCodec.builder()
                 .protocolVersion(729)
@@ -77,10 +69,9 @@ class OxRelay(
     // ── Durum ─────────────────────────────────────────────────────────────
 
     @Volatile private var running = false
-    private var bossGroup: NioEventLoopGroup? = null
+    private var bossGroup: NioEventLoopGroup?   = null
     private var workerGroup: NioEventLoopGroup? = null
 
-    /** Aktif tüm MITM oturumları */
     val sessions = CopyOnWriteArrayList<OxRelaySession>()
 
     private var remoteHost: String = ""
@@ -88,10 +79,6 @@ class OxRelay(
 
     // ── API ───────────────────────────────────────────────────────────────
 
-    /**
-     * Relay'i başlatır ve gelen her bağlantıyı [remoteHost]:[remotePort]'a köprüler.
-     * @param onSessionCreated  Her yeni MITM oturumu oluşturulduğunda çağrılır.
-     */
     fun capture(
         remoteHost: String,
         remotePort: Int = 19132,
@@ -115,10 +102,10 @@ class OxRelay(
             .maximumPlayerCount(1)
             .gameType("Survival")
             .protocolVersion(RELAY_CODEC.protocolVersion)
-            .version(RELAY_CODEC.minecraftVersion ?: "1.21.0")  // null guard eklendi
+            .version(RELAY_CODEC.minecraftVersion ?: "1.21.0")
             .ipv4Port(localPort)
 
-        bossGroup  = NioEventLoopGroup(1)
+        bossGroup   = NioEventLoopGroup(1)
         workerGroup = NioEventLoopGroup(4)
 
         try {
@@ -129,14 +116,23 @@ class OxRelay(
                 .childHandler(object : BedrockServerInitializer() {
                     override fun initSession(clientSession: BedrockServerSession) {
                         Log.i(TAG, "Yeni client bağlantısı: ${clientSession.socketAddress}")
+
                         val relaySession = OxRelaySession(
                             clientSession = clientSession,
                             remoteHost    = this@OxRelay.remoteHost,
                             remotePort    = this@OxRelay.remotePort,
                             relay         = this@OxRelay
                         )
+
                         sessions.add(relaySession)
+
+                        // ✅ KRİTİK: Listener'ları session'a ekle
+                        // (AutoCodec, LoginPacket, Gaming — hepsi burada bağlanır)
+                        ConnectionManager.setupSession(relaySession)
+
+                        // Session'ı başlat (server'a bağlan)
                         relaySession.init()
+
                         onSessionCreated?.invoke(relaySession)
                     }
                 })
@@ -153,7 +149,6 @@ class OxRelay(
         }
     }
 
-    /** Relay'i ve tüm aktif oturumları durdurur. */
     fun stop() {
         if (!running) return
         running = false
@@ -172,7 +167,7 @@ class OxRelay(
     private fun shutdownGroups() {
         try { bossGroup?.shutdownGracefully()?.sync() }  catch (_: Exception) {}
         try { workerGroup?.shutdownGracefully()?.sync() } catch (_: Exception) {}
-        bossGroup  = null
+        bossGroup   = null
         workerGroup = null
     }
 
