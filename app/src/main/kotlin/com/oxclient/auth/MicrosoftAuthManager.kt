@@ -248,7 +248,7 @@ object MicrosoftAuthManager {
             put("Properties", JSONObject().apply {
                 put("AuthMethod", "RPS")
                 put("SiteName",   "user.auth.xboxlive.com")
-                put("RpsTicket",  "d=$accessToken")   // "d=" prefix zorunlu
+                put("RpsTicket",  accessToken)   // legacy MSA/MBI_SSL scope: prefix YOK
             })
             put("RelyingParty", "http://auth.xboxlive.com")
             put("TokenType",    "JWT")
@@ -547,12 +547,13 @@ object MicrosoftAuthManager {
             .build()
         return http.newCall(req).execute().use { resp ->
             val text = resp.body?.string() ?: ""
-            if (!resp.isSuccessful && !resp.body.let { text.contains("Token") || text.contains("XErr") }) {
-                // 401 ama body'de Token veya XErr varsa normal yanıt — devam et
+            Log.d(TAG, "postJsonRaw HTTP ${resp.code} [$url]")
+            // XSTS 401 body'sinde XErr olabilir — bu durumda caller parse eder
+            val isXstsError = text.contains("XErr")
+            if (!resp.isSuccessful && !isXstsError) {
                 Log.e(TAG, "postJsonRaw HTTP ${resp.code} [$url]: ${text.take(400)}")
                 error("HTTP ${resp.code}: ${text.take(300)}")
             }
-            Log.d(TAG, "postJsonRaw HTTP ${resp.code} [$url]")
             text
         }
     }
