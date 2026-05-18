@@ -198,12 +198,14 @@ class OxRelay(
     private fun buildPong(protocolVersion: Int, minecraftVersion: String) =
         BedrockPong()
             .edition("MCPE")
-            .motd("OxClient Relay")
-            .subMotd("MITM Active")
+            .motd("MITM Active")
+            .subMotd("OxClient")
             .playerCount(0)
-            .maximumPlayerCount(1)
+            .maximumPlayerCount(300)
             .gameType("Survival")
+            .nintendoLimited(false)
             .protocolVersion(protocolVersion)
             .version(minecraftVersion)
             .ipv4Port(localPort)
+            .ipv6Port(localPort)
 }
