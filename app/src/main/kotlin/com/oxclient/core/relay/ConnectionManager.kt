@@ -26,13 +26,20 @@ object ConnectionManager {
     private val _ping = MutableStateFlow(-1L)
     val ping: StateFlow<Long> = _ping.asStateFlow()
 
-    fun setupSession(session: OxRelaySession) {
+    /**
+     * Session'ı kurar ve listener'ları ekler.
+     *
+     * GÜNCELLEME: AutoCodecListener artık relay referansını alıyor.
+     * Client'ın gerçek protokol versiyonu öğrenilince relay pong'u
+     * otomatik güncellenir → MC "Sürüm uyumsuz" göstermez.
+     */
+    fun setupSession(session: OxRelaySession, relay: OxRelay? = null) {
         Log.d(TAG, "Session kuruluyor: ${session.clientAddress}")
 
         PacketEventBus.setSession(session)
 
         val listeners = listOf(
-            AutoCodecListener(),
+            AutoCodecListener(relay),      // relay → pong dinamik güncelleme
             LoginPacketListener(),
             GamingPacketListener(),
         )
