@@ -109,7 +109,7 @@ object SessionManager {
         OverlayLogger.i(TAG, "Yeni session #${_sessionCount.value}: ${session.clientAddress}")
         _statusMessage.value = "Session #${_sessionCount.value} — ${session.clientAddress}"
         PacketEventBus.setSession(session)
-        ConnectionManager.setupSession(session)
+        ConnectionManager.setupSession(session, relay)  // FIX: relay geçiriliyordu null — AutoCodecListener pong güncelleyemiyordu
         installSessionCloseListener(session)
     }
 

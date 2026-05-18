@@ -21,7 +21,7 @@ object ServerConfig {
 
     const val DEFAULT_HOST     = "2b2tpe.org"
     const val DEFAULT_PORT     = 19132
-    const val LOCAL_PROXY_PORT = 19132
+    const val LOCAL_PROXY_PORT = 19150  // FIX: 19132 ile çakışıyordu → timeout + "sunucu dolu"
 
     private val KEY_HOST    = stringPreferencesKey("server_host")
     private val KEY_PORT    = intPreferencesKey   ("server_port")
