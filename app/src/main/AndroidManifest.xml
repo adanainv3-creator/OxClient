@@ -12,6 +12,12 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <queries>
+        <package android:name="com.mojang.minecraftpe" />
+        <package android:name="com.netease.mc" />
+        <package android:name="com.mojang.minecrafttrialpe" />
+    </queries>
+
     <application
         android:name=".OxClientApp"
         android:allowBackup="false"
