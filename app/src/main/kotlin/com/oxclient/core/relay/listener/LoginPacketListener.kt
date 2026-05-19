@@ -6,6 +6,7 @@ import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.core.relay.ClientIdentification
 import com.oxclient.core.relay.ConnectionManager
 import com.oxclient.core.relay.OxRelaySession
+import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
 import org.cloudburstmc.protocol.bedrock.packet.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -40,6 +41,7 @@ class LoginPacketListener : OxPacketListener {
         when (packet) {
             is RequestNetworkSettingsPacket -> {
                 Log.d(TAG, "RequestNetworkSettings protocol=${packet.protocolVersion}")
+                // Asıl işlem AutoCodecListener'da yapılıyor (priority=-10, önce çalışır)
             }
             is LoginPacket -> {
                 if (!loginProcessed) {
@@ -58,9 +60,28 @@ class LoginPacketListener : OxPacketListener {
 
     override fun onServerPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
         when (packet) {
+
+            // ── NetworkSettingsPacket ─────────────────────────────────────
+            // Server bu paketi gönderince server-side compression açılır.
+            // Client-side compression AutoCodecListener'da zaten açıldı.
+            // WRelay akışı: server NetworkSettings → client compression aç → Login gönder
             is NetworkSettingsPacket -> {
                 Log.d(TAG, "NetworkSettings compression=${packet.compressionAlgorithm} threshold=${packet.compressionThreshold}")
+                try {
+                    if (packet.compressionThreshold > 0) {
+                        session.serverSession?.setCompression(packet.compressionAlgorithm)
+                        Log.i(TAG, "Server compression açıldı: ${packet.compressionAlgorithm}")
+                    } else {
+                        session.serverSession?.setCompression(PacketCompressionAlgorithm.NONE)
+                        Log.i(TAG, "Server compression kapalı")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Server compression ayarlanamadı: ${e.message}")
+                }
+                // paketi client'a iletme — client zaten AutoCodecListener'dan aldı
+                return false
             }
+
             is ServerToClientHandshakePacket -> {
                 Log.d(TAG, "ServerToClientHandshake jwt=${packet.jwt?.take(60)}…")
             }
@@ -166,7 +187,6 @@ class LoginPacketListener : OxPacketListener {
                 put("chain", JSONArray(fullChain))
             }.toString()
 
-            // Önce reflection, sonra setter dene
             var injected = false
             try {
                 val chainField = packet.javaClass.getDeclaredField("chain")
@@ -183,7 +203,6 @@ class LoginPacketListener : OxPacketListener {
                     packet.javaClass.getMethod("setChain", String::class.java)
                         .invoke(packet, newChainWrapper)
                     Log.i(TAG, "Chain enjekte edildi (setter): ${fullChain.size} JWT")
-                    injected = true
                 } catch (me: Exception) {
                     Log.e(TAG, "Chain enjeksiyonu tamamen başarısız: ${me.message}")
                 }
@@ -228,33 +247,17 @@ class LoginPacketListener : OxPacketListener {
         return "$sigInput.${b64Url(derToRaw(signer.sign()))}"
     }
 
-    /**
-     * DER formatındaki ECDSA imzasını JWT raw (r‖s) formatına çevirir.
-     *
-     * DER yapısı:
-     *   30 <total_len>           ← SEQUENCE
-     *     02 <r_len> <r_bytes>   ← INTEGER r
-     *     02 <s_len> <s_bytes>   ← INTEGER s
-     *
-     * Önceki kodda `var i = 2; i++` ile i=3'ten başlıyordu → r_len byte'ı yanlış okunuyordu.
-     * Doğru: SEQUENCE (1) + total_len (1) = offset 2'den başla, orası 0x02 (r tag).
-     */
     private fun derToRaw(der: ByteArray): ByteArray {
-        // der[0] = 0x30 (SEQUENCE), der[1] = total_len
         var i = 2
-        // der[i] = 0x02 (INTEGER tag for r)
         check(der[i] == 0x02.toByte()) { "DER: r tag bekleniyor, got 0x${der[i].toString(16)}" }
-        i++ // tag'i atla
+        i++
         val rLen = der[i++].toInt() and 0xFF
         val r    = der.copyOfRange(i, i + rLen)
         i += rLen
-
-        // der[i] = 0x02 (INTEGER tag for s)
         check(der[i] == 0x02.toByte()) { "DER: s tag bekleniyor, got 0x${der[i].toString(16)}" }
-        i++ // tag'i atla
+        i++
         val sLen = der[i++].toInt() and 0xFF
         val s    = der.copyOfRange(i, i + sLen)
-
         return padOrTrim(BigInteger(1, r).toByteArray(), 32) +
                padOrTrim(BigInteger(1, s).toByteArray(), 32)
     }
