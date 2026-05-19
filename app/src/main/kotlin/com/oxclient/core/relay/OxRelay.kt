@@ -36,7 +36,9 @@ class OxRelay(
     private val localPort: Int = 19150
 ) {
     companion object {
-        private const val TAG = "OxRelay"
+        private const val TAG          = "OxRelay"
+        private const val PONG_MOTD    = "oxse"
+        private const val PONG_SUB_MOTD = "OxClient"
 
         /**
          * Kütüphanede mevcut olan en yüksek codec'i döndürür.
@@ -153,8 +155,8 @@ class OxRelay(
             // ── LAN Discovery başlat ──────────────────────────────────────
             LanBroadcaster.start(
                 relayPort       = localPort,
-                motd            = currentPong.motd            ?: "OxClient",
-                subMotd         = currentPong.subMotd         ?: "OxClient",
+                motd            = PONG_MOTD,
+                subMotd         = PONG_SUB_MOTD,
                 protocolVersion = RELAY_CODEC.protocolVersion,
                 mcVersion       = RELAY_CODEC.minecraftVersion ?: "26.10",
                 maxPlayers      = 10
@@ -189,7 +191,7 @@ class OxRelay(
         LanBroadcaster.updateInfo(
             protocolVersion = protocolVersion,
             mcVersion       = minecraftVersion,
-            motd            = currentPong.motd ?: "OxClient"
+            motd            = PONG_MOTD
         )
     }
 
