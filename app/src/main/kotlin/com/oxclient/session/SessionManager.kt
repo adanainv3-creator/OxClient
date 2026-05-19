@@ -5,6 +5,7 @@ import com.oxclient.auth.AccountManager
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.ConnectionManager
+import com.oxclient.core.relay.LanBroadcaster
 import com.oxclient.core.relay.OxRelay
 import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEventBus
@@ -87,7 +88,7 @@ object SessionManager {
         OverlayLogger.i(TAG, "Relay durduruluyor")
         try {
             ModuleManager.disableAll()
-            relay?.stop()
+            relay?.stop()   // OxRelay.stop() içinde LanBroadcaster.stop() zaten çağrılıyor
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Relay durdurma hatası: ${e.message}", e)
         } finally {
@@ -109,7 +110,16 @@ object SessionManager {
         OverlayLogger.i(TAG, "Yeni session #${_sessionCount.value}: ${session.clientAddress}")
         _statusMessage.value = "Session #${_sessionCount.value} — ${session.clientAddress}"
         PacketEventBus.setSession(session)
-        ConnectionManager.setupSession(session, relay)  // FIX: relay geçiriliyordu null — AutoCodecListener pong güncelleyemiyordu
+
+        // LanBroadcaster'a aktif oyuncu sayısını bildir — LAN listesinde "1/10" görünür
+        LanBroadcaster.updateInfo(
+            protocolVersion = OxRelay.RELAY_CODEC.protocolVersion,
+            mcVersion       = OxRelay.RELAY_CODEC.minecraftVersion ?: "26.10",
+            playerCount     = _sessionCount.value
+        )
+
+        // relay referansını geçir → AutoCodecListener pong'u güncelleyebilsin
+        ConnectionManager.setupSession(session, relay)
         installSessionCloseListener(session)
     }
 
@@ -130,6 +140,18 @@ object SessionManager {
         PacketEventBus.setSession(null)
         EntityTracker.reset()
         BlockTracker.clear()
+
+        // Oyuncu sayısını sıfırla
+        val newCount = maxOf(0, _sessionCount.value - 1)
+        _sessionCount.value = newCount
+        if (LanBroadcaster.isRunning) {
+            LanBroadcaster.updateInfo(
+                protocolVersion = OxRelay.RELAY_CODEC.protocolVersion,
+                mcVersion       = OxRelay.RELAY_CODEC.minecraftVersion ?: "26.10",
+                playerCount     = newCount
+            )
+        }
+
         if (_isActive.value) {
             _statusMessage.value = "Session kapandı — yeniden bağlanmayı bekliyor"
             ConnectionManager.onDisconnected(reason)

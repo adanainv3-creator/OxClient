@@ -20,10 +20,16 @@ import java.util.concurrent.CopyOnWriteArrayList
  * ─────────────────────────────────────────────────────────────────────────
  * Codec Çözümü (v2):
  *  - RELAY_CODEC: kütüphanede bulunan en yüksek versiyonlu codec seçilir.
- *  - Codec listesi v935'e (MC 26.10) kadar genişletildi.
+ *  - Codec listesi v975'e (MC 26.20) kadar genişletildi.
  *  - updatePong(): AutoCodecListener client versiyonunu öğrenince pong'u
  *    dinamik olarak günceller → MC o anda doğru sürümü görür.
  *  - Fallback codec bulunamazsa protocolVersion=935, version="26.10" kullanılır.
+ *
+ * LAN Discovery (v3):
+ *  - capture() sonrasında LanBroadcaster otomatik başlar.
+ *  - MC'nin LAN sekmesinde "oxse" adıyla görünür, tıklanınca relay'e bağlanır.
+ *  - updatePong() çağrıldığında LanBroadcaster da güncellenir.
+ *  - stop() çağrıldığında LanBroadcaster da durur.
  * ─────────────────────────────────────────────────────────────────────────
  */
 class OxRelay(
@@ -35,7 +41,6 @@ class OxRelay(
         /**
          * Kütüphanede mevcut olan en yüksek codec'i döndürür.
          * Sırası önemli: en yeni → en eski.
-         * MC 26.x sürümleri için v935+ gerekir; kütüphane güncel SNAPSHOT içeriyorsa bulunur.
          */
         val RELAY_CODEC: BedrockCodec by lazy { resolveLatestCodec() }
 
@@ -72,8 +77,6 @@ class OxRelay(
                 } catch (_: Exception) {}
             }
 
-            // Hiçbir codec bulunamadı — passthrough fallback
-            // protocolVersion=935 → MC 26.10'un bağlanmasına izin verir
             Log.w(TAG, "Hiçbir codec bulunamadı! Fallback: protocol=935, mc=26.10")
             return BedrockCodec.builder()
                 .protocolVersion(935)
@@ -94,7 +97,8 @@ class OxRelay(
     private var remoteHost: String = ""
     private var remotePort: Int    = 19132
 
-    @Volatile private var currentPong: BedrockPong = buildPong(RELAY_CODEC.protocolVersion, RELAY_CODEC.minecraftVersion ?: "26.10")
+    @Volatile private var currentPong: BedrockPong =
+        buildPong(RELAY_CODEC.protocolVersion, RELAY_CODEC.minecraftVersion ?: "26.10")
 
     // ── API ───────────────────────────────────────────────────────────────
 
@@ -143,7 +147,18 @@ class OxRelay(
 
             serverChannel = future.channel()
             running = true
+
             Log.i(TAG, "OxRelay başlatıldı → 0.0.0.0:$localPort ↔ $remoteHost:$remotePort  codec=${RELAY_CODEC.protocolVersion}")
+
+            // ── LAN Discovery başlat ──────────────────────────────────────
+            LanBroadcaster.start(
+                relayPort       = localPort,
+                motd            = currentPong.motd            ?: "OxClient",
+                subMotd         = currentPong.subMotd         ?: "OxClient",
+                protocolVersion = RELAY_CODEC.protocolVersion,
+                mcVersion       = RELAY_CODEC.minecraftVersion ?: "26.10",
+                maxPlayers      = 10
+            )
 
         } catch (e: Exception) {
             Log.e(TAG, "OxRelay başlatılamadı", e)
@@ -154,28 +169,42 @@ class OxRelay(
 
     /**
      * AutoCodecListener tarafından çağrılır: MC client'ın gerçek protokol versiyonu
-     * öğrenilince pong güncellenir. Bir sonraki MC tarama paketinde doğru versiyon görünür.
+     * öğrenilince hem RakNet pong hem de LanBroadcaster güncellenir.
      */
     fun updatePong(protocolVersion: Int, minecraftVersion: String) {
         if (!running) return
         currentPong = buildPong(protocolVersion, minecraftVersion)
+
+        // RakNet advertisement güncelle
         try {
             serverChannel?.config()?.setOption(
                 RakChannelOption.RAK_ADVERTISEMENT, currentPong.toByteBuf()
             )
-            Log.i(TAG, "Pong güncellendi: protocol=$protocolVersion  mc=$minecraftVersion")
+            Log.i(TAG, "RakNet pong güncellendi: protocol=$protocolVersion  mc=$minecraftVersion")
         } catch (e: Exception) {
-            Log.w(TAG, "Pong güncellenemedi: ${e.message}")
+            Log.w(TAG, "RakNet pong güncellenemedi: ${e.message}")
         }
+
+        // LanBroadcaster da güncelle — artık doğru version yayımlanır
+        LanBroadcaster.updateInfo(
+            protocolVersion = protocolVersion,
+            mcVersion       = minecraftVersion,
+            motd            = currentPong.motd ?: "OxClient"
+        )
     }
 
     fun stop() {
         if (!running) return
         running = false
         Log.i(TAG, "OxRelay durduruluyor…")
+
+        // LAN discovery durdur
+        LanBroadcaster.stop()
+
         sessions.forEach { it.disconnect("Relay kapatıldı") }
         sessions.clear()
         shutdownGroups()
+
         Log.i(TAG, "OxRelay durduruldu")
     }
 
@@ -184,10 +213,10 @@ class OxRelay(
     }
 
     private fun shutdownGroups() {
-        try { bossGroup?.shutdownGracefully()?.sync() }   catch (_: Exception) {}
-        try { workerGroup?.shutdownGracefully()?.sync() }  catch (_: Exception) {}
-        bossGroup    = null
-        workerGroup  = null
+        try { bossGroup?.shutdownGracefully()?.sync() }  catch (_: Exception) {}
+        try { workerGroup?.shutdownGracefully()?.sync() } catch (_: Exception) {}
+        bossGroup     = null
+        workerGroup   = null
         serverChannel = null
     }
 
@@ -198,10 +227,10 @@ class OxRelay(
     private fun buildPong(protocolVersion: Int, minecraftVersion: String) =
         BedrockPong()
             .edition("MCPE")
-            .motd("MITM Active")
+            .motd("oxse")
             .subMotd("OxClient")
             .playerCount(0)
-            .maximumPlayerCount(300)
+            .maximumPlayerCount(10)
             .gameType("Survival")
             .nintendoLimited(false)
             .protocolVersion(protocolVersion)
