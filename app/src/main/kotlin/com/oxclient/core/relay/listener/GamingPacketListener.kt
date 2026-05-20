@@ -84,25 +84,14 @@ class GamingPacketListener : OxPacketListener {
                 applyCameraDefinitions(packet, session)
             }
 
-            // ── Entity tracking ───────────────────────────────────────────
-            is AddPlayerPacket -> {
-                Log.v(TAG, "AddPlayer: ${packet.username} eid=${packet.runtimeEntityId}")
-                EntityTracker.addPlayer(packet)
-            }
-            is AddEntityPacket -> {
-                Log.v(TAG, "AddEntity: ${packet.identifier} eid=${packet.runtimeEntityId}")
-                EntityTracker.addEntity(packet)
-            }
-            is RemoveEntityPacket -> {
-                Log.v(TAG, "RemoveEntity: uid=${packet.uniqueEntityId}")
-                EntityTracker.removeEntity(packet.uniqueEntityId)
-            }
-            is MoveEntityAbsolutePacket -> {
-                EntityTracker.updatePosition(packet)
-            }
-            is MovePlayerPacket -> {
-                EntityTracker.updatePlayerPosition(packet)
-            }
+            // Entity tracking PacketEventBus üzerinden EntityTracker tarafından
+            // otomatik yapılıyor (EntityTracker.init() → PacketEventBus.register())
+            // Burada sadece logluyoruz.
+            is AddPlayerPacket          -> Log.v(TAG, "AddPlayer: ${packet.username} eid=${packet.runtimeEntityId}")
+            is AddEntityPacket          -> Log.v(TAG, "AddEntity: ${packet.identifier} eid=${packet.runtimeEntityId}")
+            is RemoveEntityPacket       -> Log.v(TAG, "RemoveEntity: uid=${packet.uniqueEntityId}")
+            is MoveEntityAbsolutePacket -> { /* yüksek frekanslı */ }
+            is MovePlayerPacket         -> { /* yüksek frekanslı */ }
 
             // ── Diğer oyun paketleri ──────────────────────────────────────
             is RespawnPacket          -> Log.d(TAG, "Respawn: ${packet.position} state=${packet.state}")
