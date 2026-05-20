@@ -20,25 +20,27 @@ object SessionManager {
 
     private const val TAG = "SessionManager"
 
-    private val _isActive        = MutableStateFlow(false)
+    private val _isActive       = MutableStateFlow(false)
     val isActive: StateFlow<Boolean> = _isActive.asStateFlow()
 
-    private val _connectedHost   = MutableStateFlow("")
+    private val _connectedHost  = MutableStateFlow("")
     val connectedHostFlow: StateFlow<String> = _connectedHost.asStateFlow()
 
-    private val _connectedPort   = MutableStateFlow(0)
+    private val _connectedPort  = MutableStateFlow(0)
     val connectedPortFlow: StateFlow<Int> = _connectedPort.asStateFlow()
 
-    private val _statusMessage   = MutableStateFlow("Kapalı")
+    private val _statusMessage  = MutableStateFlow("Kapalı")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
-    private val _sessionCount    = MutableStateFlow(0)
+    private val _sessionCount   = MutableStateFlow(0)
     val sessionCount: StateFlow<Int> = _sessionCount.asStateFlow()
 
     val connectedHost: String get() = _connectedHost.value
     val connectedPort: Int    get() = _connectedPort.value
 
     private var relay: OxRelay? = null
+
+    // ── Başlat ────────────────────────────────────────────────────────────
 
     fun start() {
         if (_isActive.value) { Log.w(TAG, "Relay zaten çalışıyor"); return }
@@ -62,6 +64,9 @@ object SessionManager {
             BlockTracker.clear()
 
             val r = OxRelay(localPort = localPort)
+
+            // OxRelay.capture() içinde ConnectionManager.setupSession() zaten çağrılıyor.
+            // Burada sadece session callback'i alıyoruz — ikinci kez setupSession ÇAĞIRMIYORUZ.
             r.capture(remoteHost = host, remotePort = port) { session ->
                 onSessionCreated(session)
             }
@@ -83,12 +88,14 @@ object SessionManager {
         }
     }
 
+    // ── Durdur ────────────────────────────────────────────────────────────
+
     fun stop() {
         if (!_isActive.value) return
         OverlayLogger.i(TAG, "Relay durduruluyor")
         try {
             ModuleManager.disableAll()
-            relay?.stop()   // OxRelay.stop() içinde LanBroadcaster.stop() zaten çağrılıyor
+            relay?.stop()   // OxRelay.stop() → LanBroadcaster.stop() + session disconnect
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Relay durdurma hatası: ${e.message}", e)
         } finally {
@@ -105,21 +112,24 @@ object SessionManager {
         }
     }
 
+    // ── Session callback'leri ─────────────────────────────────────────────
+
     private fun onSessionCreated(session: OxRelaySession) {
         _sessionCount.value++
         OverlayLogger.i(TAG, "Yeni session #${_sessionCount.value}: ${session.clientAddress}")
         _statusMessage.value = "Session #${_sessionCount.value} — ${session.clientAddress}"
-        PacketEventBus.setSession(session)
 
-        // LanBroadcaster'a aktif oyuncu sayısını bildir — LAN listesinde "1/10" görünür
+        // NOT: ConnectionManager.setupSession() buraya ÇAĞRILMAZ.
+        //      OxRelay.capture() içinde zaten çağrıldı.
+        //      Burada ikinci kez çağırmak listener'ları çift ekler → her paket 2x işlenir.
+
+        // LAN listesinde playerCount = 0 (büyük sunucularda sorun çıkarmaz)
         LanBroadcaster.updateInfo(
             protocolVersion = OxRelay.RELAY_CODEC.protocolVersion,
-            mcVersion       = OxRelay.RELAY_CODEC.minecraftVersion ?: "26.10",
-            playerCount     = _sessionCount.value
+            mcVersion       = OxRelay.RELAY_CODEC.minecraftVersion ?: "1.21.60",
+            playerCount     = 0
         )
 
-        // relay referansını geçir → AutoCodecListener pong'u güncelleyebilsin
-        ConnectionManager.setupSession(session, relay)
         installSessionCloseListener(session)
     }
 
@@ -127,11 +137,9 @@ object SessionManager {
         try {
             session.clientSession.peer.channel
                 .closeFuture()
-                .addListener {
-                    onSessionEnded(session, "channel closed")
-                }
+                .addListener { onSessionEnded(session, "channel closed") }
         } catch (e: Exception) {
-            Log.w(TAG, "Session close listener eklenemedi: ${e.message}")
+            Log.w(TAG, "Close listener eklenemedi: ${e.message}")
         }
     }
 
@@ -141,16 +149,7 @@ object SessionManager {
         EntityTracker.reset()
         BlockTracker.clear()
 
-        // Oyuncu sayısını sıfırla
-        val newCount = maxOf(0, _sessionCount.value - 1)
-        _sessionCount.value = newCount
-        if (LanBroadcaster.isRunning) {
-            LanBroadcaster.updateInfo(
-                protocolVersion = OxRelay.RELAY_CODEC.protocolVersion,
-                mcVersion       = OxRelay.RELAY_CODEC.minecraftVersion ?: "26.10",
-                playerCount     = newCount
-            )
-        }
+        _sessionCount.value = maxOf(0, _sessionCount.value - 1)
 
         if (_isActive.value) {
             _statusMessage.value = "Session kapandı — yeniden bağlanmayı bekliyor"

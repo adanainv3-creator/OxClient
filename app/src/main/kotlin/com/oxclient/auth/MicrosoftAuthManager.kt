@@ -20,32 +20,10 @@ import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.util.concurrent.TimeUnit
 
-/**
- * MicrosoftAuthManager — WebView Authorization Code flow ile Microsoft/Xbox/Bedrock auth.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * Auth Akışı (WebView OAuth):
- *   1. startSignIn()           → AuthState.WaitingForWebView → DeviceCodeLoginActivity açılır
- *   2. WebView redirect kodu yakalar → exchangeCodeForToken(code) çağrılır
- *   3. /oauth20_token.srf      → access_token + refresh_token
- *   4. XBL /user/authenticate  → Xbox Live token + uhs
- *   5. XSTS /xsts/authorize    → XSTS token (MC relying party)
- *   6. multiplayer.minecraft.net → Bedrock JWT chain (EC keypair ile)
- *   7. Chain kaydedilir → LoginPacketListener enjekte eder
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * Düzeltmeler (v2):
- *  - fetchXblToken / fetchXsts: Gson LinkedTreeMap cast hatası giderildi;
- *    tüm XBL/XSTS yanıtları artık JSONObject ile parse ediliyor.
- *  - postJsonRaw: HTTP hata kodu (4xx/5xx) body ile birlikte loglanıyor.
- *  - fetchXblToken: RpsTicket "d=<token>" prefix korundu (authorization code flow için doğru).
- *  - fetchXsts: XErr yanıtı JSONObject üzerinden güvenle okunuyor.
- */
 object MicrosoftAuthManager {
 
     private const val TAG = "MicrosoftAuth"
 
-    // ── OAuth Endpoints ───────────────────────────────────────────────────
     private const val CLIENT_ID      = "0000000048183522"
     private const val REDIRECT_URI   = "https://login.live.com/oauth20_desktop.srf"
     private const val SCOPE          = "service::user.auth.xboxlive.com::MBI_SSL"
@@ -56,7 +34,6 @@ object MicrosoftAuthManager {
     private const val PROFILE_URL    =
         "https://profile.xboxlive.com/users/me/profile/settings?settings=Gamertag"
 
-    // ── State ─────────────────────────────────────────────────────────────
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
@@ -71,7 +48,14 @@ object MicrosoftAuthManager {
     private var activeJob: Job? = null
     private var initialized = false
 
-    // ── Init ──────────────────────────────────────────────────────────────
+    @Volatile private var encryptionPrivateKey: java.security.PrivateKey? = null
+
+    fun getPrivateKeyForEncryption(): java.security.PrivateKey? = encryptionPrivateKey
+
+    fun setPrivateKeyForEncryption(key: java.security.PrivateKey) {
+        encryptionPrivateKey = key
+    }
+
     fun init(context: Context) {
         if (initialized) return
         initialized = true
@@ -86,8 +70,6 @@ object MicrosoftAuthManager {
             scope.launch { refreshTokenSilently(saved) }
         }
     }
-
-    // ── Public API ────────────────────────────────────────────────────────
 
     fun startSignIn() {
         if (_authState.value.isLoading) return
@@ -133,12 +115,9 @@ object MicrosoftAuthManager {
         return account.mcToken.takeIf { it.isNotBlank() }
     }
 
-    // ── Token Exchange Flow ───────────────────────────────────────────────
-
     private suspend fun doTokenExchangeFlow(code: String) {
         Log.d(TAG, "Authorization code ile token alınıyor...")
 
-        // ── 1. Authorization Code → Access Token ──────────────────────────
         val tokenResp = postForm(TOKEN_URL, mapOf(
             "client_id"    to CLIENT_ID,
             "grant_type"   to "authorization_code",
@@ -152,21 +131,17 @@ object MicrosoftAuthManager {
         currentCoroutineContext().ensureActive()
         Log.d(TAG, "Access token alındı ✓")
 
-        // ── 2. XBL Token ──────────────────────────────────────────────────
         val xblResult = fetchXblToken(accessToken)
         currentCoroutineContext().ensureActive()
         Log.d(TAG, "XBL token alındı ✓  uhs=${xblResult.userHash}  gtg=${xblResult.gamertag}")
 
-        // ── 3. XSTS Token ─────────────────────────────────────────────────
         val xstsResult = fetchXsts(xblResult.token, "https://multiplayer.minecraft.net/")
         currentCoroutineContext().ensureActive()
         Log.d(TAG, "XSTS token alındı ✓  uhs=${xstsResult.userHash}  gtg=${xstsResult.gamertag}")
 
-        // ── 4. Minecraft Bedrock Chain ────────────────────────────────────
         val mcResult = fetchMinecraftChain(xstsResult.token, xstsResult.userHash)
         currentCoroutineContext().ensureActive()
 
-        // ── 5. Gamertag çözümle ───────────────────────────────────────────
         val gamertag = resolveGamertag(
             chainResult  = mcResult,
             xstsGamertag = xstsResult.gamertag,
@@ -175,7 +150,6 @@ object MicrosoftAuthManager {
         )
         Log.i(TAG, "Giriş tamamlandı: $gamertag")
 
-        // ── 6. Kaydet ─────────────────────────────────────────────────────
         val account = SavedAccount(
             gamertag     = gamertag,
             refreshToken = refreshToken,
@@ -189,8 +163,6 @@ object MicrosoftAuthManager {
             _authState.value = AuthState.Success(gamertag, mcResult.chainJson)
         }
     }
-
-    // ── Token Yenileme ────────────────────────────────────────────────────
 
     private suspend fun refreshTokenSilently(account: SavedAccount) {
         if (account.refreshToken.isBlank()) {
@@ -230,25 +202,12 @@ object MicrosoftAuthManager {
         }
     }
 
-    // ── Auth Aşamaları ────────────────────────────────────────────────────
-
-    /**
-     * XBL token alır.
-     *
-     * DÜZELTME: Gson ile parse yerine JSONObject kullanılıyor.
-     * Gson, nested objeleri LinkedTreeMap'e dönüştürür; Kotlin "as? Map<*, *>" cast'ı
-     * LinkedTreeMap'i kabul etse de iç List<Map> cast'ı runtime'da ClassCastException
-     * veya silent null üretiyordu.
-     *
-     * RpsTicket "d=<token>" prefix'i authorization code flow için zorunlu.
-     * (Device code / consumer MSA tokenları için de aynı prefix gerekir.)
-     */
     private fun fetchXblToken(accessToken: String): XblAuthResult {
         val bodyJson = JSONObject().apply {
             put("Properties", JSONObject().apply {
                 put("AuthMethod", "RPS")
                 put("SiteName",   "user.auth.xboxlive.com")
-                put("RpsTicket",  accessToken)   // legacy MSA/MBI_SSL scope: prefix YOK
+                put("RpsTicket",  accessToken)
             })
             put("RelyingParty", "http://auth.xboxlive.com")
             put("TokenType",    "JWT")
@@ -259,7 +218,6 @@ object MicrosoftAuthManager {
 
         val resp = JSONObject(respText)
 
-        // Hata kontrolü
         if (resp.has("error")) {
             val err = resp.optString("error")
             val desc = resp.optString("error_description", "")
@@ -280,13 +238,6 @@ object MicrosoftAuthManager {
         return XblAuthResult(token, uhs, gamertag)
     }
 
-    /**
-     * XSTS token alır.
-     *
-     * DÜZELTME: Gson parse → JSONObject parse.
-     * XErr alanı Gson'da Double olarak geliyordu (Long overflow riski);
-     * JSONObject.optLong() doğru okur.
-     */
     private fun fetchXsts(xblToken: String, relyingParty: String): XblAuthResult {
         val bodyJson = JSONObject().apply {
             put("Properties", JSONObject().apply {
@@ -302,7 +253,6 @@ object MicrosoftAuthManager {
 
         val resp = JSONObject(respText)
 
-        // XSTS hata yanıtı: { "XErr": 2148916233, "Message": "...", "Redirect": "..." }
         if (resp.has("XErr")) {
             val xerr = resp.optLong("XErr")
             val msg = when (xerr) {
@@ -328,8 +278,6 @@ object MicrosoftAuthManager {
         Log.d(TAG, "XSTS XUI: uhs=$uhs  gtg=$gamertag")
         return XblAuthResult(token, uhs, gamertag)
     }
-
-    // ── Minecraft Chain ───────────────────────────────────────────────────
 
     private fun fetchMinecraftChain(xstsToken: String, userHash: String): McAuthResult {
         val keyGen  = KeyPairGenerator.getInstance("EC")
@@ -395,31 +343,25 @@ object MicrosoftAuthManager {
         return McAuthResult(fallbackChain, "")
     }
 
-    // ── Gamertag çözümleme ────────────────────────────────────────────────
-
     private fun resolveGamertag(
         chainResult: McAuthResult,
         xstsGamertag: String,
         xblGamertag: String,
         xblToken: String
     ): String {
-        // Kaynak 1: MC chain extraData.displayName (en güvenilir)
         if (chainResult.gamertag.isNotBlank()) {
             Log.d(TAG, "Gamertag kaynağı: MC chain → ${chainResult.gamertag}")
             return chainResult.gamertag
         }
-        // Kaynak 2: XSTS DisplayClaims.xui[0].gtg
         if (xstsGamertag.isNotBlank()) {
             Log.d(TAG, "Gamertag kaynağı: XSTS gtg → $xstsGamertag")
             return xstsGamertag
         }
-        // Kaynak 3: XBL DisplayClaims.xui[0].gtg
         if (xblGamertag.isNotBlank()) {
             Log.d(TAG, "Gamertag kaynağı: XBL gtg → $xblGamertag")
             return xblGamertag
         }
 
-        // Kaynak 4: Xbox Profile API
         return try {
             val xboxXsts = fetchXsts(xblToken, "http://xboxlive.com")
             val profileReq = Request.Builder()
@@ -450,8 +392,6 @@ object MicrosoftAuthManager {
             "OxPlayer"
         }
     }
-
-    // ── JWT Yardımcıları ──────────────────────────────────────────────────
 
     private fun buildDeviceJwt(privateKey: ECPrivateKey, pubKeyB64: String): String {
         val now     = System.currentTimeMillis() / 1000L
@@ -512,12 +452,6 @@ object MicrosoftAuthManager {
         return ""
     }
 
-    // ── HTTP Yardımcıları ─────────────────────────────────────────────────
-
-    /**
-     * Form POST — token endpoint için.
-     * Yanıt her zaman form-urlencoded veya JSON olabilir; ikisi de desteklenir.
-     */
     private fun postForm(url: String, params: Map<String, String>): Map<String, Any?> {
         val body = FormBody.Builder().apply { params.forEach { (k, v) -> add(k, v) } }.build()
         val text = http.newCall(Request.Builder().url(url).post(body).build())
@@ -532,13 +466,6 @@ object MicrosoftAuthManager {
         return parseJsonOrForm(text)
     }
 
-    /**
-     * JSON POST — XBL/XSTS için ham string döndürür.
-     * fetchXblToken ve fetchXsts JSONObject ile parse eder (Gson LinkedTreeMap cast sorunu yok).
-     *
-     * DÜZELTME: Başarısız HTTP yanıtları artık body ile birlikte loglanıyor ve
-     * anlaşılır hata mesajı fırlatılıyor; önceden body yutulup parse hatası çıkıyordu.
-     */
     private fun postJsonRaw(url: String, json: String): String {
         val body = json.toRequestBody("application/json".toMediaType())
         val req  = Request.Builder().url(url).post(body)
@@ -548,7 +475,6 @@ object MicrosoftAuthManager {
         return http.newCall(req).execute().use { resp ->
             val text = resp.body?.string() ?: ""
             Log.d(TAG, "postJsonRaw HTTP ${resp.code} [$url]")
-            // XSTS 401 body'sinde XErr olabilir — bu durumda caller parse eder
             val isXstsError = text.contains("XErr")
             if (!resp.isSuccessful && !isXstsError) {
                 Log.e(TAG, "postJsonRaw HTTP ${resp.code} [$url]: ${text.take(400)}")

@@ -16,9 +16,46 @@ import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 
+/**
+ * LoginPacketListener — WRelay OnlineLoginPacketListener ile birebir akış.
+ *
+ * ═══════════════════════════════════════════════════════════════════
+ * AKIŞ:
+ *  1. [C→R] RequestNetworkSettingsPacket
+ *     → AutoCodecListener (priority=-10) halleder, biz sadece geçiririz
+ *
+ *  2. [C→R] LoginPacket
+ *     → Chain inject
+ *     → session.connectToServer() — İLK KEZ burada server'a bağlanılır
+ *     → Paketi tutarız, server hazır olunca göndereceğiz
+ *     → return false (server'a henüz iletme)
+ *
+ *  3. Server bağlantısı kurulunca onConnected callback:
+ *     → Server'a RequestNetworkSettings gönder
+ *
+ *  4. [S→R] NetworkSettingsPacket
+ *     → serverSession.setCompression() — server ZLIB açılır
+ *     → Saklanan Login paketini server'a gönder
+ *     → return false (client'a iletme — client zaten AutoCodec'ten aldı)
+ *
+ *  5. [S→R] ServerToClientHandshake
+ *     → Şifreleme anahtarını üret
+ *     → serverSession.enableEncryption()
+ *     → Server'a ClientToServerHandshake gönder
+ *     → Client'a da ilet (return true)
+ *
+ *  6. [C→R] ClientToServerHandshake
+ *     → Server'a ilet (return true)
+ *
+ *  7. [S→R] PlayStatus(LOGIN_SUCCESS) → ConnectionManager.onHandshaking()
+ *  8. [S→R] StartGame → ConnectionManager.onGameStarted()
+ * ═══════════════════════════════════════════════════════════════════
+ */
 class LoginPacketListener : OxPacketListener {
 
-    companion object { private const val TAG = "LoginPacketListener" }
+    companion object {
+        private const val TAG = "LoginPacketListener"
+    }
 
     override val priority: Int = 0
 
@@ -26,248 +63,320 @@ class LoginPacketListener : OxPacketListener {
         private set
 
     @Volatile private var loginProcessed = false
+    @Volatile private var pendingLogin  : LoginPacket? = null
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────
 
     override fun onSessionStart(session: OxRelaySession) {
-        loginProcessed       = false
-        clientIdentification = null
+        // Server bağlantısı kurulunca çağrılır — Login akışı devam ediyor demek
+        Log.d(TAG, "onSessionStart — server bağlandı")
         ConnectionManager.onHandshaking()
     }
 
     override fun onSessionEnd(session: OxRelaySession) {
+        pendingLogin = null
         ConnectionManager.onDisconnected()
     }
 
+    // ── Client → Relay ────────────────────────────────────────────────────
+
     override fun onClientPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
         when (packet) {
+
             is RequestNetworkSettingsPacket -> {
-                Log.d(TAG, "RequestNetworkSettings protocol=${packet.protocolVersion}")
-                // Asıl işlem AutoCodecListener'da yapılıyor (priority=-10, önce çalışır)
+                // AutoCodecListener (priority=-10) zaten halletti
+                // Biz geçiriyoruz (server henüz yok, sendToServer kuyruğa alır)
+                Log.d(TAG, "RequestNetworkSettings geçti — protocol=${packet.protocolVersion}")
             }
+
             is LoginPacket -> {
-                if (!loginProcessed) {
-                    loginProcessed = true
-                    processLogin(packet, session)
-                } else {
-                    Log.w(TAG, "Tekrarlanan LoginPacket engellendi")
+                if (loginProcessed) {
+                    Log.w(TAG, "Tekrarlanan Login engellendi")
+                    return false
                 }
+                loginProcessed = true
+                Log.i(TAG, "Login alındı — server bağlantısı başlatılıyor")
+
+                // Kimlik bilgilerini parse et
+                val chainJson = extractChainJson(packet)
+                val extraJson = extractExtraJson(packet)
+                try {
+                    clientIdentification = ClientIdentification.fromLogin(chainJson, extraJson)
+                    Log.i(TAG, "Client: $clientIdentification")
+                } catch (e: Exception) {
+                    Log.w(TAG, "ClientIdentification parse hatası: ${e.message}")
+                }
+
+                // Xbox chain'i inject et
+                injectAuthChain(packet)
+
+                // Login'i sakla — server NetworkSettings gönderince iletiriz
+                pendingLogin = packet
+
+                // Server'a bağlan — callback: RequestNetworkSettings gönder
+                session.connectToServer {
+                    Log.i(TAG, "Server hazır — RequestNetworkSettings gönderiliyor")
+                    val reqNet = RequestNetworkSettingsPacket().apply {
+                        protocolVersion = session.activeCodec.protocolVersion
+                    }
+                    session.sendToServer(reqNet)
+                }
+
+                // Paketi server'a iletme — biz yönettik
+                return false
             }
+
             is ClientToServerHandshakePacket -> {
-                Log.d(TAG, "ClientToServerHandshake → şifreleme aktif")
+                Log.d(TAG, "ClientToServerHandshake → iletiliyor")
+                // İlet
             }
         }
         return true
     }
+
+    // ── Server → Relay ────────────────────────────────────────────────────
 
     override fun onServerPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
         when (packet) {
 
-            // ── NetworkSettingsPacket ─────────────────────────────────────
-            // Server bu paketi gönderince server-side compression açılır.
-            // Client-side compression AutoCodecListener'da zaten açıldı.
-            // WRelay akışı: server NetworkSettings → client compression aç → Login gönder
+            // Server NetworkSettings → server compression aç → Login gönder
             is NetworkSettingsPacket -> {
-                Log.d(TAG, "NetworkSettings compression=${packet.compressionAlgorithm} threshold=${packet.compressionThreshold}")
+                Log.d(TAG, "Server NetworkSettings: algo=${packet.compressionAlgorithm} threshold=${packet.compressionThreshold}")
+
                 try {
-                    if (packet.compressionThreshold > 0) {
-                        session.serverSession?.setCompression(packet.compressionAlgorithm)
-                        Log.i(TAG, "Server compression açıldı: ${packet.compressionAlgorithm}")
-                    } else {
-                        session.serverSession?.setCompression(PacketCompressionAlgorithm.NONE)
-                        Log.i(TAG, "Server compression kapalı")
-                    }
+                    val algo = if (packet.compressionThreshold > 0)
+                        packet.compressionAlgorithm
+                    else
+                        PacketCompressionAlgorithm.NONE
+
+                    session.serverSession?.setCompression(algo)
+                    Log.i(TAG, "Server compression: $algo")
                 } catch (e: Exception) {
                     Log.w(TAG, "Server compression ayarlanamadı: ${e.message}")
                 }
-                // paketi client'a iletme — client zaten AutoCodecListener'dan aldı
+
+                val login = pendingLogin
+                if (login != null) {
+                    Log.i(TAG, "Login server'a gönderiliyor")
+                    session.sendToServer(login)
+                    pendingLogin = null
+                } else {
+                    Log.e(TAG, "HATA: pendingLogin null — Login kaybedildi!")
+                    session.disconnect("Login paketi kayboldu")
+                }
+
+                // Client'a iletme — client zaten AutoCodecListener'dan NetworkSettings aldı
                 return false
             }
 
+            // Server şifreleme başlatıyor
             is ServerToClientHandshakePacket -> {
-                Log.d(TAG, "ServerToClientHandshake jwt=${packet.jwt?.take(60)}…")
+                Log.d(TAG, "ServerToClientHandshake alındı")
+                try {
+                    enableEncryption(packet, session)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Şifreleme başarısız (devam ediliyor): ${e.message}")
+                    // Şifreleme yoksa sadece handshake gönder
+                    session.sendToServer(ClientToServerHandshakePacket())
+                }
+                // Client'a da ilet
+                return true
             }
+
             is PlayStatusPacket -> {
                 Log.d(TAG, "PlayStatus: ${packet.status}")
                 when (packet.status) {
                     PlayStatusPacket.Status.LOGIN_SUCCESS -> {
-                        Log.i(TAG, "Login başarılı")
+                        Log.i(TAG, "Login başarılı ✓")
                         ConnectionManager.onHandshaking()
                     }
                     PlayStatusPacket.Status.PLAYER_SPAWN -> {
-                        Log.i(TAG, "Oyuncu spawn")
+                        Log.i(TAG, "Oyuncu spawn ✓")
                         ConnectionManager.onGameStarted()
                     }
                     else -> {
-                        val s = packet.status.name
-                        if (s.contains("FAIL", ignoreCase = true))
-                            Log.e(TAG, "Login başarısız: $s")
+                        if (packet.status.name.contains("FAIL", ignoreCase = true))
+                            Log.e(TAG, "Login BAŞARISIZ: ${packet.status}")
                     }
                 }
             }
+
             is StartGamePacket -> {
                 Log.i(TAG, "StartGame → oyun içi")
                 ConnectionManager.onGameStarted()
             }
+
             is DisconnectPacket -> {
-                Log.w(TAG, "Server disconnect: ${packet.kickMessage}")
+                Log.w(TAG, "Server Disconnect: ${packet.kickMessage}")
             }
         }
         return true
     }
 
-    private fun processLogin(packet: LoginPacket, session: OxRelaySession) {
-        Log.d(TAG, "LoginPacket işleniyor protocol=${packet.protocolVersion}")
+    // ── Şifreleme ─────────────────────────────────────────────────────────
 
-        val chainJson = extractChainJson(packet)
-        val extraJson = extractExtraJson(packet)
+    private fun enableEncryption(packet: ServerToClientHandshakePacket, session: OxRelaySession) {
+        val jwt    = packet.jwt ?: throw IllegalStateException("JWT null")
+        val parts  = jwt.split(".")
+        require(parts.size == 3) { "Geçersiz JWT format" }
 
-        try {
-            clientIdentification = ClientIdentification.fromLogin(
-                chainJson = chainJson,
-                extraJson = extraJson
-            )
-            Log.i(TAG, "Client kimliği: $clientIdentification")
-        } catch (e: Exception) {
-            Log.w(TAG, "ClientIdentification parse hatası: ${e.message}")
-        }
+        val decoder     = java.util.Base64.getUrlDecoder()
+        val headerJson  = JSONObject(String(decoder.decode(parts[0])))
+        val payloadJson = JSONObject(String(decoder.decode(parts[1])))
 
-        injectAuthChain(packet, chainJson, extraJson)
+        val x5u  = headerJson.getString("x5u")
+        val salt = java.util.Base64.getDecoder().decode(payloadJson.getString("salt"))
+
+        val serverPubKey = org.cloudburstmc.protocol.bedrock.util.EncryptionUtils.parseKey(x5u)
+        val privateKey   = MicrosoftAuthManager.getPrivateKeyForEncryption()
+            ?: throw IllegalStateException("Encryption private key yok")
+
+        val secretKey = org.cloudburstmc.protocol.bedrock.util.EncryptionUtils
+            .getSecretKey(privateKey, serverPubKey, salt)
+
+        session.serverSession?.enableEncryption(secretKey)
+        Log.i(TAG, "Server şifreleme aktif ✓")
+
+        session.sendToServer(ClientToServerHandshakePacket())
     }
 
-    private fun extractChainJson(packet: LoginPacket): String {
-        return try {
-            val raw = packet.chain
-            when {
-                raw == null    -> "{}"
-                raw is String  -> raw
-                raw is List<*> -> JSONObject().apply {
-                    put("chain", JSONArray(raw.map { it.toString() }))
-                }.toString()
-                else           -> raw.toString()
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "chain extract hatası: ${e.message}")
-            "{}"
-        }
-    }
+    // ── Auth Chain Inject ─────────────────────────────────────────────────
 
-    private fun extractExtraJson(packet: LoginPacket): String {
-        return try {
-            packet.extra?.toString() ?: ""
-        } catch (e: Exception) {
-            Log.w(TAG, "extra extract hatası: ${e.message}")
-            ""
-        }
-    }
-
-    private fun injectAuthChain(packet: LoginPacket, originalChain: String, originalExtra: String) {
-        val savedChainJson = MicrosoftAuthManager.getActiveChainForRelay()
-        if (savedChainJson.isNullOrBlank()) {
-            Log.w(TAG, "Kayıtlı chain yok — orijinal iletiliyor (offline)")
+    private fun injectAuthChain(packet: LoginPacket) {
+        val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
+        if (savedChain.isNullOrBlank()) {
+            Log.w(TAG, "Kayıtlı chain yok — offline mod (orijinal chain iletiliyor)")
             return
         }
 
         try {
-            val keyGen    = KeyPairGenerator.getInstance("EC")
-            keyGen.initialize(ECGenParameterSpec("secp256r1"))
-            val keyPair   = keyGen.generateKeyPair()
-            val pubKey    = keyPair.public  as ECPublicKey
-            val privKey   = keyPair.private as ECPrivateKey
-            val pubKeyB64 = Base64.encodeToString(
-                pubKey.encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+            val kpg    = KeyPairGenerator.getInstance("EC")
+            kpg.initialize(ECGenParameterSpec("secp256r1"))
+            val kp     = kpg.generateKeyPair()
+            val pub    = kp.public  as ECPublicKey
+            val priv   = kp.private as ECPrivateKey
+            val pubB64 = Base64.encodeToString(
+                pub.encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
             )
 
-            val savedJwts = parseSavedChain(savedChainJson)
-            val deviceJwt = buildDeviceJwt(privKey, pubKeyB64)
-            val fullChain = buildList {
+            // MicrosoftAuthManager'dan gelen JWT listesi
+            val savedJwts = parseSavedChain(savedChain)
+
+            // Geçici device JWT — relay'in kendi keypair'i ile imzalanmış
+            val deviceJwt  = buildDeviceJwt(priv, pubB64)
+
+            val fullChain  = buildList {
                 add(deviceJwt)
-                addAll(savedJwts.filter { it != deviceJwt })
+                addAll(savedJwts)
             }
 
-            val newChainWrapper = JSONObject().apply {
+            val wrapper = JSONObject().apply {
                 put("chain", JSONArray(fullChain))
             }.toString()
 
-            var injected = false
-            try {
-                val chainField = packet.javaClass.getDeclaredField("chain")
-                chainField.isAccessible = true
-                chainField.set(packet, newChainWrapper)
-                Log.i(TAG, "Chain enjekte edildi (reflection): ${fullChain.size} JWT")
-                injected = true
-            } catch (rf: Exception) {
-                Log.w(TAG, "Reflection başarısız: ${rf.message}")
-            }
-
-            if (!injected) {
+            // Reflection ile set et
+            var ok = false
+            for (fieldName in listOf("chain", "chainData")) {
                 try {
-                    packet.javaClass.getMethod("setChain", String::class.java)
-                        .invoke(packet, newChainWrapper)
-                    Log.i(TAG, "Chain enjekte edildi (setter): ${fullChain.size} JWT")
-                } catch (me: Exception) {
-                    Log.e(TAG, "Chain enjeksiyonu tamamen başarısız: ${me.message}")
+                    packet.javaClass.getDeclaredField(fieldName).apply {
+                        isAccessible = true
+                        set(packet, wrapper)
+                    }
+                    Log.i(TAG, "Chain enjekte edildi [$fieldName]: ${fullChain.size} JWT")
+                    ok = true
+                    break
+                } catch (_: Exception) {}
+            }
+
+            if (!ok) {
+                // Setter dene
+                for (method in listOf("setChain", "setChainData")) {
+                    try {
+                        packet.javaClass.getMethod(method, String::class.java)
+                            .invoke(packet, wrapper)
+                        Log.i(TAG, "Chain enjekte edildi [$method]: ${fullChain.size} JWT")
+                        ok = true
+                        break
+                    } catch (_: Exception) {}
                 }
             }
 
+            if (!ok) Log.e(TAG, "Chain enjeksiyonu BAŞARISIZ — orijinal chain gidecek")
+
         } catch (e: Exception) {
-            Log.e(TAG, "Chain enjeksiyonu hatası: ${e.message}", e)
+            Log.e(TAG, "Chain inject hatası: ${e.message}", e)
         }
     }
 
-    private fun parseSavedChain(chainJson: String): List<String> {
-        return try {
-            when {
-                chainJson.trimStart().startsWith("{") -> {
-                    val arr = JSONObject(chainJson).optJSONArray("chain")
-                    if (arr != null) (0 until arr.length()).map { arr.getString(it) }
-                    else listOf(chainJson)
-                }
-                chainJson.trimStart().startsWith("[") -> {
-                    val arr = JSONArray(chainJson)
-                    (0 until arr.length()).map { arr.getString(it) }
-                }
-                else -> listOf(chainJson)
+    // ── JWT / Base64 Yardımcıları ─────────────────────────────────────────
+
+    private fun parseSavedChain(json: String): List<String> = try {
+        when {
+            json.trimStart().startsWith("{") -> {
+                val arr = JSONObject(json).optJSONArray("chain")
+                if (arr != null) (0 until arr.length()).map { arr.getString(it) }
+                else emptyList()
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Chain parse hatası: ${e.message}")
-            listOf(chainJson)
+            json.trimStart().startsWith("[") -> {
+                val arr = JSONArray(json)
+                (0 until arr.length()).map { arr.getString(it) }
+            }
+            else -> listOf(json)
         }
+    } catch (e: Exception) {
+        Log.w(TAG, "Chain parse hatası: ${e.message}")
+        emptyList()
     }
 
-    private fun buildDeviceJwt(privKey: ECPrivateKey, pubKeyB64: String): String {
+    private fun buildDeviceJwt(priv: ECPrivateKey, pubB64: String): String {
         val now     = System.currentTimeMillis() / 1000L
-        val header  = b64Url("""{"alg":"ES256","x5u":"$pubKeyB64"}""".toByteArray())
-        val payload = b64Url((
-            """{"certificateAuthority":true,"identityPublicKey":"$pubKeyB64",""" +
-            """"exp":${now + 86400},"nbf":${now - 1},"iat":$now,"iss":"Minecraft"}"""
-        ).toByteArray())
-        val sigInput = "$header.$payload"
-        val signer   = Signature.getInstance("SHA256withECDSA")
-        signer.initSign(privKey)
-        signer.update(sigInput.toByteArray(Charsets.US_ASCII))
-        return "$sigInput.${b64Url(derToRaw(signer.sign()))}"
+        val header  = b64Url("""{"alg":"ES256","x5u":"$pubB64"}""".toByteArray())
+        val payload = b64Url(
+            ("""{"certificateAuthority":true,"identityPublicKey":"$pubB64",""" +
+             """"exp":${now + 86400},"nbf":${now - 1},"iat":$now,"iss":"Minecraft"}""")
+                .toByteArray()
+        )
+        val data = "$header.$payload"
+        val sig  = Signature.getInstance("SHA256withECDSA").apply {
+            initSign(priv)
+            update(data.toByteArray(Charsets.US_ASCII))
+        }.sign()
+        return "$data.${b64Url(derToRaw(sig))}"
     }
 
     private fun derToRaw(der: ByteArray): ByteArray {
         var i = 2
-        check(der[i] == 0x02.toByte()) { "DER: r tag bekleniyor, got 0x${der[i].toString(16)}" }
-        i++
+        i++ // skip r tag 0x02
         val rLen = der[i++].toInt() and 0xFF
-        val r    = der.copyOfRange(i, i + rLen)
-        i += rLen
-        check(der[i] == 0x02.toByte()) { "DER: s tag bekleniyor, got 0x${der[i].toString(16)}" }
-        i++
+        val r = der.copyOfRange(i, i + rLen); i += rLen
+        i++ // skip s tag 0x02
         val sLen = der[i++].toInt() and 0xFF
-        val s    = der.copyOfRange(i, i + sLen)
-        return padOrTrim(BigInteger(1, r).toByteArray(), 32) +
-               padOrTrim(BigInteger(1, s).toByteArray(), 32)
+        val s = der.copyOfRange(i, i + sLen)
+        return pad32(BigInteger(1, r).toByteArray()) + pad32(BigInteger(1, s).toByteArray())
     }
 
-    private fun padOrTrim(b: ByteArray, sz: Int) = when {
-        b.size == sz -> b
-        b.size > sz  -> b.copyOfRange(b.size - sz, b.size)
-        else         -> ByteArray(sz - b.size) + b
+    private fun pad32(b: ByteArray): ByteArray = when {
+        b.size == 32 -> b
+        b.size >  32 -> b.copyOfRange(b.size - 32, b.size)
+        else         -> ByteArray(32 - b.size) + b
     }
 
     private fun b64Url(data: ByteArray) =
         Base64.encodeToString(data, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+    private fun extractChainJson(packet: LoginPacket): String = try {
+        val raw = packet.chain
+        when {
+            raw == null    -> "{}"
+            raw is String  -> raw
+            raw is List<*> -> JSONObject().apply {
+                put("chain", JSONArray(raw.map { it.toString() }))
+            }.toString()
+            else           -> raw.toString()
+        }
+    } catch (_: Exception) { "{}" }
+
+    private fun extractExtraJson(packet: LoginPacket): String = try {
+        packet.extra?.toString() ?: ""
+    } catch (_: Exception) { "" }
 }

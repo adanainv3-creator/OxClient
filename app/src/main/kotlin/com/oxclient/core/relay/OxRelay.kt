@@ -8,56 +8,45 @@ import io.netty.channel.socket.nio.NioDatagramChannel
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
 import org.cloudburstmc.protocol.bedrock.BedrockPong
+import org.cloudburstmc.protocol.bedrock.BedrockServerSession
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockServerInitializer
-import org.cloudburstmc.protocol.bedrock.BedrockServerSession
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * OxRelay — CloudburstMC tabanlı MITM Bedrock relay sunucusu.
+ * OxRelay — CloudburstMC tabanlı Bedrock MITM relay.
  *
- * ─────────────────────────────────────────────────────────────────────────
- * Codec Çözümü (v2):
- *  - RELAY_CODEC: kütüphanede bulunan en yüksek versiyonlu codec seçilir.
- *  - Codec listesi v975'e (MC 26.20) kadar genişletildi.
- *  - updatePong(): AutoCodecListener client versiyonunu öğrenince pong'u
- *    dinamik olarak günceller → MC o anda doğru sürümü görür.
- *  - Fallback codec bulunamazsa protocolVersion=935, version="26.10" kullanılır.
+ * Session yaratma sırası (KRİTİK):
+ *   1. OxRelaySession oluştur
+ *   2. sessions.add()
+ *   3. ConnectionManager.setupSession(session, this)  ← listener'lar eklenir
+ *   4. session.init()                                 ← client handler kurulur
+ *   5. onSessionCreated callback
  *
- * LAN Discovery (v3):
- *  - capture() sonrasında LanBroadcaster otomatik başlar.
- *  - MC'nin LAN sekmesinde "oxse" adıyla görünür, tıklanınca relay'e bağlanır.
- *  - updatePong() çağrıldığında LanBroadcaster da güncellenir.
- *  - stop() çağrıldığında LanBroadcaster da durur.
- * ─────────────────────────────────────────────────────────────────────────
+ *   Server bağlantısı LoginPacketListener.onClientPacket(LoginPacket) içinde
+ *   session.connectToServer() ile başlar — init()'de değil.
  */
 class OxRelay(
     private val localPort: Int = 19150
 ) {
     companion object {
-        private const val TAG          = "OxRelay"
-        private const val PONG_MOTD    = "oxse"
+        private const val TAG           = "OxRelay"
+        private const val PONG_MOTD     = "oxse"
         private const val PONG_SUB_MOTD = "OxClient"
 
-        /**
-         * Kütüphanede mevcut olan en yüksek codec'i döndürür.
-         * Sırası önemli: en yeni → en eski.
-         */
         val RELAY_CODEC: BedrockCodec by lazy { resolveLatestCodec() }
 
         private val CODEC_CANDIDATES = listOf(
-            // MC 26.x serisi (2025-2026)
-            "org.cloudburstmc.protocol.bedrock.codec.v975.Bedrock_v975",  // 26.20
-            "org.cloudburstmc.protocol.bedrock.codec.v948.Bedrock_v948",  // 26.10 release
-            "org.cloudburstmc.protocol.bedrock.codec.v935.Bedrock_v935",  // 26.10 preview
-            "org.cloudburstmc.protocol.bedrock.codec.v924.Bedrock_v924",  // 26.0
-            // MC 1.21.x serisi
-            "org.cloudburstmc.protocol.bedrock.codec.v818.Bedrock_v818",  // 1.21.93 edu
+            "org.cloudburstmc.protocol.bedrock.codec.v975.Bedrock_v975",
+            "org.cloudburstmc.protocol.bedrock.codec.v948.Bedrock_v948",
+            "org.cloudburstmc.protocol.bedrock.codec.v935.Bedrock_v935",
+            "org.cloudburstmc.protocol.bedrock.codec.v924.Bedrock_v924",
+            "org.cloudburstmc.protocol.bedrock.codec.v818.Bedrock_v818",
             "org.cloudburstmc.protocol.bedrock.codec.v800.Bedrock_v800",
-            "org.cloudburstmc.protocol.bedrock.codec.v786.Bedrock_v786",  // 1.21.80
-            "org.cloudburstmc.protocol.bedrock.codec.v748.Bedrock_v748",  // 1.21.60
-            "org.cloudburstmc.protocol.bedrock.codec.v729.Bedrock_v729",  // 1.21.50
+            "org.cloudburstmc.protocol.bedrock.codec.v786.Bedrock_v786",
+            "org.cloudburstmc.protocol.bedrock.codec.v748.Bedrock_v748",
+            "org.cloudburstmc.protocol.bedrock.codec.v729.Bedrock_v729",
             "org.cloudburstmc.protocol.bedrock.codec.v712.Bedrock_v712",
             "org.cloudburstmc.protocol.bedrock.codec.v686.Bedrock_v686",
             "org.cloudburstmc.protocol.bedrock.codec.v671.Bedrock_v671",
@@ -67,98 +56,94 @@ class OxRelay(
         )
 
         private fun resolveLatestCodec(): BedrockCodec {
-            for (className in CODEC_CANDIDATES) {
+            for (cls in CODEC_CANDIDATES) {
                 try {
-                    val codec = Class.forName(className)
-                        .getField("CODEC")
-                        .get(null) as? BedrockCodec
+                    val codec = Class.forName(cls).getField("CODEC").get(null) as? BedrockCodec
                     if (codec != null) {
-                        Log.i(TAG, "Codec bulundu: $className (protocol=${codec.protocolVersion}, mc=${codec.minecraftVersion})")
+                        Log.i(TAG, "RELAY_CODEC: $cls | protocol=${codec.protocolVersion} mc=${codec.minecraftVersion}")
                         return codec
                     }
                 } catch (_: Exception) {}
             }
-
-            Log.w(TAG, "Hiçbir codec bulunamadı! Fallback: protocol=935, mc=26.10")
-            return BedrockCodec.builder()
-                .protocolVersion(935)
-                .minecraftVersion("26.10")
-                .build()
+            Log.w(TAG, "Codec bulunamadı — fallback protocol=748 mc=1.21.60")
+            return BedrockCodec.builder().protocolVersion(748).minecraftVersion("1.21.60").build()
         }
     }
 
-    // ── Durum ─────────────────────────────────────────────────────────────
+    // ── State ─────────────────────────────────────────────────────────────
 
-    @Volatile private var running = false
-    private var bossGroup  : NioEventLoopGroup? = null
-    private var workerGroup: NioEventLoopGroup? = null
-    private var serverChannel: Channel?         = null
+    @Volatile private var running      = false
+    private var bossGroup    : NioEventLoopGroup? = null
+    private var workerGroup  : NioEventLoopGroup? = null
+    private var serverChannel: Channel?           = null
 
     val sessions = CopyOnWriteArrayList<OxRelaySession>()
 
-    private var remoteHost: String = ""
-    private var remotePort: Int    = 19132
+    @Volatile private var remoteHost = ""
+    @Volatile private var remotePort = 19132
 
-    @Volatile private var currentPong: BedrockPong =
-        buildPong(RELAY_CODEC.protocolVersion, RELAY_CODEC.minecraftVersion ?: "26.10")
-
-    // ── API ───────────────────────────────────────────────────────────────
+    // ── capture() ────────────────────────────────────────────────────────
 
     fun capture(
-        remoteHost: String,
-        remotePort: Int = 19132,
-        onSessionCreated: ((OxRelaySession) -> Unit)? = null
+        remoteHost       : String,
+        remotePort       : Int = 19132,
+        onSessionCreated : ((OxRelaySession) -> Unit)? = null
     ) {
-        if (running) {
-            Log.w(TAG, "Relay zaten çalışıyor — önce stop() çağırın")
-            return
-        }
+        if (running) { Log.w(TAG, "Relay zaten çalışıyor"); return }
 
         this.remoteHost = remoteHost
         this.remotePort = remotePort
-
-        val bindAddress = InetSocketAddress("0.0.0.0", localPort)
 
         bossGroup   = NioEventLoopGroup(1)
         workerGroup = NioEventLoopGroup(4)
 
         try {
+            val pong = buildPong(RELAY_CODEC.protocolVersion, RELAY_CODEC.minecraftVersion ?: "1.21.60")
+
             val future = ServerBootstrap()
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel::class.java))
-                .option(RakChannelOption.RAK_ADVERTISEMENT, currentPong.toByteBuf())
+                .option(RakChannelOption.RAK_ADVERTISEMENT, pong.toByteBuf())
                 .group(bossGroup, workerGroup)
                 .childHandler(object : BedrockServerInitializer() {
                     override fun initSession(clientSession: BedrockServerSession) {
-                        Log.i(TAG, "Yeni client bağlantısı: ${clientSession.socketAddress}")
+                        Log.i(TAG, "Client bağlandı: ${clientSession.socketAddress}")
 
-                        val relaySession = OxRelaySession(
+                        val session = OxRelaySession(
                             clientSession = clientSession,
                             remoteHost    = this@OxRelay.remoteHost,
                             remotePort    = this@OxRelay.remotePort,
                             relay         = this@OxRelay
                         )
 
-                        sessions.add(relaySession)
-                        ConnectionManager.setupSession(relaySession)
-                        relaySession.init()
-                        onSessionCreated?.invoke(relaySession)
+                        // ── SIRALAMA KRİTİK ──────────────────────────────
+                        sessions.add(session)
+
+                        // 1. Listener'ları ekle (relay referansı ile)
+                        ConnectionManager.setupSession(session, this@OxRelay)
+
+                        // 2. Client handler'ı kur (server bağlantısı yok henüz)
+                        session.init()
+
+                        // 3. Dış callback
+                        onSessionCreated?.invoke(session)
+                        // ─────────────────────────────────────────────────
                     }
                 })
-                .bind(bindAddress)
+                .bind(InetSocketAddress("0.0.0.0", localPort))
                 .syncUninterruptibly()
 
             serverChannel = future.channel()
             running = true
 
-            Log.i(TAG, "OxRelay başlatıldı → 0.0.0.0:$localPort ↔ $remoteHost:$remotePort  codec=${RELAY_CODEC.protocolVersion}")
+            Log.i(TAG, "OxRelay aktif → 0.0.0.0:$localPort ↔ $remoteHost:$remotePort | codec=${RELAY_CODEC.protocolVersion}")
 
-            // ── LAN Discovery başlat ──────────────────────────────────────
+            // LAN Discovery
             LanBroadcaster.start(
                 relayPort       = localPort,
                 motd            = PONG_MOTD,
                 subMotd         = PONG_SUB_MOTD,
                 protocolVersion = RELAY_CODEC.protocolVersion,
-                mcVersion       = RELAY_CODEC.minecraftVersion ?: "26.10",
+                mcVersion       = RELAY_CODEC.minecraftVersion ?: "1.21.60",
                 maxPlayers      = 10
             )
 
@@ -169,25 +154,21 @@ class OxRelay(
         }
     }
 
+    // ── Pong / LAN güncelleme ─────────────────────────────────────────────
+
     /**
-     * AutoCodecListener tarafından çağrılır: MC client'ın gerçek protokol versiyonu
-     * öğrenilince hem RakNet pong hem de LanBroadcaster güncellenir.
+     * AutoCodecListener client protokolünü öğrenince çağırır.
+     * RakNet advertisement ve LanBroadcaster güncellenir.
      */
     fun updatePong(protocolVersion: Int, minecraftVersion: String) {
         if (!running) return
-        currentPong = buildPong(protocolVersion, minecraftVersion)
-
-        // RakNet advertisement güncelle
+        val pong = buildPong(protocolVersion, minecraftVersion)
         try {
-            serverChannel?.config()?.setOption(
-                RakChannelOption.RAK_ADVERTISEMENT, currentPong.toByteBuf()
-            )
-            Log.i(TAG, "RakNet pong güncellendi: protocol=$protocolVersion  mc=$minecraftVersion")
+            serverChannel?.config()?.setOption(RakChannelOption.RAK_ADVERTISEMENT, pong.toByteBuf())
+            Log.i(TAG, "Pong güncellendi: protocol=$protocolVersion mc=$minecraftVersion")
         } catch (e: Exception) {
-            Log.w(TAG, "RakNet pong güncellenemedi: ${e.message}")
+            Log.w(TAG, "Pong güncelleme hatası: ${e.message}")
         }
-
-        // LanBroadcaster da güncelle — artık doğru version yayımlanır
         LanBroadcaster.updateInfo(
             protocolVersion = protocolVersion,
             mcVersion       = minecraftVersion,
@@ -195,27 +176,23 @@ class OxRelay(
         )
     }
 
+    // ── stop() ───────────────────────────────────────────────────────────
+
     fun stop() {
         if (!running) return
         running = false
         Log.i(TAG, "OxRelay durduruluyor…")
-
-        // LAN discovery durdur
         LanBroadcaster.stop()
-
-        sessions.forEach { it.disconnect("Relay kapatıldı") }
+        sessions.toList().forEach { it.disconnect("Relay kapatıldı") }
         sessions.clear()
         shutdownGroups()
-
         Log.i(TAG, "OxRelay durduruldu")
     }
 
-    internal fun removeSession(session: OxRelaySession) {
-        sessions.remove(session)
-    }
+    internal fun removeSession(session: OxRelaySession) = sessions.remove(session)
 
     private fun shutdownGroups() {
-        try { bossGroup?.shutdownGracefully()?.sync() }  catch (_: Exception) {}
+        try { bossGroup?.shutdownGracefully()?.sync()  } catch (_: Exception) {}
         try { workerGroup?.shutdownGracefully()?.sync() } catch (_: Exception) {}
         bossGroup     = null
         workerGroup   = null
@@ -224,19 +201,18 @@ class OxRelay(
 
     val isRunning: Boolean get() = running
 
-    // ── Pong ─────────────────────────────────────────────────────────────
+    // ── Pong builder ─────────────────────────────────────────────────────
 
-    private fun buildPong(protocolVersion: Int, minecraftVersion: String) =
-        BedrockPong()
-            .edition("MCPE")
-            .motd("oxse")
-            .subMotd("OxClient")
-            .playerCount(0)
-            .maximumPlayerCount(10)
-            .gameType("Survival")
-            .nintendoLimited(false)
-            .protocolVersion(protocolVersion)
-            .version(minecraftVersion)
-            .ipv4Port(localPort)
-            .ipv6Port(localPort)
+    private fun buildPong(protocol: Int, mc: String) = BedrockPong()
+        .edition("MCPE")
+        .motd(PONG_MOTD)
+        .subMotd(PONG_SUB_MOTD)
+        .playerCount(0)
+        .maximumPlayerCount(10)
+        .gameType("Survival")
+        .nintendoLimited(false)
+        .protocolVersion(protocol)
+        .version(mc)
+        .ipv4Port(localPort)
+        .ipv6Port(localPort)
 }

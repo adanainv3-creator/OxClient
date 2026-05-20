@@ -8,6 +8,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * ConnectionManager — Session lifecycle ve state yönetimi.
+ *
+ * setupSession() çağrısı MUTLAKA session.init()'den ÖNCE yapılmalıdır.
+ * Listener'lar eklenmiş olmalı ki OxRelaySession.connectToServer()
+ * sonrasında onSessionStart() doğru listener'lara ulaşsın.
+ *
+ * Doğru sıra (OxRelay.capture() içinde):
+ *   1. OxRelaySession oluştur
+ *   2. sessions.add(session)
+ *   3. ConnectionManager.setupSession(session, relay)  ← listener'lar eklenir
+ *   4. session.init()                                  ← client handler kurulur
+ *   (server bağlantısı LoginPacket gelince başlar)
+ */
 object ConnectionManager {
 
     private const val TAG = "ConnectionManager"
@@ -27,47 +41,59 @@ object ConnectionManager {
     val ping: StateFlow<Long> = _ping.asStateFlow()
 
     /**
-     * Session'ı kurar ve listener'ları ekler.
+     * Session'a listener'ları ekler ve EventBus'ı bağlar.
      *
-     * GÜNCELLEME: AutoCodecListener artık relay referansını alıyor.
-     * Client'ın gerçek protokol versiyonu öğrenilince relay pong'u
-     * otomatik güncellenir → MC "Sürüm uyumsuz" göstermez.
+     * Listener ekleme sırası priority'ye göre otomatik sıralanır:
+     *   AutoCodecListener   priority = -10  (ilk çalışır)
+     *   LoginPacketListener priority =   0
+     *   GamingPacketListener priority = 100 (son çalışır)
+     *
+     * @param relay  AutoCodecListener pong güncellemesi için gerekli.
+     *               null ise pong güncellenmez (LAN listesi etkilenmez ama bağlantı çalışır).
      */
     fun setupSession(session: OxRelaySession, relay: OxRelay? = null) {
         Log.d(TAG, "Session kuruluyor: ${session.clientAddress}")
 
+        // EventBus bağla
         PacketEventBus.setSession(session)
 
-        val listeners = listOf(
-            AutoCodecListener(relay),      // relay → pong dinamik güncelleme
-            LoginPacketListener(),
-            GamingPacketListener(),
-        )
+        // Listener'ları priority sırasına göre ekle
+        val listeners = listOf<OxPacketListener>(
+            AutoCodecListener(relay),   // priority = -10
+            LoginPacketListener(),      // priority =   0
+            GamingPacketListener(),     // priority = 100
+        ).sortedBy { it.priority }
 
-        listeners.sortedBy { it.priority }.forEach { listener ->
+        listeners.forEach { listener ->
             session.listeners.add(listener)
-            Log.v(TAG, "Listener eklendi: ${listener::class.simpleName} (priority=${listener.priority})")
+            Log.v(TAG, "  + ${listener::class.simpleName} (priority=${listener.priority})")
         }
 
-        ModuleManager.registerToSession(session)
+        // Modülleri session'a bağla
+        try {
+            ModuleManager.registerToSession(session)
+        } catch (e: Exception) {
+            Log.w(TAG, "ModuleManager.registerToSession hatası: ${e.message}")
+        }
 
         _state.value = State.CONNECTING
-    }
-
-    fun onGameStarted() {
-        _state.value = State.PLAYING
-        Log.i(TAG, "Oyun başladı")
+        Log.i(TAG, "Session hazır — ${listeners.size} listener aktif")
     }
 
     fun onHandshaking() {
         _state.value = State.HANDSHAKING
+        Log.d(TAG, "State → HANDSHAKING")
+    }
+
+    fun onGameStarted() {
+        _state.value = State.PLAYING
+        Log.i(TAG, "State → PLAYING ✓")
     }
 
     fun onDisconnected(reason: String = "") {
-        _state.value = State.DISCONNECTED
-        _ping.value  = -1L
-        Log.i(TAG, "Bağlantı kesildi: $reason")
+        Log.i(TAG, "State → DISCONNECTED ${if (reason.isNotBlank()) "($reason)" else ""}")
         PacketEventBus.setSession(null)
+        _ping.value  = -1L
         _state.value = State.IDLE
     }
 
@@ -77,4 +103,5 @@ object ConnectionManager {
 
     val isPlaying   : Boolean get() = _state.value == State.PLAYING
     val isConnected : Boolean get() = _state.value == State.PLAYING || _state.value == State.HANDSHAKING
+    val isIdle      : Boolean get() = _state.value == State.IDLE
 }
