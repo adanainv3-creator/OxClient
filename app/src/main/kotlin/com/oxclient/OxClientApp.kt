@@ -5,6 +5,7 @@ import android.util.Log
 import com.oxclient.auth.AccountManager
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
+import com.oxclient.core.relay.Definitions
 import com.oxclient.module.ModuleManager
 import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
@@ -29,6 +30,20 @@ class OxClientApp : Application() {
         ServerConfig.init(applicationContext)
         AccountManager.init(applicationContext)
         MicrosoftAuthManager.init(applicationContext)
+
+        // Block/item/camera definitions — background thread'de yükle
+        // AutoCodecListener bunları RequestNetworkSettings gelince hemen kullanır
+        Thread({
+            try {
+                Definitions.init(applicationContext)
+            } catch (e: Exception) {
+                Log.e(TAG, "Definitions yükleme hatası: ${e.message}", e)
+            }
+        }, "OxDefinitionsLoader").apply {
+            isDaemon = true
+            start()
+        }
+
         registerModules()
     }
 

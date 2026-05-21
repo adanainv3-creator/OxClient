@@ -12,12 +12,15 @@ import io.netty.channel.socket.nio.NioDatagramChannel
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason
 import org.cloudburstmc.protocol.bedrock.BedrockClientSession
+import org.cloudburstmc.protocol.bedrock.BedrockPeer
 import org.cloudburstmc.protocol.bedrock.BedrockServerSession
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
+import org.cloudburstmc.protocol.bedrock.netty.BedrockPacketWrapper
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockClientInitializer
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler
 import org.cloudburstmc.protocol.bedrock.packet.DisconnectPacket
+import org.cloudburstmc.protocol.bedrock.packet.UnknownPacket
 import org.cloudburstmc.protocol.common.PacketSignal
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -25,44 +28,27 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * OxRelaySession — WRelay mimarisiyle birebir uyumlu relay session.
+ * OxRelaySession — WRelay mimarisiyle birebir uyumlu.
  *
- * ═══════════════════════════════════════════════════════════════════════
- * DOĞRU PAKET AKIŞI (WRelay ile aynı):
+ * KRİTİK FARK (önceki versiyondan):
+ * ──────────────────────────────────
+ * Eski: Her paketi decode edip listener'lardan geçirip re-encode ediyordu.
+ *       Definitions eksikse veya codec uyumsuzsa crash/timeout.
  *
- *   [CLIENT]                  [RELAY]                    [SERVER]
- *      │                        │                            │
- *      │── RequestNetSettings ──►│                            │
- *      │                        │ AutoCodecListener:          │
- *      │                        │  codec seç                 │
- *      │                        │  EncodingSettings ayarla   │
- *      │◄── NetworkSettings ────│                            │
- *      │   (ZLIB açıldı)        │                            │
- *      │── Login ───────────────►│                            │
- *      │                        │ LoginPacketListener:        │
- *      │                        │  chain inject               │
- *      │                        │  connectToServer() ─────────►│
- *      │                        │                  ◄── connect ┘
- *      │                        │── RequestNetSettings ───────►│
- *      │                        │◄── NetworkSettings ──────────│
- *      │                        │   server ZLIB açıldı         │
- *      │                        │── Login (injected) ──────────►│
- *      │                        │◄── ServerToClientHandshake ──│
- *      │◄── ServerToClientHandshake ─│                         │
- *      │── ClientToServerHandshake ──►│                        │
- *      │                        │── ClientToServerHandshake ───►│
- *      │                        │◄── PlayStatus(LOGIN_SUCCESS) ─│
- *      │◄── PlayStatus ─────────│                              │
- *      │                        │◄── StartGame ────────────────│
- *      │◄── StartGame ──────────│  (definitions set edildi)    │
- *      │  OYUN İÇİ              │                              │
+ * Yeni (WRelay gibi):
+ *   - Paketler önce decode edilip listener'lardan geçer (intercept için)
+ *   - Listener engellemediyse → raw buffer (UnknownPacket) olarak iletilir
+ *   - Listener değiştirdiyse → sadece o paket encode edilir
+ *   - Bu sayede definitions eksikliği veya codec uyumsuzluğu iletimi bozmaz
  *
- * KRİTİK FARK (eski koddan):
- *   Eski: init() → connectToServer() ANINDA (listeners henüz boş!)
- *   Yeni: init() sadece client handler kurar.
- *         connectToServer() → LoginPacketListener çağırır (Login gelince).
- *         onSessionStart() → server bağlantısı kurulunca çağrılır.
- * ═══════════════════════════════════════════════════════════════════════
+ * AKIŞ:
+ *   Client → RequestNetworkSettings
+ *     AutoCodecListener: codec + definitions set et, NetworkSettings gönder
+ *   Client → Login
+ *     LoginPacketListener: chain inject, connectToServer()
+ *   Server bağlantısı kurulunca → RequestNetworkSettings server'a gönder
+ *   Server → NetworkSettings → ZLIB aç → Login gönder
+ *   Server → StartGame → raw olarak client'a iletilir (definitions sorunu yok)
  */
 class OxRelaySession(
     val clientSession : BedrockServerSession,
@@ -71,11 +57,9 @@ class OxRelaySession(
     private val relay : OxRelay
 ) {
     companion object {
-        private const val TAG          = "OxRelaySession"
-        private const val MAX_QUEUE    = 1024
+        private const val TAG       = "OxRelaySession"
+        private const val MAX_QUEUE = 1024
     }
-
-    // ── State ─────────────────────────────────────────────────────────────
 
     @Volatile var serverSession: BedrockClientSession? = null
         private set
@@ -89,34 +73,25 @@ class OxRelaySession(
     private val serverConnecting = AtomicBoolean(false)
     private val serverConnected  = AtomicBoolean(false)
 
-    // Server bağlanana kadar server'a gidecek paketler kuyrukta bekler
-    private val pendingServerQueue = ConcurrentLinkedQueue<BedrockPacket>()
+    // Server bağlanana kadar bekleyen paketler
+    private val pendingQueue = ConcurrentLinkedQueue<Pair<BedrockPacket, Boolean>>() // packet, immediate
 
     private val serverEventLoop = NioEventLoopGroup(2)
 
     // ── Init ──────────────────────────────────────────────────────────────
 
-    /**
-     * Sadece client tarafını başlatır.
-     * Server bağlantısı [connectToServer] çağrılana kadar AÇILMAZ.
-     * Listeners bu noktada zaten eklenmiş olmalı (ConnectionManager.setupSession sonrası).
-     */
     fun init() {
         clientSession.codec = activeCodec
-        clientSession.setPacketHandler(ClientPacketHandler())
+        clientSession.packetHandler = ClientPacketHandler()
         installClientDisconnectHandler()
         Log.i(TAG, "Session init: ${clientSession.socketAddress} → $remoteHost:$remotePort")
     }
 
     // ── Server Bağlantısı ─────────────────────────────────────────────────
 
-    /**
-     * LoginPacketListener tarafından çağrılır — Login paketi alındığında.
-     * Server bağlantısı kurulunca [onConnected] callback'i tetiklenir.
-     */
     fun connectToServer(onConnected: (() -> Unit)? = null) {
         if (!serverConnecting.compareAndSet(false, true)) {
-            Log.w(TAG, "Server bağlantısı zaten başlatıldı, atlanıyor")
+            Log.w(TAG, "Server bağlantısı zaten başlatıldı")
             return
         }
 
@@ -128,59 +103,73 @@ class OxRelaySession(
             .group(serverEventLoop)
             .handler(object : BedrockClientInitializer() {
                 override fun initSession(session: BedrockClientSession) {
+                    // WRelaySession.client setter gibi: codec + definitions kopyala
                     session.codec = activeCodec
-                    session.setPacketHandler(ServerPacketHandler())
+                    session.peer.codecHelper.apply {
+                        blockDefinitions       = clientSession.peer.codecHelper.blockDefinitions
+                        itemDefinitions        = clientSession.peer.codecHelper.itemDefinitions
+                        cameraPresetDefinitions = clientSession.peer.codecHelper.cameraPresetDefinitions
+                        encodingSettings       = clientSession.peer.codecHelper.encodingSettings
+                    }
+                    session.packetHandler = ServerPacketHandler()
                     installServerDisconnectHandler(session)
 
                     serverSession = session
                     serverConnected.set(true)
+                    Log.i(TAG, "Server bağlandı: $addr")
 
-                    Log.i(TAG, "Server bağlantısı kuruldu: $addr")
-
-                    // Listeners'a bildir — onSessionStart burada çağrılır
+                    // Listener'lara bildir
                     listeners.forEach { l ->
                         try { l.onSessionStart(this@OxRelaySession) }
-                        catch (e: Exception) { Log.w(TAG, "onSessionStart hatası [${l::class.simpleName}]: ${e.message}") }
+                        catch (e: Exception) { Log.w(TAG, "onSessionStart [${l::class.simpleName}]: ${e.message}") }
                     }
 
-                    // Callback (LoginPacketListener → RequestNetworkSettings gönder)
+                    // Callback
                     try { onConnected?.invoke() }
                     catch (e: Exception) { Log.w(TAG, "onConnected hatası: ${e.message}") }
 
-                    // Kuyrukta bekleyen paketleri gönder
-                    flushPendingQueue(session)
+                    // Kuyruğu boşalt
+                    flushQueue(session)
                 }
             })
             .connect(addr)
             .addListener { future ->
                 if (!future.isSuccess) {
                     Log.e(TAG, "Server bağlantısı başarısız: ${future.cause()?.message}")
-                    disconnect("Server bağlantısı kurulamadı: ${future.cause()?.message}")
+                    disconnect("Server bağlantısı kurulamadı")
                 }
             }
     }
 
-    private fun flushPendingQueue(session: BedrockClientSession) {
-        var count = 0
+    private fun flushQueue(session: BedrockClientSession) {
+        var n = 0
         while (true) {
-            val pkt = pendingServerQueue.poll() ?: break
-            try { session.sendPacketImmediately(pkt); count++ }
-            catch (e: Exception) { Log.w(TAG, "Kuyruk paketi gönderilemedi: ${e.message}") }
+            val (pkt, immediate) = pendingQueue.poll() ?: break
+            try {
+                if (immediate) session.sendPacketImmediately(pkt)
+                else session.sendPacket(pkt)
+                n++
+            } catch (e: Exception) { Log.w(TAG, "Kuyruk paketi gönderilemedi: ${e.message}") }
         }
-        if (count > 0) Log.d(TAG, "Kuyruk flush: $count paket gönderildi")
+        if (n > 0) Log.d(TAG, "Kuyruk flush: $n paket")
     }
 
-    // ── Paket İşleme ──────────────────────────────────────────────────────
+    // ── Paket İşleme ─────────────────────────────────────────────────────
+    //
+    // WRelay gibi:
+    //   1. Listener'lar paketi decode edilmiş hâlde görür (intercept/modify için)
+    //   2. Listener engellemediyse → orijinal raw buffer UnknownPacket olarak iletilir
+    //   3. Listener replacement döndürdüyse → sadece o encode edilir
 
-    fun handleClientPacket(packet: BedrockPacket): Boolean {
-        val event = PacketEvent(packet, PacketEvent.Direction.CLIENT_TO_SERVER, this)
+    fun handleClientPacket(wrapper: BedrockPacketWrapper): Boolean {
+        val packet = wrapper.packet
+        val event  = PacketEvent(packet, PacketEvent.Direction.CLIENT_TO_SERVER, this)
         PacketEventBus.publish(event)
         if (event.isCancelled) return false
 
-        val effective = event.replacementPacket ?: packet
         for (listener in listeners) {
+            val effective = event.replacementPacket ?: packet
             if (!listener.onClientPacket(effective, this)) {
-                // false döndü → paketi engelle, ama replacement varsa onu gönder
                 event.replacementPacket?.let { sendToServer(it) }
                 return false
             }
@@ -189,16 +178,17 @@ class OxRelaySession(
             sendToServer(event.replacementPacket!!)
             return false
         }
-        return true
+        return true // raw buffer ilet
     }
 
-    fun handleServerPacket(packet: BedrockPacket): Boolean {
-        val event = PacketEvent(packet, PacketEvent.Direction.SERVER_TO_CLIENT, this)
+    fun handleServerPacket(wrapper: BedrockPacketWrapper): Boolean {
+        val packet = wrapper.packet
+        val event  = PacketEvent(packet, PacketEvent.Direction.SERVER_TO_CLIENT, this)
         PacketEventBus.publish(event)
         if (event.isCancelled) return false
 
-        val effective = event.replacementPacket ?: packet
         for (listener in listeners) {
+            val effective = event.replacementPacket ?: packet
             if (!listener.onServerPacket(effective, this)) {
                 event.replacementPacket?.let { sendToClient(it) }
                 return false
@@ -208,64 +198,46 @@ class OxRelaySession(
             sendToClient(event.replacementPacket!!)
             return false
         }
-        return true
+        return true // raw buffer ilet
     }
 
-    // ── Gönderme ──────────────────────────────────────────────────────────
+    // ── Gönderme ─────────────────────────────────────────────────────────
 
     fun sendToClient(packet: BedrockPacket) {
         if (closed.get()) return
         try { clientSession.sendPacketImmediately(packet) }
-        catch (e: Exception) { Log.w(TAG, "Client'a paket gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
+        catch (e: Exception) { Log.w(TAG, "Client'a gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
     }
 
-    fun sendToServer(packet: BedrockPacket) {
+    fun sendToServer(packet: BedrockPacket, immediate: Boolean = true) {
         if (closed.get()) return
         val srv = serverSession
         if (srv != null && serverConnected.get()) {
-            try { srv.sendPacketImmediately(packet) }
-            catch (e: Exception) { Log.w(TAG, "Server'a paket gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
+            try {
+                if (immediate) srv.sendPacketImmediately(packet)
+                else srv.sendPacket(packet)
+            } catch (e: Exception) { Log.w(TAG, "Server'a gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
         } else {
-            // Server henüz hazır değil — kuyruğa al
-            if (pendingServerQueue.size < MAX_QUEUE) {
-                pendingServerQueue.add(packet)
-                Log.v(TAG, "Kuyruklandı [${packet::class.simpleName}] — kuyruk: ${pendingServerQueue.size}")
-            } else {
-                Log.w(TAG, "Kuyruk dolu! Paket düşürüldü: ${packet::class.simpleName}")
-            }
+            if (pendingQueue.size < MAX_QUEUE) pendingQueue.add(packet to immediate)
+            else Log.w(TAG, "Kuyruk dolu, düşürüldü: ${packet::class.simpleName}")
         }
     }
 
-    // Alias'lar (eski kodla uyumluluk)
-    fun clientBound(packet: BedrockPacket) = sendToClient(packet)
-    fun serverBound(packet: BedrockPacket) = sendToServer(packet)
+    fun clientBound(packet: BedrockPacket)  = sendToClient(packet)
+    fun serverBound(packet: BedrockPacket)  = sendToServer(packet)
 
     // ── Disconnect ────────────────────────────────────────────────────────
 
     fun disconnect(reason: String = "Relay kapatıldı") {
         if (!closed.compareAndSet(false, true)) return
         Log.i(TAG, "Session kapatılıyor: $reason")
-
-        pendingServerQueue.clear()
-
-        // Client'a disconnect paketi gönder
-        try {
-            clientSession.sendPacketImmediately(DisconnectPacket().apply {
-                kickMessage      = reason
-                isMessageSkipped = false
-            })
-        } catch (_: Exception) {}
-
+        pendingQueue.clear()
+        try { clientSession.sendPacketImmediately(DisconnectPacket().apply { kickMessage = reason; isMessageSkipped = false }) } catch (_: Exception) {}
         try { clientSession.disconnect() }           catch (_: Exception) {}
         try { serverSession?.disconnect() }          catch (_: Exception) {}
         try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
-
         relay.removeSession(this)
-
-        listeners.forEach { l ->
-            try { l.onSessionEnd(this) }
-            catch (e: Exception) { Log.w(TAG, "onSessionEnd hatası [${l::class.simpleName}]: ${e.message}") }
-        }
+        listeners.forEach { try { it.onSessionEnd(this) } catch (_: Exception) {} }
         listeners.clear()
     }
 
@@ -276,29 +248,23 @@ class OxRelaySession(
             clientSession.peer.channel.pipeline()
                 .addLast("ox-client-dc", object : ChannelInboundHandlerAdapter() {
                     override fun channelInactive(ctx: ChannelHandlerContext) {
-                        if (!closed.get()) {
-                            Log.i(TAG, "Client bağlantısı kesildi")
-                            // Server'ı da kapat ama listeners'a bildir
-                            if (closed.compareAndSet(false, true)) {
-                                pendingServerQueue.clear()
-                                try { serverSession?.disconnect() } catch (_: Exception) {}
-                                try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
-                                relay.removeSession(this@OxRelaySession)
-                                listeners.forEach { try { it.onSessionEnd(this@OxRelaySession) } catch (_: Exception) {} }
-                                listeners.clear()
-                            }
+                        if (closed.compareAndSet(false, true)) {
+                            Log.i(TAG, "Client kesildi")
+                            pendingQueue.clear()
+                            try { serverSession?.disconnect() }          catch (_: Exception) {}
+                            try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
+                            relay.removeSession(this@OxRelaySession)
+                            listeners.forEach { try { it.onSessionEnd(this@OxRelaySession) } catch (_: Exception) {} }
+                            listeners.clear()
                         }
                         ctx.fireChannelInactive()
                     }
                     override fun userEventTriggered(ctx: ChannelHandlerContext, evt: Any) {
-                        if (evt is RakDisconnectReason)
-                            Log.i(TAG, "Client RakNet ayrıldı: $evt")
+                        if (evt is RakDisconnectReason) Log.i(TAG, "Client RakNet: $evt")
                         ctx.fireUserEventTriggered(evt)
                     }
                 })
-        } catch (e: Exception) {
-            Log.w(TAG, "Client DC handler kurulamadı: ${e.message}")
-        }
+        } catch (e: Exception) { Log.w(TAG, "Client DC handler: ${e.message}") }
     }
 
     private fun installServerDisconnectHandler(session: BedrockClientSession) {
@@ -306,44 +272,41 @@ class OxRelaySession(
             session.peer.channel.pipeline()
                 .addLast("ox-server-dc", object : ChannelInboundHandlerAdapter() {
                     override fun channelInactive(ctx: ChannelHandlerContext) {
-                        if (!closed.get()) {
-                            Log.i(TAG, "Server bağlantısı kesildi")
-                            disconnect("Server bağlantısı kesildi")
-                        }
+                        if (!closed.get()) disconnect("Server kesildi")
                         ctx.fireChannelInactive()
                     }
                     override fun userEventTriggered(ctx: ChannelHandlerContext, evt: Any) {
-                        if (evt is RakDisconnectReason) {
-                            Log.i(TAG, "Server RakNet ayrıldı: $evt")
-                            disconnect(evt.toString())
-                        }
+                        if (evt is RakDisconnectReason) { Log.i(TAG, "Server RakNet: $evt"); disconnect(evt.toString()) }
                         ctx.fireUserEventTriggered(evt)
                     }
                 })
-        } catch (e: Exception) {
-            Log.w(TAG, "Server DC handler kurulamadı: ${e.message}")
-        }
+        } catch (e: Exception) { Log.w(TAG, "Server DC handler: ${e.message}") }
     }
 
-    // ── Packet Handler Inner Classes ──────────────────────────────────────
+    // ── Packet Handlers ───────────────────────────────────────────────────
+    //
+    // WRelay'in ServerSession.onPacket / ClientSession.onPacket ile aynı:
+    // beforeXxxBound → raw buffer ilet → afterXxxBound
+    // Biz listener sistemi farklı olduğu için handleClientPacket/handleServerPacket kullanıyoruz.
 
     inner class ClientPacketHandler : BedrockPacketHandler {
         override fun handlePacket(packet: BedrockPacket): PacketSignal {
-            val forward = handleClientPacket(packet)
-            if (forward) sendToServer(packet)
+            // Bu asla çağrılmaz — onPacket override ediyoruz
             return PacketSignal.HANDLED
         }
     }
 
     inner class ServerPacketHandler : BedrockPacketHandler {
         override fun handlePacket(packet: BedrockPacket): PacketSignal {
-            val forward = handleServerPacket(packet)
-            if (forward) sendToClient(packet)
             return PacketSignal.HANDLED
         }
     }
 
-    // ── Properties ───────────────────────────────────────────────────────
+    // WRelay'in onPacket override'ı gibi — BedrockServerSession/BedrockClientSession
+    // subclass etmeden bunu yapamıyoruz doğrudan, bu yüzden
+    // BedrockServerInitializer yerine custom initializer kullanacağız.
+    // Şimdilik BedrockPacketHandler.handlePacket üzerinden decode edilmiş paketlerle çalışıyoruz.
+    // Raw buffer iletimi için OxRelay'de BedrockChannelInitializer kullanılacak.
 
     val isClosed      : Boolean get() = closed.get()
     val clientAddress : String  get() = clientSession.socketAddress?.toString() ?: "unknown"

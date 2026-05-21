@@ -1,9 +1,12 @@
 package com.oxclient.core.relay.listener
 
 import android.util.Log
+import com.oxclient.core.relay.Definitions
 import com.oxclient.core.relay.OxRelay
 import com.oxclient.core.relay.OxRelaySession
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
+import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventoryContentSerializer_v729
+import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventorySlotSerializer_v729
 import org.cloudburstmc.protocol.bedrock.data.EncodingSettings
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
 import org.cloudburstmc.protocol.bedrock.packet.*
@@ -11,79 +14,57 @@ import org.cloudburstmc.protocol.bedrock.packet.*
 /**
  * AutoCodecListener — WRelay AutoCodecPacketListener ile birebir aynı davranış.
  *
- * ═══════════════════════════════════════════════════════════════════
- * Görevleri:
- *
- *  1. [C→R] RequestNetworkSettingsPacket:
- *     a) Client'ın protocolVersion'ına göre doğru codec'i bul
- *     b) Codec'i session'a set et (client tarafı)
- *        NOT: server tarafı henüz bağlı değil — sadece activeCodec güncellenir
- *             Server bağlanınca OxRelaySession.connectToServer() codec'i set eder
- *     c) EncodingSettings → Int.MAX_VALUE (parse hatalarını önler)
- *     d) Client'a NetworkSettingsPacket gönder (ZLIB, threshold=1)
- *     e) clientSession.setCompression(ZLIB)
- *     f) return false → server'a İLETME (LoginPacketListener connectToServer sonrası gönderecek)
- *
- *  2. Relay pong güncelle → LAN listesinde doğru sürüm
- *
- * Priority = -10 → LoginPacketListener'dan (0) önce çalışır.
- * ═══════════════════════════════════════════════════════════════════
+ * RequestNetworkSettingsPacket gelince:
+ *   1. Codec seç (protocol versiyonuna göre)
+ *   2. Client codec'ini set et
+ *   3. Definitions'ları HEMEN set et (Definitions.kt'den — önceden yüklenmiş)
+ *      → WRelay'de de burada set ediliyor, StartGame'i beklemiyor
+ *   4. EncodingSettings → sınırsız
+ *   5. Client'a NetworkSettingsPacket gönder + ZLIB aç
+ *   6. return false → server'a iletme
  */
 class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
 
     companion object {
         private const val TAG = "AutoCodecListener"
 
-        // En yeni → en eski sırasıyla — ilk bulunan kullanılır
-        private val CODEC_CLASS_NAMES = listOf(
-            "v975.Bedrock_v975",   // MC 26.20
-            "v948.Bedrock_v948",   // MC 26.10 release
-            "v935.Bedrock_v935",   // MC 26.10 preview
-            "v924.Bedrock_v924",   // MC 26.0
-            "v818.Bedrock_v818",   // MC 1.21.93 edu
-            "v800.Bedrock_v800",
-            "v786.Bedrock_v786",   // MC 1.21.80
-            "v748.Bedrock_v748",   // MC 1.21.60
-            "v729.Bedrock_v729",   // MC 1.21.50
-            "v712.Bedrock_v712",   // MC 1.21.40
-            "v686.Bedrock_v686",   // MC 1.21.30
-            "v671.Bedrock_v671",   // MC 1.21.20
-            "v662.Bedrock_v662",
-            "v649.Bedrock_v649",
-            "v630.Bedrock_v630",
-            "v618.Bedrock_v618",
-            "v594.Bedrock_v594",
-            "v589.Bedrock_v589",
-            "v582.Bedrock_v582",
-            "v575.Bedrock_v575",
+        private val CODEC_NAMES = listOf(
+            "v975.Bedrock_v975", "v948.Bedrock_v948", "v935.Bedrock_v935",
+            "v924.Bedrock_v924", "v818.Bedrock_v818", "v800.Bedrock_v800",
+            "v786.Bedrock_v786", "v748.Bedrock_v748", "v729.Bedrock_v729",
+            "v712.Bedrock_v712", "v686.Bedrock_v686", "v671.Bedrock_v671",
+            "v662.Bedrock_v662", "v649.Bedrock_v649", "v630.Bedrock_v630",
         )
-
         private val BASE = "org.cloudburstmc.protocol.bedrock.codec."
-
-        // protocol → codec cache (thread-safe lazy map)
-        private val codecCache = HashMap<Int, BedrockCodec?>()
+        private val cache = HashMap<Int, BedrockCodec?>()
 
         @Synchronized
         fun findCodec(protocol: Int): BedrockCodec? {
-            if (codecCache.containsKey(protocol)) return codecCache[protocol]
-            for (name in CODEC_CLASS_NAMES) {
+            if (cache.containsKey(protocol)) return cache[protocol]
+            for (name in CODEC_NAMES) {
                 try {
-                    val codec = Class.forName("$BASE$name")
-                        .getField("CODEC")
-                        .get(null) as? BedrockCodec ?: continue
+                    val codec = Class.forName("$BASE$name").getField("CODEC").get(null) as? BedrockCodec
+                        ?: continue
                     if (codec.protocolVersion == protocol) {
-                        Log.i(TAG, "Codec eşleşti: $name (protocol=$protocol, mc=${codec.minecraftVersion})")
-                        codecCache[protocol] = codec
+                        cache[protocol] = codec
                         return codec
                     }
                 } catch (_: Exception) {}
             }
-            Log.w(TAG, "Codec bulunamadı: protocol=$protocol — RELAY_CODEC kullanılacak")
-            codecCache[protocol] = null
+            cache[protocol] = null
             return null
         }
 
-        private val UNLIMITED_ENCODING: EncodingSettings = EncodingSettings.builder()
+        private fun patchCodec(codec: BedrockCodec): BedrockCodec {
+            return if (codec.protocolVersion > 729) {
+                codec.toBuilder()
+                    .updateSerializer(InventoryContentPacket::class.java, InventoryContentSerializer_v729.INSTANCE)
+                    .updateSerializer(InventorySlotPacket::class.java, InventorySlotSerializer_v729.INSTANCE)
+                    .build()
+            } else codec
+        }
+
+        private val UNLIMITED = EncodingSettings.builder()
             .maxListSize(Int.MAX_VALUE)
             .maxByteArraySize(Int.MAX_VALUE)
             .maxNetworkNBTSize(Int.MAX_VALUE)
@@ -92,90 +73,58 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
             .build()
     }
 
-    override val priority: Int = -10  // LoginPacketListener'dan (0) önce çalış
+    override val priority: Int = -10
 
-    @Volatile private var processed = false
+    @Volatile private var done = false
 
-    override fun onSessionStart(session: OxRelaySession) {
-        processed = false
-    }
+    override fun onSessionStart(session: OxRelaySession) { done = false }
 
     override fun onClientPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
-        when (packet) {
-            is RequestNetworkSettingsPacket -> {
-                if (processed) {
-                    Log.w(TAG, "RequestNetworkSettings tekrar geldi — atlanıyor")
-                    return false
-                }
-                processed = true
+        if (packet !is RequestNetworkSettingsPacket) return true
+        if (done) return false
+        done = true
 
-                val protocol = packet.protocolVersion
-                Log.i(TAG, "RequestNetworkSettings — protocol=$protocol")
+        val protocol = packet.protocolVersion
+        Log.i(TAG, "RequestNetworkSettings — protocol=$protocol")
 
-                // 1. Codec seç
-                val codec = findCodec(protocol) ?: OxRelay.RELAY_CODEC.also {
-                    Log.w(TAG, "Bilinmeyen protocol=$protocol — RELAY_CODEC fallback: ${it.protocolVersion}")
-                }
+        try {
+            val raw   = findCodec(protocol) ?: OxRelay.RELAY_CODEC
+            val codec = patchCodec(raw)
 
-                // 2. Client codec'ini set et
-                //    Server henüz bağlı değil — sadece activeCodec'i güncelle
-                //    Server bağlanınca connectToServer() içindeki initSession codec'i set eder
-                try {
-                    session.clientSession.codec = codec
-                } catch (e: Exception) {
-                    Log.w(TAG, "Client codec set hatası: ${e.message}")
-                }
-                session.activeCodec = codec
+            // 1. Client codec
+            session.clientSession.codec = codec
+            session.activeCodec = codec
+            Log.i(TAG, "Codec: ${codec.protocolVersion} mc=${codec.minecraftVersion}")
 
-                // 3. EncodingSettings — sınırsız
-                try {
-                    session.clientSession.peer.codecHelper.encodingSettings = UNLIMITED_ENCODING
-                } catch (e: Exception) {
-                    Log.w(TAG, "EncodingSettings set hatası: ${e.message}")
-                }
-
-                Log.i(TAG, "Codec seçildi: protocol=${codec.protocolVersion} mc=${codec.minecraftVersion}")
-
-                // 4. Client'a NetworkSettingsPacket gönder
-                val netSettings = NetworkSettingsPacket().apply {
-                    compressionThreshold = 1
-                    compressionAlgorithm = PacketCompressionAlgorithm.ZLIB
-                }
-                session.sendToClient(netSettings)
-
-                // 5. Client-side ZLIB compression aç
-                try {
-                    session.clientSession.setCompression(PacketCompressionAlgorithm.ZLIB)
-                    Log.i(TAG, "Client ZLIB compression açıldı ✓")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Client compression hatası: ${e.message}", e)
-                }
-
-                // 6. Relay pong güncelle (LAN listesinde doğru sürüm)
-                relay?.updatePong(codec.protocolVersion, codec.minecraftVersion ?: mcVersionFor(protocol))
-
-                // false → server'a İLETME
-                // LoginPacketListener, server bağlandıktan sonra ayrıca RequestNetworkSettings gönderecek
-                return false
+            // 2. Definitions — WRelay AutoCodecPacketListener ile birebir aynı
+            //    Block/item/camera definitions RequestNetworkSettings'te hemen set edilir.
+            //    StartGame'i beklersek paket decode edilemez → timeout.
+            session.clientSession.peer.codecHelper.apply {
+                itemDefinitions         = Definitions.itemDefinitions
+                blockDefinitions        = Definitions.blockDefinitions
+                cameraPresetDefinitions = Definitions.cameraPresetDefinitions
+                encodingSettings        = UNLIMITED
             }
-        }
-        return true
-    }
+            Log.i(TAG, "Definitions set edildi ✓")
 
-    private fun mcVersionFor(protocol: Int) = when (protocol) {
-        975  -> "26.20"
-        948  -> "26.10"
-        935  -> "26.10"
-        924  -> "26.0"
-        818  -> "1.21.93"
-        800  -> "1.21.90"
-        786  -> "1.21.80"
-        748  -> "1.21.60"
-        729  -> "1.21.50"
-        712  -> "1.21.40"
-        686  -> "1.21.30"
-        671  -> "1.21.20"
-        662  -> "1.21.10"
-        else -> protocol.toString()
+            // 3. Client'a NetworkSettingsPacket gönder
+            session.sendToClient(NetworkSettingsPacket().apply {
+                compressionThreshold = 1
+                compressionAlgorithm = PacketCompressionAlgorithm.ZLIB
+            })
+
+            // 4. Client ZLIB compression aç
+            session.clientSession.setCompression(PacketCompressionAlgorithm.ZLIB)
+            Log.i(TAG, "Client ZLIB açıldı ✓")
+
+            // 5. Relay pong güncelle
+            relay?.updatePong(codec.protocolVersion, codec.minecraftVersion ?: "")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "RequestNetworkSettings işleme hatası: ${e.message}", e)
+            session.disconnect("NetworkSettings hatası: ${e.message}")
+        }
+
+        return false // server'a iletme
     }
 }
