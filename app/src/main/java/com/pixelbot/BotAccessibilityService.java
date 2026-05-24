@@ -44,7 +44,7 @@ public class BotAccessibilityService extends AccessibilityService {
     // Singleton reference (Accessibility service only one instance)
     private static BotAccessibilityService instance;
 
-    // Bot state
+    // Bot state djjdjsjsdjdj
     private static boolean botRunning = false;
     private static String currentMode = ""; // "mining" or "fishing"
     private static MiningCallback miningCallback;
