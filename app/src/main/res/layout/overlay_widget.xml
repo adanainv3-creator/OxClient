@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/overlayRoot"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:gravity="center_horizontal">
+
+    <!-- Collapsed: just the drag button -->
+    <LinearLayout
+        android:id="@+id/widgetCollapsed"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:background="@drawable/widget_bg"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⚙"
+            android:textColor="#00d4ff"
+            android:textSize="24sp"/>
+    </LinearLayout>
+
+    <!-- Expanded menu -->
+    <LinearLayout
+        android:id="@+id/widgetExpanded"
+        android:layout_width="160dp"
+        android:layout_height="wrap_content"
+        android:background="@drawable/menu_bg"
+        android:orientation="vertical"
+        android:padding="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⚙ PIXEL BOT"
+            android:textColor="#00d4ff"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:paddingBottom="8dp"/>
+
+        <!-- Status -->
+        <TextView
+            android:id="@+id/tvWidgetStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="● Bekliyor"
+            android:textColor="#ffaa00"
+            android:textSize="10sp"
+            android:gravity="center"
+            android:paddingBottom="8dp"/>
+
+        <!-- Auto Mining Button -->
+        <Button
+            android:id="@+id/btnMining"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:background="@drawable/btn_mining"
+            android:text="⛏ AUTO MINING"
+            android:textColor="#ffffff"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="6dp"/>
+
+        <!-- Auto Fishing Button -->
+        <Button
+            android:id="@+id/btnFishing"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:background="@drawable/btn_fishing"
+            android:text="🎣 AUTO FISHING"
+            android:textColor="#ffffff"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Stats -->
+        <TextView
+            android:id="@+id/tvStats"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Mining: 0 | Fish: 0"
+            android:textColor="#8888aa"
+            android:textSize="9sp"
+            android:gravity="center"
+            android:paddingBottom="4dp"/>
+
+        <!-- Close -->
+        <Button
+            android:id="@+id/btnClose"
+            android:layout_width="match_parent"
+            android:layout_height="30dp"
+            android:background="@drawable/btn_close"
+            android:text="✕ KAPAT"
+            android:textColor="#ff6666"
+            android:textSize="10sp"/>
+    </LinearLayout>
+
+</LinearLayout>
