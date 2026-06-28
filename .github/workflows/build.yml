@@ -16,12 +16,19 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
-            ~/.gradle/caches
             ~/.gradle/wrapper
             ~/.m2/repository
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+      # NOT: ~/.gradle/caches artık actions/cache'e DAHIL EDİLMİYOR.
+      # Sebep: bedrock-codec/bedrock-connection SNAPSHOT bağımlılıkları bu
+      # klasörde cache'leniyordu ve cache key (gradle dosyalarının hash'i)
+      # SNAPSHOT versiyon string'i değişmediği için asla değişmiyordu —
+      # sonuç: ilk build'de çekilen eski SNAPSHOT içeriği sonsuza kadar
+      # geri yükleniyordu, Gradle da "zaten güncel" sanıp uzak repoya
+      # hiç bakmıyordu. wrapper + ~/.m2 cache'lenmeye devam ediyor
+      # (onlar versiyonlanmış/sabit içerik, sorun yok).
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace --refresh-dependencies
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false -Xmx4g"
       - name: Upload Debug APK
@@ -32,7 +39,7 @@ jobs:
           retention-days: 30
       - name: Build Release APK
         if: github.ref == 'refs/heads/main'
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease --refresh-dependencies
         env:
           KEYSTORE_PATH: ${{ secrets.KEYSTORE_PATH }}
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
