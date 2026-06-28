@@ -13,6 +13,19 @@ jobs:
       - uses: actions/setup-java@v4
         with: { java-version: '17', distribution: 'temurin', cache: gradle }
       - run: chmod +x gradlew
+
+      # ── Maven snapshot v800'de takılı kaldığı için kaynağı doğrudan
+      # çekiyoruz (wclient'teki relay/Protocol klasörüyle aynı isim/yapı —
+      # onlar kalıcı commit'liyor, biz her CI run'ında taze çekiyoruz,
+      # işlevsel olarak aynı sonuç). ──────────────────────────────────
+      - name: Clone CloudburstMC/Protocol kaynağı (Maven snapshot bypass)
+        run: |
+          rm -rf relay/Protocol
+          mkdir -p relay
+          git clone --depth 1 -b 3.0 https://github.com/CloudburstMC/Protocol.git relay/Protocol
+          echo "Klonlanan commit:"
+          git -C relay/Protocol log -1 --oneline
+
       - uses: actions/cache@v4
         with:
           path: |
