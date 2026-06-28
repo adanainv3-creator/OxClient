@@ -20,7 +20,6 @@ import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.netty.BedrockPacketWrapper
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
-import org.cloudburstmc.protocol.bedrock.packet.BedrockPacketHandler
 import org.cloudburstmc.protocol.bedrock.packet.DisconnectPacket
 import org.cloudburstmc.protocol.bedrock.packet.UnknownPacket
 import java.net.InetSocketAddress
@@ -316,15 +315,6 @@ class OxRelaySession internal constructor(
     inner class ServerSession(peer: BedrockPeer, subClientId: Int) :
         BedrockServerSession(peer, subClientId) {
 
-        init {
-            packetHandler = object : BedrockPacketHandler {
-                override fun onDisconnect(reason: CharSequence) {
-                    Log.i(TAG, "Client disconnect (packetHandler): $reason")
-                    disconnect(reason.toString())
-                }
-            }
-        }
-
         override fun onPacket(wrapper: BedrockPacketWrapper) {
             try {
                 if (!handleClientPacket(wrapper)) return // listener kendi gönderimini yaptı veya engelledi
@@ -342,15 +332,6 @@ class OxRelaySession internal constructor(
 
     inner class ClientSession(peer: BedrockPeer, subClientId: Int) :
         BedrockClientSession(peer, subClientId) {
-
-        init {
-            packetHandler = object : BedrockPacketHandler {
-                override fun onDisconnect(reason: CharSequence) {
-                    Log.i(TAG, "Server disconnect (packetHandler): $reason")
-                    if (!closed.get()) disconnect(reason.toString())
-                }
-            }
-        }
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
             try {
