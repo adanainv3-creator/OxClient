@@ -19,14 +19,29 @@ jobs:
             ~/.gradle/wrapper
             ~/.m2/repository
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
-      # NOT: ~/.gradle/caches artık actions/cache'e DAHIL EDİLMİYOR.
-      # Sebep: bedrock-codec/bedrock-connection SNAPSHOT bağımlılıkları bu
-      # klasörde cache'leniyordu ve cache key (gradle dosyalarının hash'i)
-      # SNAPSHOT versiyon string'i değişmediği için asla değişmiyordu —
-      # sonuç: ilk build'de çekilen eski SNAPSHOT içeriği sonsuza kadar
-      # geri yükleniyordu, Gradle da "zaten güncel" sanıp uzak repoya
-      # hiç bakmıyordu. wrapper + ~/.m2 cache'lenmeye devam ediyor
-      # (onlar versiyonlanmış/sabit içerik, sorun yok).
+
+      # ── TEŞHİS ADIMI ─────────────────────────────────────────────────────
+      # --refresh-dependencies denendi, sonuç değişmedi (hâlâ 800'de tıkalı).
+      # Bu, sorunun CI cache'i olmadığını gösteriyor — gerçekten resolve
+      # edilen bedrock-codec jar'ının içeriğine bakmamız gerekiyor.
+      # Bu adım: jar'ı bulur, SNAPSHOT timestamp'ini ve içindeki TÜM
+      # v### paketlerini listeler. Sonucu bana yapıştır.
+      - name: Diagnose bedrock-codec dependency
+        run: |
+          echo "── Dependency resolution ──"
+          ./gradlew :app:dependencies --configuration debugRuntimeClasspath --refresh-dependencies 2>&1 | grep -i -A 2 "bedrock-codec" || echo "bedrock-codec dependency tree'de bulunamadı"
+
+          echo ""
+          echo "── Resolved jar dosyaları ──"
+          find ~/.gradle/caches/modules-2 -iname "bedrock-codec*.jar" -exec ls -la {} \;
+
+          echo ""
+          echo "── Her jar içindeki versiyon paketleri ──"
+          for jar in $(find ~/.gradle/caches/modules-2 -iname "bedrock-codec*.jar"); do
+            echo "=== $jar ==="
+            unzip -l "$jar" | grep -oE "v[0-9]+/Bedrock_v[0-9]+\.class" | sed 's#/Bedrock_v[0-9]*\.class##' | sort -t v -k2 -n -u
+          done
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace --refresh-dependencies
         env:
