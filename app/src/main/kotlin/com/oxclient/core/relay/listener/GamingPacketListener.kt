@@ -1,6 +1,5 @@
 package com.oxclient.core.relay.listener
 
-import android.util.Log
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.ConnectionManager
 import com.oxclient.core.relay.OxRelaySession
@@ -36,13 +35,13 @@ class GamingPacketListener : OxPacketListener {
 
     override fun onSessionStart(session: OxRelaySession) {
         active = true
-        Log.i(TAG, "Gaming listener aktif: ${session.clientAddress}")
+        OverlayLogger.i(TAG, "Gaming listener aktif: ${session.clientAddress}")
     }
 
     override fun onSessionEnd(session: OxRelaySession) {
         active = false
         EntityTracker.reset()
-        Log.i(TAG, "Gaming listener sonlandı: ${session.clientAddress}")
+        OverlayLogger.i(TAG, "Gaming listener sonlandı: ${session.clientAddress}")
     }
 
     // ── Client → Server ───────────────────────────────────────────────────
@@ -52,12 +51,12 @@ class GamingPacketListener : OxPacketListener {
         when (packet) {
             is MovePlayerPacket          -> { /* yüksek frekanslı */ }
             is PlayerAuthInputPacket     -> { /* yüksek frekanslı */ }
-            is PlayerActionPacket        -> Log.v(TAG, "PlayerAction: ${packet.action}")
-            is InteractPacket            -> Log.v(TAG, "Interact: ${packet.action} e=${packet.runtimeEntityId}")
-            is InventoryTransactionPacket-> Log.v(TAG, "InventoryTx: ${packet.transactionType}")
-            is CommandRequestPacket      -> Log.d(TAG, "Command: ${packet.command}")
-            is TextPacket                -> Log.d(TAG, "Chat C→S: ${packet.message}")
-            is AnimatePacket             -> Log.v(TAG, "Animate: ${packet.action}")
+            is PlayerActionPacket        -> OverlayLogger.v(TAG, "PlayerAction: ${packet.action}")
+            is InteractPacket            -> OverlayLogger.v(TAG, "Interact: ${packet.action} e=${packet.runtimeEntityId}")
+            is InventoryTransactionPacket-> OverlayLogger.v(TAG, "InventoryTx: ${packet.transactionType}")
+            is CommandRequestPacket      -> OverlayLogger.d(TAG, "Command: ${packet.command}")
+            is TextPacket                -> OverlayLogger.d(TAG, "Chat C→S: ${packet.message}")
+            is AnimatePacket             -> OverlayLogger.v(TAG, "Animate: ${packet.action}")
             is DisconnectPacket          -> OverlayLogger.i(TAG, "Client disconnect: ${packet.kickMessage}")
         }
         return true
@@ -87,19 +86,19 @@ class GamingPacketListener : OxPacketListener {
             // Entity tracking PacketEventBus üzerinden EntityTracker tarafından
             // otomatik yapılıyor (EntityTracker.init() → PacketEventBus.register())
             // Burada sadece logluyoruz.
-            is AddPlayerPacket          -> Log.v(TAG, "AddPlayer: ${packet.username} eid=${packet.runtimeEntityId}")
-            is AddEntityPacket          -> Log.v(TAG, "AddEntity: ${packet.identifier} eid=${packet.runtimeEntityId}")
-            is RemoveEntityPacket       -> Log.v(TAG, "RemoveEntity: uid=${packet.uniqueEntityId}")
+            is AddPlayerPacket          -> OverlayLogger.v(TAG, "AddPlayer: ${packet.username} eid=${packet.runtimeEntityId}")
+            is AddEntityPacket          -> OverlayLogger.v(TAG, "AddEntity: ${packet.identifier} eid=${packet.runtimeEntityId}")
+            is RemoveEntityPacket       -> OverlayLogger.v(TAG, "RemoveEntity: uid=${packet.uniqueEntityId}")
             is MoveEntityAbsolutePacket -> { /* yüksek frekanslı */ }
             is MovePlayerPacket         -> { /* yüksek frekanslı */ }
 
             // ── Diğer oyun paketleri ──────────────────────────────────────
-            is RespawnPacket          -> Log.d(TAG, "Respawn: ${packet.position} state=${packet.state}")
-            is SetHealthPacket        -> Log.v(TAG, "Health: ${packet.health}")
+            is RespawnPacket          -> OverlayLogger.d(TAG, "Respawn: ${packet.position} state=${packet.state}")
+            is SetHealthPacket        -> OverlayLogger.v(TAG, "Health: ${packet.health}")
             is UpdateAttributesPacket -> { /* yüksek frekanslı */ }
-            is PlayerListPacket       -> Log.v(TAG, "PlayerList: ${packet.action} count=${packet.entries.size}")
+            is PlayerListPacket       -> OverlayLogger.v(TAG, "PlayerList: ${packet.action} count=${packet.entries.size}")
             is ChangeDimensionPacket  -> OverlayLogger.i(TAG, "ChangeDimension → dim=${packet.dimension}")
-            is TextPacket             -> Log.v(TAG, "Chat S→C: ${packet.message}")
+            is TextPacket             -> OverlayLogger.v(TAG, "Chat S→C: ${packet.message}")
             is DisconnectPacket       -> OverlayLogger.w(TAG, "Server Disconnect: ${packet.kickMessage}")
 
             // ── TransferPacket ──────────────────────────────────────────
@@ -134,7 +133,7 @@ class GamingPacketListener : OxPacketListener {
                         port    = session.relay.boundLocalPort
                     })
                 } catch (e: Exception) {
-                    Log.e(TAG, "Transfer yönlendirme hatası: ${e.message}", e)
+                    OverlayLogger.e(TAG, "Transfer yönlendirme hatası: ${e.message}", e)
                 }
 
                 return false // orijinal transfer'ı OLDUĞU GİBİ iletme
@@ -154,9 +153,9 @@ class GamingPacketListener : OxPacketListener {
 
             session.clientSession.peer.codecHelper.itemDefinitions = itemRegistry
             session.serverSession?.peer?.codecHelper?.itemDefinitions = itemRegistry
-            Log.d(TAG, "ItemDefinitions set: ${packet.itemDefinitions.size} item")
+            OverlayLogger.d(TAG, "ItemDefinitions set: ${packet.itemDefinitions.size} item")
         } catch (e: Exception) {
-            Log.e(TAG, "ItemDefinitions hatası: ${e.message}", e)
+            OverlayLogger.e(TAG, "ItemDefinitions hatası: ${e.message}", e)
         }
 
         // Block definitions — hashed vs normal
@@ -166,22 +165,22 @@ class GamingPacketListener : OxPacketListener {
                 val serverDefs = session.serverSession?.peer?.codecHelper?.blockDefinitions
                 if (serverDefs != null) {
                     session.clientSession.peer.codecHelper.blockDefinitions = serverDefs
-                    Log.d(TAG, "BlockDefinitions set: HASHED mod (server'dan kopyalandı)")
+                    OverlayLogger.d(TAG, "BlockDefinitions set: HASHED mod (server'dan kopyalandı)")
                 } else {
-                    Log.w(TAG, "BlockDefinitions: server defs null — atlanıyor")
+                    OverlayLogger.w(TAG, "BlockDefinitions: server defs null — atlanıyor")
                 }
             } else {
                 // Normal mod: server'ın mevcut blockDefinitions'ını kopyala
                 val serverDefs = session.serverSession?.peer?.codecHelper?.blockDefinitions
                 if (serverDefs != null) {
                     session.clientSession.peer.codecHelper.blockDefinitions = serverDefs
-                    Log.d(TAG, "BlockDefinitions set: normal mod (server'dan kopyalandı)")
+                    OverlayLogger.d(TAG, "BlockDefinitions set: normal mod (server'dan kopyalandı)")
                 } else {
-                    Log.w(TAG, "BlockDefinitions: server defs null — atlanıyor")
+                    OverlayLogger.w(TAG, "BlockDefinitions: server defs null — atlanıyor")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "BlockDefinitions hatası: ${e.message}", e)
+            OverlayLogger.e(TAG, "BlockDefinitions hatası: ${e.message}", e)
         }
     }
 
@@ -197,9 +196,9 @@ class GamingPacketListener : OxPacketListener {
 
             session.clientSession.peer.codecHelper.cameraPresetDefinitions = cameraDefs
             session.serverSession?.peer?.codecHelper?.cameraPresetDefinitions = cameraDefs
-            Log.d(TAG, "CameraDefinitions set: ${packet.presets.size} preset")
+            OverlayLogger.d(TAG, "CameraDefinitions set: ${packet.presets.size} preset")
         } catch (e: Exception) {
-            Log.e(TAG, "CameraDefinitions hatası: ${e.message}", e)
+            OverlayLogger.e(TAG, "CameraDefinitions hatası: ${e.message}", e)
         }
     }
 }

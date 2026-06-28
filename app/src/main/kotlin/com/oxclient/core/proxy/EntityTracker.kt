@@ -1,6 +1,7 @@
+
 package com.oxclient.core.proxy
 
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.utils.MathUtil
@@ -95,7 +96,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val _entityUpdateFlow = MutableStateFlow(0L)
     val entityUpdateFlow: StateFlow<Long>  = _entityUpdateFlow.asStateFlow()
 
-    fun init()  { PacketEventBus.register(this);   Log.i(TAG, "EntityTracker başlatıldı") }
+    fun init()  { PacketEventBus.register(this);   OverlayLogger.i(TAG, "EntityTracker başlatıldı") }
 
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
@@ -106,7 +107,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfGameMode = 0; selfDimension = 0; selfSpeedXZ = 0f
         prevSelfX = 0f; prevSelfZ = 0f
         _entityCountFlow.value = 0; _selfHealthFlow.value = 20f
-        Log.i(TAG, "EntityTracker sıfırlandı")
+        OverlayLogger.i(TAG, "EntityTracker sıfırlandı")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -137,7 +138,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfX = p.playerPosition.x; selfY = p.playerPosition.y; selfZ = p.playerPosition.z
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
         selfGameMode = p.playerGameType.ordinal
-        Log.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ)")
+        OverlayLogger.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ)")
     }
 
     private fun handleAddEntity(p: AddEntityPacket) {
@@ -321,7 +322,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfDimension = p.dimension
         selfX = p.position.x; selfY = p.position.y; selfZ = p.position.z
         val old = entities.size; entities.clear(); uniqueToRuntime.clear()
-        Log.i(TAG, "Boyut değişti dim=$selfDimension $old entity temizlendi")
+        OverlayLogger.i(TAG, "Boyut değişti dim=$selfDimension $old entity temizlendi")
         notifyUpdate()
     }
 
@@ -342,7 +343,7 @@ object EntityTracker : PacketEventBus.PacketListener {
                     rider.isRiding = false; rider.ridingId = 0L
                 }
             }
-        } catch (e: Exception) { Log.v(TAG, "EntityLink hatası: ${e.message}") }
+        } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
     }
 
     private fun applyMetadata(entity: TrackedEntity, metadata: Map<*, *>?) {
@@ -358,7 +359,7 @@ object EntityTracker : PacketEventBus.PacketListener {
                     keyStr == "7" || keyStr.contains("HEALTH")  -> entity.health = (value as? Float) ?: entity.health
                 }
             }
-        } catch (e: Exception) { Log.v(TAG, "Metadata hatası (${entity.identifier}): ${e.message}") }
+        } catch (e: Exception) { OverlayLogger.v(TAG, "Metadata hatası (${entity.identifier}): ${e.message}") }
     }
 
     private fun resolveType(id: String): EntityType {
@@ -438,7 +439,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         val cutoff = System.currentTimeMillis() - maxAgeMs
         val stale  = entities.entries.filter { it.value.lastUpdateMs < cutoff }
         stale.forEach { (rid, e) -> entities.remove(rid); uniqueToRuntime.remove(e.uniqueId) }
-        if (stale.isNotEmpty()) { Log.d(TAG, "${stale.size} stale entity temizlendi"); notifyUpdate() }
+        if (stale.isNotEmpty()) { OverlayLogger.d(TAG, "${stale.size} stale entity temizlendi"); notifyUpdate() }
     }
 
     private fun notifyUpdate() {

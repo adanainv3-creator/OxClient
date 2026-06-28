@@ -1,6 +1,6 @@
 package com.oxclient.core.relay
 
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.core.relay.codec.CodecRegistry
 import io.netty.bootstrap.ServerBootstrap
 import io.netty.channel.Channel
@@ -77,7 +77,7 @@ class OxRelay(
         remotePort       : Int = 19132,
         onSessionCreated : ((OxRelaySession) -> Unit)? = null
     ) {
-        if (running) { Log.w(TAG, "Relay zaten çalışıyor"); return }
+        if (running) { OverlayLogger.w(TAG, "Relay zaten çalışıyor"); return }
 
         this.remoteHost = remoteHost
         this.remotePort = remotePort
@@ -95,7 +95,7 @@ class OxRelay(
                 .childHandler(object : BedrockChannelInitializer<OxRelaySession.ServerSession>() {
 
                     override fun createSession0(peer: BedrockPeer, subClientId: Int): OxRelaySession.ServerSession {
-                        Log.i(TAG, "Client bağlandı: ${peer.socketAddress}")
+                        OverlayLogger.i(TAG, "Client bağlandı: ${peer.socketAddress}")
 
                         val session = OxRelaySession(
                             peer        = peer,
@@ -136,7 +136,7 @@ class OxRelay(
             serverChannel = future.channel()
             running = true
 
-            Log.i(TAG, "OxRelay aktif → 0.0.0.0:$localPort ↔ $remoteHost:$remotePort | codec=${RELAY_CODEC.protocolVersion}")
+            OverlayLogger.i(TAG, "OxRelay aktif → 0.0.0.0:$localPort ↔ $remoteHost:$remotePort | codec=${RELAY_CODEC.protocolVersion}")
 
             // LAN Discovery
             LanBroadcaster.start(
@@ -149,7 +149,7 @@ class OxRelay(
             )
 
         } catch (e: Exception) {
-            Log.e(TAG, "OxRelay başlatılamadı", e)
+            OverlayLogger.e(TAG, "OxRelay başlatılamadı", e)
             shutdownGroups()
             throw e
         }
@@ -162,7 +162,7 @@ class OxRelay(
      * Bkz. GamingPacketListener.kt — TransferPacket case.
      */
     fun updateRemoteTarget(host: String, port: Int) {
-        Log.i(TAG, "Remote target güncellendi: $host:$port (önceki: $remoteHost:$remotePort)")
+        OverlayLogger.i(TAG, "Remote target güncellendi: $host:$port (önceki: $remoteHost:$remotePort)")
         remoteHost = host
         remotePort = port
     }
@@ -178,9 +178,9 @@ class OxRelay(
         val pong = buildPong(protocolVersion, minecraftVersion)
         try {
             serverChannel?.config()?.setOption(RakChannelOption.RAK_ADVERTISEMENT, pong.toByteBuf())
-            Log.i(TAG, "Pong güncellendi: protocol=$protocolVersion mc=$minecraftVersion")
+            OverlayLogger.i(TAG, "Pong güncellendi: protocol=$protocolVersion mc=$minecraftVersion")
         } catch (e: Exception) {
-            Log.w(TAG, "Pong güncelleme hatası: ${e.message}")
+            OverlayLogger.w(TAG, "Pong güncelleme hatası: ${e.message}")
         }
         LanBroadcaster.updateInfo(
             protocolVersion = protocolVersion,
@@ -194,12 +194,12 @@ class OxRelay(
     fun stop() {
         if (!running) return
         running = false
-        Log.i(TAG, "OxRelay durduruluyor…")
+        OverlayLogger.i(TAG, "OxRelay durduruluyor…")
         LanBroadcaster.stop()
         sessions.toList().forEach { it.disconnect("Relay kapatıldı") }
         sessions.clear()
         shutdownGroups()
-        Log.i(TAG, "OxRelay durduruldu")
+        OverlayLogger.i(TAG, "OxRelay durduruldu")
     }
 
     internal fun removeSession(session: OxRelaySession) = sessions.remove(session)

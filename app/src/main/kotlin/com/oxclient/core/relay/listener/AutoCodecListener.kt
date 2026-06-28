@@ -1,6 +1,6 @@
 package com.oxclient.core.relay.listener
 
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.core.relay.Definitions
 import com.oxclient.core.relay.OxRelay
 import com.oxclient.core.relay.OxRelaySession
@@ -61,19 +61,19 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
         done = true
 
         val protocol = packet.protocolVersion
-        Log.i(TAG, "RequestNetworkSettings — protocol=$protocol")
+        OverlayLogger.i(TAG, "RequestNetworkSettings — protocol=$protocol")
 
         try {
             val raw   = CodecRegistry.getClosestCodec(protocol)
             val codec = patchCodec(raw)
             if (raw.protocolVersion != protocol) {
-                Log.w(TAG, "Tam eşleşme yok ($protocol) — en yakın versiyon kullanılıyor: ${raw.protocolVersion}")
+                OverlayLogger.w(TAG, "Tam eşleşme yok ($protocol) — en yakın versiyon kullanılıyor: ${raw.protocolVersion}")
             }
 
             // 1. Client codec
             session.clientSession.codec = codec
             session.activeCodec = codec
-            Log.i(TAG, "Codec: ${codec.protocolVersion} mc=${codec.minecraftVersion}")
+            OverlayLogger.i(TAG, "Codec: ${codec.protocolVersion} mc=${codec.minecraftVersion}")
 
             // 2. Definitions — WRelay AutoCodecPacketListener ile birebir aynı
             //    Block/item/camera definitions RequestNetworkSettings'te hemen set edilir.
@@ -84,7 +84,7 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
                 cameraPresetDefinitions = Definitions.cameraPresetDefinitions
                 encodingSettings        = UNLIMITED
             }
-            Log.i(TAG, "Definitions set edildi ✓")
+            OverlayLogger.i(TAG, "Definitions set edildi ✓")
 
             // 3. Client'a NetworkSettingsPacket gönder
             session.sendToClient(NetworkSettingsPacket().apply {
@@ -94,13 +94,13 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
 
             // 4. Client ZLIB compression aç
             session.clientSession.setCompression(PacketCompressionAlgorithm.ZLIB)
-            Log.i(TAG, "Client ZLIB açıldı ✓")
+            OverlayLogger.i(TAG, "Client ZLIB açıldı ✓")
 
             // 5. Relay pong güncelle
             relay?.updatePong(codec.protocolVersion, codec.minecraftVersion ?: "")
 
         } catch (e: Exception) {
-            Log.e(TAG, "RequestNetworkSettings işleme hatası: ${e.message}", e)
+            OverlayLogger.e(TAG, "RequestNetworkSettings işleme hatası: ${e.message}", e)
             session.disconnect("NetworkSettings hatası: ${e.message}")
         }
 

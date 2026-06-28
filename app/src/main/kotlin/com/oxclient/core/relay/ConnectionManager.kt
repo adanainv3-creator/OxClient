@@ -1,6 +1,6 @@
 package com.oxclient.core.relay
 
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.core.relay.listener.*
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.ModuleManager
@@ -52,7 +52,7 @@ object ConnectionManager {
      *               null ise pong güncellenmez (LAN listesi etkilenmez ama bağlantı çalışır).
      */
     fun setupSession(session: OxRelaySession, relay: OxRelay? = null) {
-        Log.d(TAG, "Session kuruluyor: ${session.clientAddress}")
+        OverlayLogger.d(TAG, "Session kuruluyor: ${session.clientAddress}")
 
         // EventBus bağla
         PacketEventBus.setSession(session)
@@ -66,32 +66,32 @@ object ConnectionManager {
 
         listeners.forEach { listener ->
             session.listeners.add(listener)
-            Log.v(TAG, "  + ${listener::class.simpleName} (priority=${listener.priority})")
+            OverlayLogger.v(TAG, "  + ${listener::class.simpleName} (priority=${listener.priority})")
         }
 
         // Modülleri session'a bağla
         try {
             ModuleManager.registerToSession(session)
         } catch (e: Exception) {
-            Log.w(TAG, "ModuleManager.registerToSession hatası: ${e.message}")
+            OverlayLogger.w(TAG, "ModuleManager.registerToSession hatası: ${e.message}")
         }
 
         _state.value = State.CONNECTING
-        Log.i(TAG, "Session hazır — ${listeners.size} listener aktif")
+        OverlayLogger.i(TAG, "Session hazır — ${listeners.size} listener aktif")
     }
 
     fun onHandshaking() {
         _state.value = State.HANDSHAKING
-        Log.d(TAG, "State → HANDSHAKING")
+        OverlayLogger.d(TAG, "State → HANDSHAKING")
     }
 
     fun onGameStarted() {
         _state.value = State.PLAYING
-        Log.i(TAG, "State → PLAYING ✓")
+        OverlayLogger.i(TAG, "State → PLAYING ✓")
     }
 
     fun onDisconnected(reason: String = "") {
-        Log.i(TAG, "State → DISCONNECTED ${if (reason.isNotBlank()) "($reason)" else ""}")
+        OverlayLogger.i(TAG, "State → DISCONNECTED ${if (reason.isNotBlank()) "($reason)" else ""}")
         PacketEventBus.setSession(null)
         _ping.value  = -1L
         _state.value = State.IDLE

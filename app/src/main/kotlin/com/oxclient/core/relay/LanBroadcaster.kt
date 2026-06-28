@@ -1,6 +1,6 @@
 package com.oxclient.core.relay
 
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -82,7 +82,7 @@ object LanBroadcaster {
         maxPlayers     : Int = 10
     ) {
         if (running.getAndSet(true)) {
-            Log.w(TAG, "LanBroadcaster zaten çalışıyor")
+            OverlayLogger.w(TAG, "LanBroadcaster zaten çalışıyor")
             return
         }
 
@@ -96,7 +96,7 @@ object LanBroadcaster {
         startPingListener()
         startActiveBroadcaster()
 
-        Log.i(TAG, "LanBroadcaster başlatıldı | relayPort=$relayPort | protocol=$protocolVersion | mc=$mcVersion")
+        OverlayLogger.i(TAG, "LanBroadcaster başlatıldı | relayPort=$relayPort | protocol=$protocolVersion | mc=$mcVersion")
     }
 
     /**
@@ -113,7 +113,7 @@ object LanBroadcaster {
         this.mcVersion       = mcVersion
         this.motd            = motd
         this.playerCount     = playerCount
-        Log.d(TAG, "Pong bilgisi güncellendi: protocol=$protocolVersion mc=$mcVersion")
+        OverlayLogger.d(TAG, "Pong bilgisi güncellendi: protocol=$protocolVersion mc=$mcVersion")
     }
 
     fun stop() {
@@ -122,7 +122,7 @@ object LanBroadcaster {
         broadcasterThread?.interrupt()
         listenerThread    = null
         broadcasterThread = null
-        Log.i(TAG, "LanBroadcaster durduruldu")
+        OverlayLogger.i(TAG, "LanBroadcaster durduruldu")
     }
 
     val isRunning: Boolean get() = running.get()
@@ -140,7 +140,7 @@ object LanBroadcaster {
                     soTimeout   = SOCKET_TIMEOUT_MS
                     reuseAddress = true
                 }
-                Log.i(TAG, "Ping listener başlatıldı → port $MC_PORT")
+                OverlayLogger.i(TAG, "Ping listener başlatıldı → port $MC_PORT")
 
                 val buf = ByteArray(512)
                 while (running.get()) {
@@ -160,17 +160,17 @@ object LanBroadcaster {
                                 incoming.port
                             )
                             socket.send(response)
-                            Log.v(TAG, "Ping cevaplandı → ${incoming.address}:${incoming.port}")
+                            OverlayLogger.v(TAG, "Ping cevaplandı → ${incoming.address}:${incoming.port}")
                         }
                     } catch (_: java.net.SocketTimeoutException) {
                         // Normal — timeout döngüyü bloke etmemek için var
                     } catch (e: Exception) {
-                        if (running.get()) Log.w(TAG, "Ping listener hatası: ${e.message}")
+                        if (running.get()) OverlayLogger.w(TAG, "Ping listener hatası: ${e.message}")
                     }
                 }
             } catch (e: Exception) {
                 // 19132 zaten bind olmuş olabilir (relay aynı porttaysa)
-                Log.w(TAG, "Ping listener başlatılamadı (port meşgul?): ${e.message} — aktif broadcaster devam eder")
+                OverlayLogger.w(TAG, "Ping listener başlatılamadı (port meşgul?): ${e.message} — aktif broadcaster devam eder")
             } finally {
                 try { socket?.close() } catch (_: Exception) {}
             }
@@ -189,22 +189,22 @@ object LanBroadcaster {
             try {
                 socket = DatagramSocket().apply { broadcast = true }
                 val broadcastAddr = InetAddress.getByName("255.255.255.255")
-                Log.i(TAG, "Aktif broadcaster başlatıldı → hedef $broadcastAddr:$MC_PORT")
+                OverlayLogger.i(TAG, "Aktif broadcaster başlatıldı → hedef $broadcastAddr:$MC_PORT")
 
                 while (running.get()) {
                     try {
                         val pong = buildPongPacket(System.currentTimeMillis())
                         socket.send(DatagramPacket(pong, pong.size, broadcastAddr, MC_PORT))
-                        Log.v(TAG, "Broadcast gönderildi (${pong.size} byte)")
+                        OverlayLogger.v(TAG, "Broadcast gönderildi (${pong.size} byte)")
                     } catch (e: Exception) {
-                        if (running.get()) Log.w(TAG, "Broadcast send hatası: ${e.message}")
+                        if (running.get()) OverlayLogger.w(TAG, "Broadcast send hatası: ${e.message}")
                     }
                     Thread.sleep(BROADCAST_INTERVAL)
                 }
             } catch (e: InterruptedException) {
                 // Normal stop
             } catch (e: Exception) {
-                Log.e(TAG, "Aktif broadcaster çöktü: ${e.message}")
+                OverlayLogger.e(TAG, "Aktif broadcaster çöktü: ${e.message}")
             } finally {
                 try { socket?.close() } catch (_: Exception) {}
             }

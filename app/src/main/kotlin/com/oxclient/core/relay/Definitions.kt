@@ -1,7 +1,7 @@
 package com.oxclient.core.relay
 
 import android.content.Context
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap
 import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtType
@@ -54,9 +54,9 @@ object Definitions {
         try {
             loadBlockPalette(context)
             loaded = true
-            Log.i(TAG, "Definitions yüklendi ✓")
+            OverlayLogger.i(TAG, "Definitions yüklendi ✓")
         } catch (e: Exception) {
-            Log.e(TAG, "Definitions yüklenemedi: ${e.message}", e)
+            OverlayLogger.e(TAG, "Definitions yüklenemedi: ${e.message}", e)
         }
     }
 
@@ -65,13 +65,13 @@ object Definitions {
         val stream = try {
             context.assets.open("nbt/block_palette.nbt")
         } catch (e: Exception) {
-            Log.w(TAG, "block_palette.nbt bulunamadı: ${e.message} — boş definitions kullanılıyor")
+            OverlayLogger.w(TAG, "block_palette.nbt bulunamadı: ${e.message} — boş definitions kullanılıyor")
             return
         }
 
         val tag = NbtUtils.createGZIPReader(stream).use { it.readTag() }
         if (tag !is NbtMap) {
-            Log.w(TAG, "block_palette.nbt geçersiz format")
+            OverlayLogger.w(TAG, "block_palette.nbt geçersiz format")
             return
         }
 
@@ -79,7 +79,7 @@ object Definitions {
         blockDefinitions       = NbtBlockDefinitionRegistry(blocks, hashed = false)
         blockDefinitionsHashed = NbtBlockDefinitionRegistry(blocks, hashed = true)
 
-        Log.i(TAG, "Block palette yüklendi: ${blocks.size} blok")
+        OverlayLogger.i(TAG, "Block palette yüklendi: ${blocks.size} blok")
     }
 
     // ── NbtBlockDefinitionRegistry ────────────────────────────────────────

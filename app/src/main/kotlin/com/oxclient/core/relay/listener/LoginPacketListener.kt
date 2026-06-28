@@ -1,7 +1,7 @@
 package com.oxclient.core.relay.listener
 
 import android.util.Base64
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.core.relay.ClientIdentification
 import com.oxclient.core.relay.ConnectionManager
@@ -69,7 +69,7 @@ class LoginPacketListener : OxPacketListener {
 
     override fun onSessionStart(session: OxRelaySession) {
         // Server bağlantısı kurulunca çağrılır — Login akışı devam ediyor demek
-        Log.d(TAG, "onSessionStart — server bağlandı")
+        OverlayLogger.d(TAG, "onSessionStart — server bağlandı")
         ConnectionManager.onHandshaking()
     }
 
@@ -86,25 +86,25 @@ class LoginPacketListener : OxPacketListener {
             is RequestNetworkSettingsPacket -> {
                 // AutoCodecListener (priority=-10) zaten halletti
                 // Biz geçiriyoruz (server henüz yok, sendToServer kuyruğa alır)
-                Log.d(TAG, "RequestNetworkSettings geçti — protocol=${packet.protocolVersion}")
+                OverlayLogger.d(TAG, "RequestNetworkSettings geçti — protocol=${packet.protocolVersion}")
             }
 
             is LoginPacket -> {
                 if (loginProcessed) {
-                    Log.w(TAG, "Tekrarlanan Login engellendi")
+                    OverlayLogger.w(TAG, "Tekrarlanan Login engellendi")
                     return false
                 }
                 loginProcessed = true
-                Log.i(TAG, "Login alındı — server bağlantısı başlatılıyor")
+                OverlayLogger.i(TAG, "Login alındı — server bağlantısı başlatılıyor")
 
                 // Kimlik bilgilerini parse et
                 val chainJson = extractChainJson(packet)
                 val extraJson = extractExtraJson(packet)
                 try {
                     clientIdentification = ClientIdentification.fromLogin(chainJson, extraJson)
-                    Log.i(TAG, "Client: $clientIdentification")
+                    OverlayLogger.i(TAG, "Client: $clientIdentification")
                 } catch (e: Exception) {
-                    Log.w(TAG, "ClientIdentification parse hatası: ${e.message}")
+                    OverlayLogger.w(TAG, "ClientIdentification parse hatası: ${e.message}")
                 }
 
                 // Xbox chain'i inject et
@@ -115,7 +115,7 @@ class LoginPacketListener : OxPacketListener {
 
                 // Server'a bağlan — callback: RequestNetworkSettings gönder
                 session.connectToServer {
-                    Log.i(TAG, "Server hazır — RequestNetworkSettings gönderiliyor")
+                    OverlayLogger.i(TAG, "Server hazır — RequestNetworkSettings gönderiliyor")
                     val reqNet = RequestNetworkSettingsPacket().apply {
                         protocolVersion = session.activeCodec.protocolVersion
                     }
@@ -127,7 +127,7 @@ class LoginPacketListener : OxPacketListener {
             }
 
             is ClientToServerHandshakePacket -> {
-                Log.d(TAG, "ClientToServerHandshake → iletiliyor")
+                OverlayLogger.d(TAG, "ClientToServerHandshake → iletiliyor")
                 // İlet
             }
         }
@@ -141,7 +141,7 @@ class LoginPacketListener : OxPacketListener {
 
             // Server NetworkSettings → server compression aç → Login gönder
             is NetworkSettingsPacket -> {
-                Log.d(TAG, "Server NetworkSettings: algo=${packet.compressionAlgorithm} threshold=${packet.compressionThreshold}")
+                OverlayLogger.d(TAG, "Server NetworkSettings: algo=${packet.compressionAlgorithm} threshold=${packet.compressionThreshold}")
 
                 try {
                     val algo = if (packet.compressionThreshold > 0)
@@ -150,18 +150,18 @@ class LoginPacketListener : OxPacketListener {
                         PacketCompressionAlgorithm.NONE
 
                     session.serverSession?.setCompression(algo)
-                    Log.i(TAG, "Server compression: $algo")
+                    OverlayLogger.i(TAG, "Server compression: $algo")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Server compression ayarlanamadı: ${e.message}")
+                    OverlayLogger.w(TAG, "Server compression ayarlanamadı: ${e.message}")
                 }
 
                 val login = pendingLogin
                 if (login != null) {
-                    Log.i(TAG, "Login server'a gönderiliyor")
+                    OverlayLogger.i(TAG, "Login server'a gönderiliyor")
                     session.sendToServer(login)
                     pendingLogin = null
                 } else {
-                    Log.e(TAG, "HATA: pendingLogin null — Login kaybedildi!")
+                    OverlayLogger.e(TAG, "HATA: pendingLogin null — Login kaybedildi!")
                     session.disconnect("Login paketi kayboldu")
                 }
 
@@ -171,11 +171,11 @@ class LoginPacketListener : OxPacketListener {
 
             // Server şifreleme başlatıyor
             is ServerToClientHandshakePacket -> {
-                Log.d(TAG, "ServerToClientHandshake alındı")
+                OverlayLogger.d(TAG, "ServerToClientHandshake alındı")
                 try {
                     enableEncryption(packet, session)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Şifreleme başarısız (devam ediliyor): ${e.message}")
+                    OverlayLogger.w(TAG, "Şifreleme başarısız (devam ediliyor): ${e.message}")
                     // Şifreleme yoksa sadece handshake gönder
                     session.sendToServer(ClientToServerHandshakePacket())
                 }
@@ -184,30 +184,30 @@ class LoginPacketListener : OxPacketListener {
             }
 
             is PlayStatusPacket -> {
-                Log.d(TAG, "PlayStatus: ${packet.status}")
+                OverlayLogger.d(TAG, "PlayStatus: ${packet.status}")
                 when (packet.status) {
                     PlayStatusPacket.Status.LOGIN_SUCCESS -> {
-                        Log.i(TAG, "Login başarılı ✓")
+                        OverlayLogger.i(TAG, "Login başarılı ✓")
                         ConnectionManager.onHandshaking()
                     }
                     PlayStatusPacket.Status.PLAYER_SPAWN -> {
-                        Log.i(TAG, "Oyuncu spawn ✓")
+                        OverlayLogger.i(TAG, "Oyuncu spawn ✓")
                         ConnectionManager.onGameStarted()
                     }
                     else -> {
                         if (packet.status.name.contains("FAIL", ignoreCase = true))
-                            Log.e(TAG, "Login BAŞARISIZ: ${packet.status}")
+                            OverlayLogger.e(TAG, "Login BAŞARISIZ: ${packet.status}")
                     }
                 }
             }
 
             is StartGamePacket -> {
-                Log.i(TAG, "StartGame → oyun içi")
+                OverlayLogger.i(TAG, "StartGame → oyun içi")
                 ConnectionManager.onGameStarted()
             }
 
             is DisconnectPacket -> {
-                Log.w(TAG, "Server Disconnect: ${packet.kickMessage}")
+                OverlayLogger.w(TAG, "Server Disconnect: ${packet.kickMessage}")
             }
         }
         return true
@@ -235,7 +235,7 @@ class LoginPacketListener : OxPacketListener {
             .getSecretKey(privateKey, serverPubKey, salt)
 
         session.serverSession?.enableEncryption(secretKey)
-        Log.i(TAG, "Server şifreleme aktif ✓")
+        OverlayLogger.i(TAG, "Server şifreleme aktif ✓")
 
         session.sendToServer(ClientToServerHandshakePacket())
     }
@@ -245,7 +245,7 @@ class LoginPacketListener : OxPacketListener {
     private fun injectAuthChain(packet: LoginPacket) {
         val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
         if (savedChain.isNullOrBlank()) {
-            Log.w(TAG, "Kayıtlı chain yok — offline mod (orijinal chain iletiliyor)")
+            OverlayLogger.w(TAG, "Kayıtlı chain yok — offline mod (orijinal chain iletiliyor)")
             return
         }
 
@@ -282,7 +282,7 @@ class LoginPacketListener : OxPacketListener {
                         isAccessible = true
                         set(packet, wrapper)
                     }
-                    Log.i(TAG, "Chain enjekte edildi [$fieldName]: ${fullChain.size} JWT")
+                    OverlayLogger.i(TAG, "Chain enjekte edildi [$fieldName]: ${fullChain.size} JWT")
                     ok = true
                     break
                 } catch (_: Exception) {}
@@ -294,17 +294,17 @@ class LoginPacketListener : OxPacketListener {
                     try {
                         packet.javaClass.getMethod(method, String::class.java)
                             .invoke(packet, wrapper)
-                        Log.i(TAG, "Chain enjekte edildi [$method]: ${fullChain.size} JWT")
+                        OverlayLogger.i(TAG, "Chain enjekte edildi [$method]: ${fullChain.size} JWT")
                         ok = true
                         break
                     } catch (_: Exception) {}
                 }
             }
 
-            if (!ok) Log.e(TAG, "Chain enjeksiyonu BAŞARISIZ — orijinal chain gidecek")
+            if (!ok) OverlayLogger.e(TAG, "Chain enjeksiyonu BAŞARISIZ — orijinal chain gidecek")
 
         } catch (e: Exception) {
-            Log.e(TAG, "Chain inject hatası: ${e.message}", e)
+            OverlayLogger.e(TAG, "Chain inject hatası: ${e.message}", e)
         }
     }
 
@@ -324,7 +324,7 @@ class LoginPacketListener : OxPacketListener {
             else -> listOf(json)
         }
     } catch (e: Exception) {
-        Log.w(TAG, "Chain parse hatası: ${e.message}")
+        OverlayLogger.w(TAG, "Chain parse hatası: ${e.message}")
         emptyList()
     }
 

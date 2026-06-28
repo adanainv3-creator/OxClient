@@ -1,6 +1,6 @@
 package com.oxclient.core.relay
 
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.core.relay.listener.OxPacketListener
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
@@ -94,19 +94,19 @@ class OxRelaySession internal constructor(
     fun init() {
         clientSession.codec = activeCodec
         installClientDisconnectHandler()
-        Log.i(TAG, "Session init: ${clientSession.socketAddress} → $remoteHost:$remotePort")
+        OverlayLogger.i(TAG, "Session init: ${clientSession.socketAddress} → $remoteHost:$remotePort")
     }
 
     // ── Server Bağlantısı ─────────────────────────────────────────────────
 
     fun connectToServer(onConnected: (() -> Unit)? = null) {
         if (!serverConnecting.compareAndSet(false, true)) {
-            Log.w(TAG, "Server bağlantısı zaten başlatıldı")
+            OverlayLogger.w(TAG, "Server bağlantısı zaten başlatıldı")
             return
         }
 
         val addr = InetSocketAddress(remoteHost, remotePort)
-        Log.i(TAG, "Server'a bağlanılıyor: $addr | codec=${activeCodec.protocolVersion}")
+        OverlayLogger.i(TAG, "Server'a bağlanılıyor: $addr | codec=${activeCodec.protocolVersion}")
 
         Bootstrap()
             .channelFactory(RakChannelFactory.client(NioDatagramChannel::class.java))
@@ -130,17 +130,17 @@ class OxRelaySession internal constructor(
 
                     serverSession = session
                     serverConnected.set(true)
-                    Log.i(TAG, "Server bağlandı: $addr")
+                    OverlayLogger.i(TAG, "Server bağlandı: $addr")
 
                     // Listener'lara bildir
                     listeners.forEach { l ->
                         try { l.onSessionStart(this@OxRelaySession) }
-                        catch (e: Exception) { Log.w(TAG, "onSessionStart [${l::class.simpleName}]: ${e.message}") }
+                        catch (e: Exception) { OverlayLogger.w(TAG, "onSessionStart [${l::class.simpleName}]: ${e.message}") }
                     }
 
                     // Callback
                     try { onConnected?.invoke() }
-                    catch (e: Exception) { Log.w(TAG, "onConnected hatası: ${e.message}") }
+                    catch (e: Exception) { OverlayLogger.w(TAG, "onConnected hatası: ${e.message}") }
 
                     // Kuyruğu boşalt
                     flushQueue(session)
@@ -154,7 +154,7 @@ class OxRelaySession internal constructor(
             .connect(addr)
             .addListener { future ->
                 if (!future.isSuccess) {
-                    Log.e(TAG, "Server bağlantısı başarısız: ${future.cause()?.message}")
+                    OverlayLogger.e(TAG, "Server bağlantısı başarısız: ${future.cause()?.message}")
                     disconnect("Server bağlantısı kurulamadı")
                 }
             }
@@ -168,9 +168,9 @@ class OxRelaySession internal constructor(
                 if (immediate) session.sendPacketImmediately(pkt)
                 else session.sendPacket(pkt)
                 n++
-            } catch (e: Exception) { Log.w(TAG, "Kuyruk paketi gönderilemedi: ${e.message}") }
+            } catch (e: Exception) { OverlayLogger.w(TAG, "Kuyruk paketi gönderilemedi: ${e.message}") }
         }
-        if (n > 0) Log.d(TAG, "Kuyruk flush: $n paket")
+        if (n > 0) OverlayLogger.d(TAG, "Kuyruk flush: $n paket")
     }
 
     // ── Paket İşleme ─────────────────────────────────────────────────────
@@ -227,7 +227,7 @@ class OxRelaySession internal constructor(
     fun sendToClient(packet: BedrockPacket) {
         if (closed.get()) return
         try { clientSession.sendPacketImmediately(packet) }
-        catch (e: Exception) { Log.w(TAG, "Client'a gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
+        catch (e: Exception) { OverlayLogger.w(TAG, "Client'a gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
     }
 
     fun sendToServer(packet: BedrockPacket, immediate: Boolean = true) {
@@ -237,10 +237,10 @@ class OxRelaySession internal constructor(
             try {
                 if (immediate) srv.sendPacketImmediately(packet)
                 else srv.sendPacket(packet)
-            } catch (e: Exception) { Log.w(TAG, "Server'a gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
+            } catch (e: Exception) { OverlayLogger.w(TAG, "Server'a gönderilemedi [${packet::class.simpleName}]: ${e.message}") }
         } else {
             if (pendingQueue.size < MAX_QUEUE) pendingQueue.add(packet to immediate)
-            else Log.w(TAG, "Kuyruk dolu, düşürüldü: ${packet::class.simpleName}")
+            else OverlayLogger.w(TAG, "Kuyruk dolu, düşürüldü: ${packet::class.simpleName}")
         }
     }
 
@@ -251,7 +251,7 @@ class OxRelaySession internal constructor(
 
     fun disconnect(reason: String = "Relay kapatıldı") {
         if (!closed.compareAndSet(false, true)) return
-        Log.i(TAG, "Session kapatılıyor: $reason")
+        OverlayLogger.i(TAG, "Session kapatılıyor: $reason")
         pendingQueue.clear()
         try { clientSession.sendPacketImmediately(DisconnectPacket().apply { kickMessage = reason; isMessageSkipped = false }) } catch (_: Exception) {}
         try { clientSession.disconnect() }           catch (_: Exception) {}
@@ -270,7 +270,7 @@ class OxRelaySession internal constructor(
                 .addLast("ox-client-dc", object : ChannelInboundHandlerAdapter() {
                     override fun channelInactive(ctx: ChannelHandlerContext) {
                         if (closed.compareAndSet(false, true)) {
-                            Log.i(TAG, "Client kesildi")
+                            OverlayLogger.i(TAG, "Client kesildi")
                             pendingQueue.clear()
                             try { serverSession?.disconnect() }          catch (_: Exception) {}
                             try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
@@ -281,11 +281,11 @@ class OxRelaySession internal constructor(
                         ctx.fireChannelInactive()
                     }
                     override fun userEventTriggered(ctx: ChannelHandlerContext, evt: Any) {
-                        if (evt is RakDisconnectReason) Log.i(TAG, "Client RakNet: $evt")
+                        if (evt is RakDisconnectReason) OverlayLogger.i(TAG, "Client RakNet: $evt")
                         ctx.fireUserEventTriggered(evt)
                     }
                 })
-        } catch (e: Exception) { Log.w(TAG, "Client DC handler: ${e.message}") }
+        } catch (e: Exception) { OverlayLogger.w(TAG, "Client DC handler: ${e.message}") }
     }
 
     private fun installServerDisconnectHandler(session: ClientSession) {
@@ -297,11 +297,11 @@ class OxRelaySession internal constructor(
                         ctx.fireChannelInactive()
                     }
                     override fun userEventTriggered(ctx: ChannelHandlerContext, evt: Any) {
-                        if (evt is RakDisconnectReason) { Log.i(TAG, "Server RakNet: $evt"); disconnect(evt.toString()) }
+                        if (evt is RakDisconnectReason) { OverlayLogger.i(TAG, "Server RakNet: $evt"); disconnect(evt.toString()) }
                         ctx.fireUserEventTriggered(evt)
                     }
                 })
-        } catch (e: Exception) { Log.w(TAG, "Server DC handler: ${e.message}") }
+        } catch (e: Exception) { OverlayLogger.w(TAG, "Server DC handler: ${e.message}") }
     }
 
     // ── Session Sınıfları — ASIL FİX BURADA ───────────────────────────────
@@ -316,7 +316,7 @@ class OxRelaySession internal constructor(
         BedrockServerSession(peer, subClientId) {
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
-            Log.e(TAG, "PROBE ServerSession.onPacket TETİKLENDİ — packetId=${wrapper.packetId}")
+            OverlayLogger.e(TAG, "PROBE ServerSession.onPacket TETİKLENDİ — packetId=${wrapper.packetId}")
             try {
                 if (!handleClientPacket(wrapper)) return // listener kendi gönderimini yaptı veya engelledi
 
@@ -326,7 +326,7 @@ class OxRelaySession internal constructor(
                     packetId = wrapper.packetId
                 }, immediate = false)
             } catch (e: Exception) {
-                Log.e(TAG, "Client paket işleme hatası: ${e.message}", e)
+                OverlayLogger.e(TAG, "Client paket işleme hatası: ${e.message}", e)
             }
         }
     }
@@ -335,7 +335,7 @@ class OxRelaySession internal constructor(
         BedrockClientSession(peer, subClientId) {
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
-            Log.e(TAG, "PROBE ClientSession.onPacket TETİKLENDİ — packetId=${wrapper.packetId}")
+            OverlayLogger.e(TAG, "PROBE ClientSession.onPacket TETİKLENDİ — packetId=${wrapper.packetId}")
             try {
                 if (!handleServerPacket(wrapper)) return
 
@@ -345,7 +345,7 @@ class OxRelaySession internal constructor(
                     packetId = wrapper.packetId
                 })
             } catch (e: Exception) {
-                Log.e(TAG, "Server paket işleme hatası: ${e.message}", e)
+                OverlayLogger.e(TAG, "Server paket işleme hatası: ${e.message}", e)
             }
         }
     }

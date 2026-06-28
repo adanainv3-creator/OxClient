@@ -1,6 +1,6 @@
 package com.oxclient.core.relay.codec
 
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 
 /**
@@ -99,7 +99,7 @@ object CodecRegistry {
 
         sortedProtocolVersions.sortDescending()
 
-        Log.i(TAG, "CodecRegistry hazır: ${sortedProtocolVersions.size} codec yüklendi (${sortedProtocolVersions.lastOrNull()}–${sortedProtocolVersions.firstOrNull()})")
+        OverlayLogger.i(TAG, "CodecRegistry hazır: ${sortedProtocolVersions.size} codec yüklendi (${sortedProtocolVersions.lastOrNull()}–${sortedProtocolVersions.firstOrNull()})")
     }
 
     private fun registerCodec(protocolVersion: Int, minecraftVersionLabel: String, className: String) {
@@ -113,10 +113,10 @@ object CodecRegistry {
             minecraftVersionMap[minecraftVersionLabel] = protocolVersion
             sortedProtocolVersions.add(protocolVersion)
 
-            Log.d(TAG, "Codec kaydedildi: $minecraftVersionLabel (protocol=$protocolVersion)")
+            OverlayLogger.d(TAG, "Codec kaydedildi: $minecraftVersionLabel (protocol=$protocolVersion)")
         } catch (e: Throwable) {
             // Beklenen durum: bu artifact'ta bu versiyon henüz/artık yok — sessizce atla.
-            Log.v(TAG, "Codec yok, atlandı: $minecraftVersionLabel (protocol=$protocolVersion) — ${e.message}")
+            OverlayLogger.v(TAG, "Codec yok, atlandı: $minecraftVersionLabel (protocol=$protocolVersion) — ${e.message}")
         }
     }
 

@@ -1,7 +1,7 @@
 package com.oxclient.core.relay
 
 import android.util.Base64
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import org.json.JSONObject
 
 data class ClientIdentification(
@@ -22,7 +22,7 @@ data class ClientIdentification(
             return try {
                 parseChain(chainJson, extraJson)
             } catch (e: Exception) {
-                Log.e(TAG, "Login parse hatası: ${e.message}", e)
+                OverlayLogger.e(TAG, "Login parse hatası: ${e.message}", e)
                 null
             }
         }
@@ -48,7 +48,7 @@ data class ClientIdentification(
                     displayName = extra.optString("displayName", "Unknown")
                     xuid        = extra.optString("XUID", "")
                     identity    = extra.optString("identity", "")
-                    Log.d(TAG, "extraData → name=$displayName xuid=$xuid")
+                    OverlayLogger.d(TAG, "extraData → name=$displayName xuid=$xuid")
                 }
             }
 
@@ -61,7 +61,7 @@ data class ClientIdentification(
                 deviceOs      = skinPayload.optInt("DeviceOS", 0)
                 languageCode  = skinPayload.optString("LanguageCode", "en_US")
                 clientVersion = skinPayload.optString("GameVersion", "")
-                Log.d(TAG, "SkinJWT → OS=$deviceOs lang=$languageCode ver=$clientVersion")
+                OverlayLogger.d(TAG, "SkinJWT → OS=$deviceOs lang=$languageCode ver=$clientVersion")
             }
 
             return ClientIdentification(
@@ -87,7 +87,7 @@ data class ClientIdentification(
                 val bytes = Base64.decode(padded, Base64.DEFAULT)
                 JSONObject(String(bytes, Charsets.UTF_8))
             } catch (e: Exception) {
-                Log.w(TAG, "JWT payload parse hatası: ${e.message}")
+                OverlayLogger.w(TAG, "JWT payload parse hatası: ${e.message}")
                 null
             }
         }
