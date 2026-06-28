@@ -4,6 +4,7 @@ import android.util.Log
 import com.oxclient.core.relay.Definitions
 import com.oxclient.core.relay.OxRelay
 import com.oxclient.core.relay.OxRelaySession
+import com.oxclient.core.relay.codec.CodecRegistry
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventoryContentSerializer_v729
 import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventorySlotSerializer_v729
@@ -15,7 +16,9 @@ import org.cloudburstmc.protocol.bedrock.packet.*
  * AutoCodecListener — WRelay AutoCodecPacketListener ile birebir aynı davranış.
  *
  * RequestNetworkSettingsPacket gelince:
- *   1. Codec seç (protocol versiyonuna göre)
+ *   1. Codec seç — artık CodecRegistry üzerinden (1.2.0 → en yeni, ~50+ versiyon).
+ *      Eski sabit 15-candidate listesinin yerini aldı. Tam eşleşme yoksa
+ *      en yakın küçük versiyona fallback yapılır (CodecRegistry.getClosestCodec).
  *   2. Client codec'ini set et
  *   3. Definitions'ları HEMEN set et (Definitions.kt'den — önceden yüklenmiş)
  *      → WRelay'de de burada set ediliyor, StartGame'i beklemiyor
@@ -27,33 +30,6 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
 
     companion object {
         private const val TAG = "AutoCodecListener"
-
-        private val CODEC_NAMES = listOf(
-            "v975.Bedrock_v975", "v948.Bedrock_v948", "v935.Bedrock_v935",
-            "v924.Bedrock_v924", "v818.Bedrock_v818", "v800.Bedrock_v800",
-            "v786.Bedrock_v786", "v748.Bedrock_v748", "v729.Bedrock_v729",
-            "v712.Bedrock_v712", "v686.Bedrock_v686", "v671.Bedrock_v671",
-            "v662.Bedrock_v662", "v649.Bedrock_v649", "v630.Bedrock_v630",
-        )
-        private val BASE = "org.cloudburstmc.protocol.bedrock.codec."
-        private val cache = HashMap<Int, BedrockCodec?>()
-
-        @Synchronized
-        fun findCodec(protocol: Int): BedrockCodec? {
-            if (cache.containsKey(protocol)) return cache[protocol]
-            for (name in CODEC_NAMES) {
-                try {
-                    val codec = Class.forName("$BASE$name").getField("CODEC").get(null) as? BedrockCodec
-                        ?: continue
-                    if (codec.protocolVersion == protocol) {
-                        cache[protocol] = codec
-                        return codec
-                    }
-                } catch (_: Exception) {}
-            }
-            cache[protocol] = null
-            return null
-        }
 
         private fun patchCodec(codec: BedrockCodec): BedrockCodec {
             return if (codec.protocolVersion > 729) {
@@ -88,8 +64,11 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
         Log.i(TAG, "RequestNetworkSettings — protocol=$protocol")
 
         try {
-            val raw   = findCodec(protocol) ?: OxRelay.RELAY_CODEC
+            val raw   = CodecRegistry.getClosestCodec(protocol)
             val codec = patchCodec(raw)
+            if (raw.protocolVersion != protocol) {
+                Log.w(TAG, "Tam eşleşme yok ($protocol) — en yakın versiyon kullanılıyor: ${raw.protocolVersion}")
+            }
 
             // 1. Client codec
             session.clientSession.codec = codec

@@ -101,7 +101,44 @@ class GamingPacketListener : OxPacketListener {
             is ChangeDimensionPacket  -> OverlayLogger.i(TAG, "ChangeDimension → dim=${packet.dimension}")
             is TextPacket             -> Log.v(TAG, "Chat S→C: ${packet.message}")
             is DisconnectPacket       -> OverlayLogger.w(TAG, "Server Disconnect: ${packet.kickMessage}")
-            is TransferPacket         -> OverlayLogger.i(TAG, "Transfer → ${packet.address}:${packet.port}")
+
+            // ── TransferPacket ──────────────────────────────────────────
+            // Server, oyuncuyu başka bir sunucuya yönlendirmek istiyor
+            // (hub→game server mimarisi). Önceden: sadece loglanıp client'a
+            // OLDUĞU GİBİ iletiliyordu → client relay'i bypass edip doğrudan
+            // yeni sunucuya bağlanıyordu (MITM/modüller devre dışı kalıyordu).
+            //
+            // Şimdi: relay'in hedefini güncelliyoruz ve client'a KENDİ
+            // adresimizi gönderiyoruz — client relay'e geri bağlanıyor,
+            // relay de bir sonraki session'da yeni hedefe bağlanıyor.
+            //
+            // NOT: clientReconnectHost aşağıda client'ın session'a bağlanırken
+            // kullandığı local adresten okunuyor. Eğer relay ile gerçek
+            // Minecraft client'ı AYNI cihazda değilse (örn. relay Android'de,
+            // client başka bir cihazda LAN'dan bağlanıyorsa) bu adresin senin
+            // ağında doğru/erişilebilir olduğunu doğrulaman gerekir.
+            is TransferPacket -> {
+                val newHost = packet.address
+                val newPort = packet.port
+                OverlayLogger.i(TAG, "Transfer → $newHost:$newPort (relay üzerinden yönlendiriliyor)")
+
+                try {
+                    session.relay.updateRemoteTarget(newHost, newPort)
+
+                    val clientReconnectHost = (session.clientSession.peer.channel.localAddress()
+                        as? java.net.InetSocketAddress)?.address?.hostAddress
+                        ?: "127.0.0.1"
+
+                    session.sendToClient(TransferPacket().apply {
+                        address = clientReconnectHost
+                        port    = session.relay.boundLocalPort
+                    })
+                } catch (e: Exception) {
+                    Log.e(TAG, "Transfer yönlendirme hatası: ${e.message}", e)
+                }
+
+                return false // orijinal transfer'ı OLDUĞU GİBİ iletme
+            }
         }
         return true
     }

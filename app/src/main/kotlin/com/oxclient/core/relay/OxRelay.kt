@@ -1,31 +1,44 @@
 package com.oxclient.core.relay
 
 import android.util.Log
+import com.oxclient.core.relay.codec.CodecRegistry
 import io.netty.bootstrap.ServerBootstrap
 import io.netty.channel.Channel
 import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.nio.NioDatagramChannel
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
 import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
+import org.cloudburstmc.protocol.bedrock.BedrockPeer
 import org.cloudburstmc.protocol.bedrock.BedrockPong
-import org.cloudburstmc.protocol.bedrock.BedrockServerSession
+import org.cloudburstmc.protocol.bedrock.PacketDirection
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
-import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockServerInitializer
+import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * OxRelay — CloudburstMC tabanlı Bedrock MITM relay.
  *
- * Session yaratma sırası (KRİTİK):
- *   1. OxRelaySession oluştur
+ * ═══════════════════════════════════════════════════════════════════════
+ * DEĞİŞENLER (WRelay entegrasyonu):
+ *   1. RELAY_CODEC artık CodecRegistry.getLatestCodec() kullanıyor
+ *      (önceki sabit 15-candidate listesi yerine — bkz. CodecRegistry.kt)
+ *   2. childHandler artık BedrockServerInitializer DEĞİL,
+ *      BedrockChannelInitializer<OxRelaySession.ServerSession> —
+ *      bu, OxRelaySession.kt'deki onPacket() fix'inin çalışabilmesi için
+ *      ZORUNLU (createSession0() olmadan custom session subclass'ı
+ *      kullanılamıyor).
+ *
+ * Session yaratma sırası (KRİTİK — değişmedi):
+ *   1. OxRelaySession oluştur (içinde ServerSession otomatik kurulur)
  *   2. sessions.add()
  *   3. ConnectionManager.setupSession(session, this)  ← listener'lar eklenir
- *   4. session.init()                                 ← client handler kurulur
+ *   4. session.init()                                 ← codec + dc handler kurulur
  *   5. onSessionCreated callback
  *
  *   Server bağlantısı LoginPacketListener.onClientPacket(LoginPacket) içinde
  *   session.connectToServer() ile başlar — init()'de değil.
+ * ═══════════════════════════════════════════════════════════════════════
  */
 class OxRelay(
     private val localPort: Int = 19150
@@ -35,39 +48,7 @@ class OxRelay(
         private const val PONG_MOTD     = "oxse"
         private const val PONG_SUB_MOTD = "OxClient"
 
-        val RELAY_CODEC: BedrockCodec by lazy { resolveLatestCodec() }
-
-        private val CODEC_CANDIDATES = listOf(
-            "org.cloudburstmc.protocol.bedrock.codec.v975.Bedrock_v975",
-            "org.cloudburstmc.protocol.bedrock.codec.v948.Bedrock_v948",
-            "org.cloudburstmc.protocol.bedrock.codec.v935.Bedrock_v935",
-            "org.cloudburstmc.protocol.bedrock.codec.v924.Bedrock_v924",
-            "org.cloudburstmc.protocol.bedrock.codec.v818.Bedrock_v818",
-            "org.cloudburstmc.protocol.bedrock.codec.v800.Bedrock_v800",
-            "org.cloudburstmc.protocol.bedrock.codec.v786.Bedrock_v786",
-            "org.cloudburstmc.protocol.bedrock.codec.v748.Bedrock_v748",
-            "org.cloudburstmc.protocol.bedrock.codec.v729.Bedrock_v729",
-            "org.cloudburstmc.protocol.bedrock.codec.v712.Bedrock_v712",
-            "org.cloudburstmc.protocol.bedrock.codec.v686.Bedrock_v686",
-            "org.cloudburstmc.protocol.bedrock.codec.v671.Bedrock_v671",
-            "org.cloudburstmc.protocol.bedrock.codec.v662.Bedrock_v662",
-            "org.cloudburstmc.protocol.bedrock.codec.v649.Bedrock_v649",
-            "org.cloudburstmc.protocol.bedrock.codec.v630.Bedrock_v630",
-        )
-
-        private fun resolveLatestCodec(): BedrockCodec {
-            for (cls in CODEC_CANDIDATES) {
-                try {
-                    val codec = Class.forName(cls).getField("CODEC").get(null) as? BedrockCodec
-                    if (codec != null) {
-                        Log.i(TAG, "RELAY_CODEC: $cls | protocol=${codec.protocolVersion} mc=${codec.minecraftVersion}")
-                        return codec
-                    }
-                } catch (_: Exception) {}
-            }
-            Log.w(TAG, "Codec bulunamadı — fallback protocol=748 mc=1.21.60")
-            return BedrockCodec.builder().protocolVersion(748).minecraftVersion("1.21.60").build()
-        }
+        val RELAY_CODEC: BedrockCodec by lazy { CodecRegistry.getLatestCodec() }
     }
 
     // ── State ─────────────────────────────────────────────────────────────
@@ -79,8 +60,15 @@ class OxRelay(
 
     val sessions = CopyOnWriteArrayList<OxRelaySession>()
 
-    @Volatile private var remoteHost = ""
-    @Volatile private var remotePort = 19132
+    // internal set — TransferPacket interception bunu güncelleyebilsin diye
+    // (bkz. GamingPacketListener.kt, sonraki bağlantı bu yeni hedefi kullanır)
+    @Volatile var remoteHost: String = ""
+        internal set
+    @Volatile var remotePort: Int = 19132
+        internal set
+
+    /** Şu anki relay'in dışarıdan görünen local portu. TransferPacket geri-yönlendirme için. */
+    val boundLocalPort: Int get() = localPort
 
     // ── capture() ────────────────────────────────────────────────────────
 
@@ -104,15 +92,17 @@ class OxRelay(
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel::class.java))
                 .option(RakChannelOption.RAK_ADVERTISEMENT, pong.toByteBuf())
                 .group(bossGroup, workerGroup)
-                .childHandler(object : BedrockServerInitializer() {
-                    override fun initSession(clientSession: BedrockServerSession) {
-                        Log.i(TAG, "Client bağlandı: ${clientSession.socketAddress}")
+                .childHandler(object : BedrockChannelInitializer<OxRelaySession.ServerSession>() {
+
+                    override fun createSession0(peer: BedrockPeer, subClientId: Int): OxRelaySession.ServerSession {
+                        Log.i(TAG, "Client bağlandı: ${peer.socketAddress}")
 
                         val session = OxRelaySession(
-                            clientSession = clientSession,
-                            remoteHost    = this@OxRelay.remoteHost,
-                            remotePort    = this@OxRelay.remotePort,
-                            relay         = this@OxRelay
+                            peer        = peer,
+                            subClientId = subClientId,
+                            remoteHost  = this@OxRelay.remoteHost,
+                            remotePort  = this@OxRelay.remotePort,
+                            relay       = this@OxRelay
                         )
 
                         // ── SIRALAMA KRİTİK ──────────────────────────────
@@ -121,12 +111,23 @@ class OxRelay(
                         // 1. Listener'ları ekle (relay referansı ile)
                         ConnectionManager.setupSession(session, this@OxRelay)
 
-                        // 2. Client handler'ı kur (server bağlantısı yok henüz)
+                        // 2. Codec + disconnect handler kur
                         session.init()
 
                         // 3. Dış callback
                         onSessionCreated?.invoke(session)
                         // ─────────────────────────────────────────────────
+
+                        return session.clientSession
+                    }
+
+                    override fun initSession(session: OxRelaySession.ServerSession) {
+                        // Kurulum createSession0() içinde tamamlandı, burada ek iş yok.
+                    }
+
+                    override fun preInitChannel(channel: Channel) {
+                        channel.attr(PacketDirection.ATTRIBUTE).set(PacketDirection.CLIENT_BOUND)
+                        super.preInitChannel(channel)
                     }
                 })
                 .bind(InetSocketAddress("0.0.0.0", localPort))
@@ -152,6 +153,18 @@ class OxRelay(
             shutdownGroups()
             throw e
         }
+    }
+
+    /**
+     * TransferPacket geldiğinde yeni hedefi kaydeder — relay AYNI local porttan
+     * dinlemeye devam eder, sadece sonraki gelen bağlantı (client'ın transfer
+     * sonrası relay'e geri reconnect'i) bu yeni host:port'a yönlendirilir.
+     * Bkz. GamingPacketListener.kt — TransferPacket case.
+     */
+    fun updateRemoteTarget(host: String, port: Int) {
+        Log.i(TAG, "Remote target güncellendi: $host:$port (önceki: $remoteHost:$remotePort)")
+        remoteHost = host
+        remotePort = port
     }
 
     // ── Pong / LAN güncelleme ─────────────────────────────────────────────
