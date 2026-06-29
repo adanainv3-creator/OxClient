@@ -4,6 +4,7 @@ import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.core.relay.listener.OxPacketListener
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
+import io.netty.buffer.Unpooled
 import io.netty.bootstrap.Bootstrap
 import io.netty.channel.Channel
 import io.netty.channel.ChannelHandlerContext
@@ -12,6 +13,7 @@ import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.nio.NioDatagramChannel
 import org.cloudburstmc.netty.channel.raknet.RakChannelFactory
 import org.cloudburstmc.netty.channel.raknet.RakDisconnectReason
+import org.cloudburstmc.netty.channel.raknet.config.RakChannelOption
 import org.cloudburstmc.protocol.bedrock.BedrockClientSession
 import org.cloudburstmc.protocol.bedrock.BedrockPeer
 import org.cloudburstmc.protocol.bedrock.BedrockServerSession
@@ -65,6 +67,24 @@ class OxRelaySession internal constructor(
     companion object {
         private const val TAG       = "OxRelaySession"
         private const val MAX_QUEUE = 1024
+
+        // Standart RakNet "offline message" magic byte dizisi — bu RakNet
+        // protokolünün sabit kısmı, "spoofing" değil; her uyumlu RakNet
+        // implementasyonu (sunucu dahil) bunu bekler.
+        private fun minecraftUnconnectedMagic() = Unpooled.wrappedBuffer(
+            byteArrayOf(
+                0x00.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x00.toByte(),
+                0xFE.toByte(), 0xFE.toByte(), 0xFE.toByte(), 0xFE.toByte(),
+                0xFD.toByte(), 0xFD.toByte(), 0xFD.toByte(), 0xFD.toByte(),
+                0x12.toByte(), 0x34.toByte(), 0x56.toByte(), 0x78.toByte()
+            )
+        )
+
+        private fun generateClientGuid(): Long {
+            val timestamp = System.currentTimeMillis()
+            val random    = kotlin.random.Random.nextLong(0, 0xFFFFFF)
+            return (timestamp shl 24) or random
+        }
     }
 
     // ServerSession, OxRelaySession'ın kendi inner class'ı — constructor'da
@@ -110,6 +130,17 @@ class OxRelaySession internal constructor(
         Bootstrap()
             .channelFactory(RakChannelFactory.client(NioDatagramChannel::class.java))
             .group(serverEventLoop)
+            // ── RakNet handshake ayarları — wclient'in ClientIdentification.kt'sinden ──
+            // Bunlar olmadan gerçek sunucu bizim OPEN_CONNECTION_REQUEST paketlerimizi
+            // geçersiz/tanınmayan RakNet trafiği sayıp sessizce yok sayıyordu (76s
+            // sessizlik + timeout — RAK_PROTOCOL_VERSION ayarlanmadığı için).
+            .option(RakChannelOption.RAK_PROTOCOL_VERSION, 11)
+            .option(RakChannelOption.RAK_GUID, generateClientGuid())
+            .option(RakChannelOption.RAK_MTU, 1400)
+            .option(RakChannelOption.RAK_UNCONNECTED_MAGIC, minecraftUnconnectedMagic())
+            .option(RakChannelOption.RAK_COMPATIBILITY_MODE, true)
+            .option(RakChannelOption.RAK_CONNECT_TIMEOUT, 10_000L)
+            .option(RakChannelOption.RAK_SESSION_TIMEOUT, 20_000L)
             .handler(object : BedrockChannelInitializer<ClientSession>() {
 
                 override fun createSession0(peer: BedrockPeer, subClientId: Int): ClientSession {
