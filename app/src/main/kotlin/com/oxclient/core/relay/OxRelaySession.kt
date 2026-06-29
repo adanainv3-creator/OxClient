@@ -253,7 +253,7 @@ class OxRelaySession internal constructor(
         if (!closed.compareAndSet(false, true)) return
         OverlayLogger.i(TAG, "Session kapatılıyor: $reason")
         pendingQueue.clear()
-        try { clientSession.sendPacketImmediately(DisconnectPacket().apply { kickMessage = reason; isMessageSkipped = false }) } catch (_: Exception) {}
+        try { clientSession.sendPacketImmediately(DisconnectPacket().apply { kickMessage = reason }) } catch (_: Exception) {}
         try { clientSession.disconnect() }           catch (_: Exception) {}
         try { serverSession?.disconnect() }          catch (_: Exception) {}
         try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}

@@ -26,6 +26,20 @@ jobs:
           echo "Klonlanan commit:"
           git -C relay/Protocol log -1 --oneline
 
+      # ── LoginPacket'in gerçek (v818+) alan yapısını görelim ──────────
+      # LoginPacketListener.kt'deki packet.chain / packet.extra artık
+      # derlenmiyor — kör tahmin yerine gerçek kaynağı basıyoruz.
+      - name: Diagnose LoginPacket.java gerçek alanları
+        run: |
+          FILE=$(find relay/Protocol -iname "LoginPacket.java" | head -1)
+          echo "Bulunan dosya: $FILE"
+          if [ -n "$FILE" ]; then
+            cat "$FILE"
+          else
+            echo "LoginPacket.java bulunamadı — find ile genel arama:"
+            find relay/Protocol -iname "*Login*"
+          fi
+
       - uses: actions/cache@v4
         with:
           path: |
