@@ -42,7 +42,7 @@ jobs:
 
       - name: Diagnose AuthPayload ve ilgili sınıflar
         run: |
-          for name in "AuthPayload.java" "CertificateChainPayload.java" "TokenPayload.java" "PayloadType.java"; do
+          for name in "AuthPayload.java" "CertificateChainPayload.java" "TokenPayload.java" "AuthType.java"; do
             echo "════════════════════════════════════════"
             FILE=$(find relay/Protocol -iname "$name" | head -1)
             echo "── $name → $FILE ──"
@@ -58,6 +58,12 @@ jobs:
             ~/.gradle/wrapper
             ~/.m2/repository
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+
+      - name: Diagnose DisconnectPacket.java gerçek yapısı
+        run: |
+          FILE=$(find relay/Protocol -iname "DisconnectPacket.java" | head -1)
+          echo "Bulunan dosya: $FILE"
+          if [ -n "$FILE" ]; then cat "$FILE"; else echo "(bulunamadı)"; fi
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace --refresh-dependencies

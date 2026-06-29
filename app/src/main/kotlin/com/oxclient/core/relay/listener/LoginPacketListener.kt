@@ -250,22 +250,8 @@ class LoginPacketListener : OxPacketListener {
     //   packet.authPayload : AuthPayload (CertificateChainPayload ya da TokenPayload)
     //   packet.clientJwt    : String      (eski "extra"nın doğrudan karşılığı)
     //
-    // CertificateChainPayload(List<String> chain, AuthType type) — bizim
-    // ürettiğimiz JWT listesiyle (deviceJwt + saved Xbox chain) birebir uyuyor.
-    // AuthType'ın tam sabit adını bilmediğimiz için (XBOX/FULL/ONLINE gibi
-    // olabilir) reflection ile UNKNOWN olmayan ilk uygun değeri buluyoruz —
-    // bu sayede tam enum adını bilmesek de kod çalışır.
-
-    private fun resolveAuthType(): AuthType? = try {
-        val constants = AuthType::class.java.enumConstants
-        constants?.firstOrNull {
-            val n = it.name.uppercase()
-            n.contains("XBOX") || n.contains("FULL") || n.contains("ONLINE") || n.contains("MOJANG")
-        } ?: constants?.firstOrNull { it.name.uppercase() != "UNKNOWN" }
-    } catch (e: Exception) {
-        OverlayLogger.e(TAG, "AuthType resolve hatası: ${e.message}")
-        null
-    }
+    // AuthType.FULL — wclient'in OnlineLoginPacketListener.kt'sinde aynı
+    // pattern doğrulandı: loginPacket.authPayload = CertificateChainPayload(chain, AuthType.FULL)
 
     private fun injectAuthChain(packet: LoginPacket) {
         val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
@@ -295,14 +281,8 @@ class LoginPacketListener : OxPacketListener {
                 addAll(savedJwts)
             }
 
-            val authType = resolveAuthType()
-            if (authType == null) {
-                OverlayLogger.e(TAG, "AuthType bulunamadı (enum boş?) — chain enjeksiyonu BAŞARISIZ")
-                return
-            }
-
-            packet.authPayload = CertificateChainPayload(fullChain, authType)
-            OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${fullChain.size} JWT, authType=$authType")
+            packet.authPayload = CertificateChainPayload(fullChain, AuthType.FULL)
+            OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${fullChain.size} JWT, authType=FULL")
 
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Chain inject hatası: ${e.message}", e)

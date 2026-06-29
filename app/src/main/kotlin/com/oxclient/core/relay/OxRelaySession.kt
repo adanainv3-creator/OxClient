@@ -20,7 +20,6 @@ import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.netty.BedrockPacketWrapper
 import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitializer
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
-import org.cloudburstmc.protocol.bedrock.packet.DisconnectPacket
 import org.cloudburstmc.protocol.bedrock.packet.UnknownPacket
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -253,7 +252,10 @@ class OxRelaySession internal constructor(
         if (!closed.compareAndSet(false, true)) return
         OverlayLogger.i(TAG, "Session kapatılıyor: $reason")
         pendingQueue.clear()
-        try { clientSession.sendPacketImmediately(DisconnectPacket().apply { kickMessage = reason }) } catch (_: Exception) {}
+        // TODO: DisconnectPacket artık immutable (kickMessage val) — gerçek
+        // constructor/builder'ı görene kadar geçici olarak kaldırıldı.
+        // Relay tarafından disconnect halinde client'a özel bir kick mesajı
+        // gitmiyor, ama bağlantı düzgün kapanıyor (kritik değil).
         try { clientSession.disconnect() }           catch (_: Exception) {}
         try { serverSession?.disconnect() }          catch (_: Exception) {}
         try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
