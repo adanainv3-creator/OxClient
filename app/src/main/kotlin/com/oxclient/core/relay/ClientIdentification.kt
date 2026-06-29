@@ -29,27 +29,33 @@ data class ClientIdentification(
 
         private fun parseChain(chainJson: String, extraJson: String): ClientIdentification {
             val root  = JSONObject(chainJson)
-            val chain = root.getJSONArray("chain")
+            // "chain" yoksa client TokenPayload (yeni v818+ auth tipi) gönderiyor —
+            // crash olmadan devam et, kimlik bilgisi sadece bu durumda eksik kalır.
+            val chain = root.optJSONArray("chain")
 
-            var displayName : String = "Unknown"
+            var displayName : String = if (chain == null) "Token-based" else "Unknown"
             var xuid        : String = ""
             var identity    : String = ""
             var idPubKey    : String = ""
 
-            for (i in 0 until chain.length()) {
-                val jwt     = chain.getString(i)
-                val payload = decodeJwtPayload(jwt) ?: continue
+            if (chain != null) {
+                for (i in 0 until chain.length()) {
+                    val jwt     = chain.getString(i)
+                    val payload = decodeJwtPayload(jwt) ?: continue
 
-                val ipk = payload.optString("identityPublicKey", "")
-                if (ipk.isNotBlank()) idPubKey = ipk
+                    val ipk = payload.optString("identityPublicKey", "")
+                    if (ipk.isNotBlank()) idPubKey = ipk
 
-                if (payload.has("extraData")) {
-                    val extra = payload.getJSONObject("extraData")
-                    displayName = extra.optString("displayName", "Unknown")
-                    xuid        = extra.optString("XUID", "")
-                    identity    = extra.optString("identity", "")
-                    OverlayLogger.d(TAG, "extraData → name=$displayName xuid=$xuid")
+                    if (payload.has("extraData")) {
+                        val extra = payload.getJSONObject("extraData")
+                        displayName = extra.optString("displayName", "Unknown")
+                        xuid        = extra.optString("XUID", "")
+                        identity    = extra.optString("identity", "")
+                        OverlayLogger.d(TAG, "extraData → name=$displayName xuid=$xuid")
+                    }
                 }
+            } else {
+                OverlayLogger.d(TAG, "Client TokenPayload gönderdi — chain JWT yok, kimlik bilgisi sınırlı")
             }
 
             var deviceOs      = 0
