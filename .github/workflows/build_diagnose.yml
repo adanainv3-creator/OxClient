@@ -40,6 +40,18 @@ jobs:
             find relay/Protocol -iname "*Login*"
           fi
 
+      - name: Diagnose AuthPayload ve ilgili sınıflar
+        run: |
+          for name in "AuthPayload.java" "CertificateChainPayload.java" "TokenPayload.java" "PayloadType.java"; do
+            echo "════════════════════════════════════════"
+            FILE=$(find relay/Protocol -iname "$name" | head -1)
+            echo "── $name → $FILE ──"
+            if [ -n "$FILE" ]; then cat "$FILE"; else echo "(bulunamadı)"; fi
+          done
+          echo "════════════════════════════════════════"
+          echo "── data/auth klasörünün tüm içeriği ──"
+          find relay/Protocol -path "*data/auth*" -name "*.java"
+
       - uses: actions/cache@v4
         with:
           path: |
