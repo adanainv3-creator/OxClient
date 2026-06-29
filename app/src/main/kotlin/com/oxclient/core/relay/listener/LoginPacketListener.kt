@@ -7,6 +7,10 @@ import com.oxclient.core.relay.ClientIdentification
 import com.oxclient.core.relay.ConnectionManager
 import com.oxclient.core.relay.OxRelaySession
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
+import org.cloudburstmc.protocol.bedrock.data.auth.AuthPayload
+import org.cloudburstmc.protocol.bedrock.data.auth.AuthType
+import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload
+import org.cloudburstmc.protocol.bedrock.data.auth.TokenPayload
 import org.cloudburstmc.protocol.bedrock.packet.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -241,11 +245,32 @@ class LoginPacketListener : OxPacketListener {
     }
 
     // ── Auth Chain Inject ─────────────────────────────────────────────────
+    //
+    // v818+ ile LoginPacket.chain/extra alanları kaldırıldı, yerine geldi:
+    //   packet.authPayload : AuthPayload (CertificateChainPayload ya da TokenPayload)
+    //   packet.clientJwt    : String      (eski "extra"nın doğrudan karşılığı)
+    //
+    // CertificateChainPayload(List<String> chain, AuthType type) — bizim
+    // ürettiğimiz JWT listesiyle (deviceJwt + saved Xbox chain) birebir uyuyor.
+    // AuthType'ın tam sabit adını bilmediğimiz için (XBOX/FULL/ONLINE gibi
+    // olabilir) reflection ile UNKNOWN olmayan ilk uygun değeri buluyoruz —
+    // bu sayede tam enum adını bilmesek de kod çalışır.
+
+    private fun resolveAuthType(): AuthType? = try {
+        val constants = AuthType::class.java.enumConstants
+        constants?.firstOrNull {
+            val n = it.name.uppercase()
+            n.contains("XBOX") || n.contains("FULL") || n.contains("ONLINE") || n.contains("MOJANG")
+        } ?: constants?.firstOrNull { it.name.uppercase() != "UNKNOWN" }
+    } catch (e: Exception) {
+        OverlayLogger.e(TAG, "AuthType resolve hatası: ${e.message}")
+        null
+    }
 
     private fun injectAuthChain(packet: LoginPacket) {
         val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
         if (savedChain.isNullOrBlank()) {
-            OverlayLogger.w(TAG, "Kayıtlı chain yok — offline mod (orijinal chain iletiliyor)")
+            OverlayLogger.w(TAG, "Kayıtlı chain yok — offline mod (orijinal authPayload iletiliyor)")
             return
         }
 
@@ -270,38 +295,14 @@ class LoginPacketListener : OxPacketListener {
                 addAll(savedJwts)
             }
 
-            val wrapper = JSONObject().apply {
-                put("chain", JSONArray(fullChain))
-            }.toString()
-
-            // Reflection ile set et
-            var ok = false
-            for (fieldName in listOf("chain", "chainData")) {
-                try {
-                    packet.javaClass.getDeclaredField(fieldName).apply {
-                        isAccessible = true
-                        set(packet, wrapper)
-                    }
-                    OverlayLogger.i(TAG, "Chain enjekte edildi [$fieldName]: ${fullChain.size} JWT")
-                    ok = true
-                    break
-                } catch (_: Exception) {}
+            val authType = resolveAuthType()
+            if (authType == null) {
+                OverlayLogger.e(TAG, "AuthType bulunamadı (enum boş?) — chain enjeksiyonu BAŞARISIZ")
+                return
             }
 
-            if (!ok) {
-                // Setter dene
-                for (method in listOf("setChain", "setChainData")) {
-                    try {
-                        packet.javaClass.getMethod(method, String::class.java)
-                            .invoke(packet, wrapper)
-                        OverlayLogger.i(TAG, "Chain enjekte edildi [$method]: ${fullChain.size} JWT")
-                        ok = true
-                        break
-                    } catch (_: Exception) {}
-                }
-            }
-
-            if (!ok) OverlayLogger.e(TAG, "Chain enjeksiyonu BAŞARISIZ — orijinal chain gidecek")
+            packet.authPayload = CertificateChainPayload(fullChain, authType)
+            OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${fullChain.size} JWT, authType=$authType")
 
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Chain inject hatası: ${e.message}", e)
@@ -365,18 +366,18 @@ class LoginPacketListener : OxPacketListener {
         Base64.encodeToString(data, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
     private fun extractChainJson(packet: LoginPacket): String = try {
-        val raw = packet.chain
-        when {
-            raw == null    -> "{}"
-            raw is String  -> raw
-            raw is List<*> -> JSONObject().apply {
-                put("chain", JSONArray(raw.map { it.toString() }))
+        when (val auth = packet.authPayload) {
+            is CertificateChainPayload -> JSONObject().apply {
+                put("chain", JSONArray(auth.chain))
             }.toString()
-            else           -> raw.toString()
+            is TokenPayload -> JSONObject().apply {
+                put("token", auth.token)
+            }.toString()
+            else -> "{}"
         }
     } catch (_: Exception) { "{}" }
 
     private fun extractExtraJson(packet: LoginPacket): String = try {
-        packet.extra?.toString() ?: ""
+        packet.clientJwt ?: ""
     } catch (_: Exception) { "" }
 }
