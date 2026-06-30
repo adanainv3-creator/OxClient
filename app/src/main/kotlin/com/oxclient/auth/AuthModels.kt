@@ -18,14 +18,23 @@ data class SavedAccount(
     val refreshToken: String,
     val mcToken: String,
     val expireTimeMs: Long,
-    val xuid: String = ""
+    val xuid: String = "",
+    // Chain'in ilk linkini (deviceJwt) imzalayan EC private key (PKCS8, Base64).
+    // Sunucu, LoginPacket.clientJwt'nin (skin/client data) imzasını bu key'in
+    // public karşılığına göre doğruluyor — bu yüzden clientJwt de relay
+    // tarafında bu key ile yeniden imzalanmalı (bkz. LoginPacketListener).
+    // Boşsa (eski kayıtlı hesap) — tekrar login gerekir.
+    val privateKeyB64: String = "",
+    // Aynı keypair'in public key'i (X.509 SPKI, URL-safe Base64) — clientJwt'yi
+    // yeniden imzalarken JWT header'ındaki "x5u" alanı için gerekli.
+    val publicKeyB64: String = ""
 ) {
     /** Token'ın süresi dolmuş mu? (5 dakika tolerans ile) */
     fun isExpired(bufferMs: Long = 5 * 60 * 1000L): Boolean =
         System.currentTimeMillis() >= expireTimeMs - bufferMs
 
     /** Relay için kullanılabilir mi? */
-    fun isRelayReady(): Boolean = mcToken.isNotBlank() && !isExpired()
+    fun isRelayReady(): Boolean = mcToken.isNotBlank() && privateKeyB64.isNotBlank() && !isExpired()
 
     override fun toString(): String =
         "SavedAccount(gamertag=$gamertag, xuid=$xuid, expired=${isExpired()})"
@@ -66,5 +75,7 @@ data class XblAuthResult(
  */
 data class McAuthResult(
     val chainJson: String,    // JSON array: ["jwt1", "jwt2", ...]
-    val gamertag: String = ""
+    val gamertag: String = "",
+    val privateKeyB64: String = "", // chain[0]'ı (deviceJwt) imzalayan key, PKCS8 Base64
+    val publicKeyB64: String = ""   // aynı keypair'in public'i, X.509 SPKI Base64 (URL-safe)
 )

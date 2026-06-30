@@ -252,38 +252,43 @@ class LoginPacketListener : OxPacketListener {
     //
     // AuthType.FULL — wclient'in OnlineLoginPacketListener.kt'sinde aynı
     // pattern doğrulandı: loginPacket.authPayload = CertificateChainPayload(chain, AuthType.FULL)
-
-    // ── Auth Chain Inject ─────────────────────────────────────────────────
-    //
-    // v818+ ile LoginPacket.chain/extra alanları kaldırıldı, yerine geldi:
-    //   packet.authPayload : AuthPayload (CertificateChainPayload ya da TokenPayload)
-    //   packet.clientJwt    : String      (eski "extra"nın doğrudan karşılığı)
-    //
-    // AuthType.FULL — wclient'in OnlineLoginPacketListener.kt'sinde aynı
-    // pattern doğrulandı: loginPacket.authPayload = CertificateChainPayload(chain, AuthType.FULL)
     //
     // ═══════════════════════════════════════════════════════════════════
     // KRİTİK FİX — "Invalid login data (identifier)" sebebi:
     // ──────────────────────────────────────────────────────
     // MicrosoftAuthManager.fetchMinecraftChain() ZATEN kendi içinde bir
     // keypair üretip onunla imzalanmış bir "deviceJwt"yi chain'in başına
-    // ekliyor (bkz. MicrosoftAuthManager.kt satır ~282-296) — yani
-    // getActiveChainForRelay()'den dönen chain, baştan sona kriptografik
-    // olarak TUTARLI ve TAMAMLANMIŞ bir zincir.
+    // ekliyor — yani getActiveChainForRelay()'den dönen chain, baştan sona
+    // kriptografik olarak TUTARLI ve TAMAMLANMIŞ bir zincir.
     //
     // Önceki sürümde burada İKİNCİ bir rastgele keypair daha üretilip
-    // ikinci bir deviceJwt zincirin başına ekleniyordu. Bu ikinci JWT'nin
-    // public key'i, zaten var olan ilk elemanın imza zincirine hiç
-    // bağlı değildi — sunucu chain[0]→chain[1] imza doğrulamasını
-    // yaparken tutarsızlık buluyor ve "Invalid login data" ile
-    // reddediyordu. Çözüm: ekstra keypair/deviceJwt üretmeyi tamamen
-    // kaldırıp kayıtlı chain'i OLDUĞU GİBİ kullanmak.
+    // ikinci bir deviceJwt zincirin başına ekleniyordu. Çözüm: ekstra
+    // keypair/deviceJwt üretmeyi tamamen kaldırıp kayıtlı chain'i OLDUĞU
+    // GİBİ kullanmak.
+    //
+    // İKİNCİ HATA: clientJwt (skin/client data) — sunucu bunun imzasını
+    // chain'in ilk linkinin public key'ine göre doğruluyor. Client'ın
+    // kendi clientJwt'si KENDİ key'iyle imzalı, bizim chain'imizle alakası
+    // yok. Bu yüzden clientJwt'yi de AYNI key ile yeniden imzalıyoruz.
+    //
+    // ÜÇÜNCÜ HATA: Mojang Bedrock auth secp384r1 (P-384) + ES384 kullanır —
+    // önceden kullanılan secp256r1/ES256 tek başına reddedilme sebebiydi.
     // ═══════════════════════════════════════════════════════════════════
 
     private fun injectAuthChain(packet: LoginPacket) {
         val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
         if (savedChain.isNullOrBlank()) {
             OverlayLogger.w(TAG, "Kayıtlı chain yok — offline mod (orijinal authPayload iletiliyor)")
+            return
+        }
+        val privKeyB64 = MicrosoftAuthManager.getActivePrivateKeyForRelay()
+        if (privKeyB64.isNullOrBlank()) {
+            OverlayLogger.e(TAG, "Kayıtlı private key yok — chain enjeksiyonu atlandı (tekrar login gerekebilir)")
+            return
+        }
+        val pubKeyB64 = MicrosoftAuthManager.getActivePublicKeyForRelay()
+        if (pubKeyB64.isNullOrBlank()) {
+            OverlayLogger.e(TAG, "Kayıtlı public key yok — chain enjeksiyonu atlandı (tekrar login gerekebilir)")
             return
         }
 
@@ -296,6 +301,24 @@ class LoginPacketListener : OxPacketListener {
 
             packet.authPayload = CertificateChainPayload(savedJwts, AuthType.FULL)
             OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${savedJwts.size} JWT (orijinal, değiştirilmeden), authType=FULL")
+
+            // ── clientJwt (skin/client data) yeniden imzalama — KRİTİK ─────
+            // Sunucu clientJwt'nin imzasını chain'in ilk linkinin public
+            // key'ine göre doğruluyor. Orijinal client kendi key'iyle
+            // imzalamış, bizim chain'imizle alakası yok — payload'ı
+            // (değiştirmeden) alıp AYNI key ile yeniden imzalıyoruz.
+            val originalClientJwt = packet.clientJwt
+            if (!originalClientJwt.isNullOrBlank()) {
+                val resigned = resignClientJwt(originalClientJwt, privKeyB64, pubKeyB64)
+                if (resigned != null) {
+                    packet.clientJwt = resigned
+                    OverlayLogger.i(TAG, "clientJwt yeniden imzalandı ✓ (chain key'i ile)")
+                } else {
+                    OverlayLogger.e(TAG, "clientJwt yeniden imzalanamadı — login muhtemelen reddedilecek")
+                }
+            } else {
+                OverlayLogger.w(TAG, "clientJwt boş — skin data yok")
+            }
 
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Chain inject hatası: ${e.message}", e)
@@ -324,14 +347,15 @@ class LoginPacketListener : OxPacketListener {
 
     private fun buildDeviceJwt(priv: ECPrivateKey, pubB64: String): String {
         val now     = System.currentTimeMillis() / 1000L
-        val header  = b64Url("""{"alg":"ES256","x5u":"$pubB64"}""".toByteArray())
+        // Mojang Bedrock auth secp384r1 (P-384) + ES384 kullanır.
+        val header  = b64Url("""{"alg":"ES384","x5u":"$pubB64"}""".toByteArray())
         val payload = b64Url(
             ("""{"certificateAuthority":true,"identityPublicKey":"$pubB64",""" +
              """"exp":${now + 86400},"nbf":${now - 1},"iat":$now,"iss":"Minecraft"}""")
                 .toByteArray()
         )
         val data = "$header.$payload"
-        val sig  = Signature.getInstance("SHA256withECDSA").apply {
+        val sig  = Signature.getInstance("SHA384withECDSA").apply {
             initSign(priv)
             update(data.toByteArray(Charsets.US_ASCII))
         }.sign()
@@ -346,13 +370,47 @@ class LoginPacketListener : OxPacketListener {
         i++ // skip s tag 0x02
         val sLen = der[i++].toInt() and 0xFF
         val s = der.copyOfRange(i, i + sLen)
-        return pad32(BigInteger(1, r).toByteArray()) + pad32(BigInteger(1, s).toByteArray())
+        // P-384 imza bileşenleri 48 byte'tır (P-256'da 32 idi)
+        return pad48(BigInteger(1, r).toByteArray()) + pad48(BigInteger(1, s).toByteArray())
     }
 
-    private fun pad32(b: ByteArray): ByteArray = when {
-        b.size == 32 -> b
-        b.size >  32 -> b.copyOfRange(b.size - 32, b.size)
-        else         -> ByteArray(32 - b.size) + b
+    private fun pad48(b: ByteArray): ByteArray = when {
+        b.size == 48 -> b
+        b.size >  48 -> b.copyOfRange(b.size - 48, b.size)
+        else         -> ByteArray(48 - b.size) + b
+    }
+
+    /**
+     * clientJwt'nin (skin/client data) PAYLOAD'ını değiştirmeden alıp,
+     * MicrosoftAuthManager'da saklanan chain key'i ile yeniden imzalar.
+     * pubKeyB64 doğrudan SavedAccount'tan geldiği için EC point çarpımı
+     * gibi riskli manuel kriptografiye gerek yok.
+     */
+    private fun resignClientJwt(originalClientJwt: String, privKeyB64: String, pubKeyB64: String): String? {
+        try {
+            val parts = originalClientJwt.split(".")
+            if (parts.size != 3) {
+                OverlayLogger.e(TAG, "clientJwt formatı geçersiz (3 parça bekleniyor, ${parts.size} bulundu)")
+                return null
+            }
+            val payloadJson = parts[1] // skin/cape/vb. veriler — değiştirilmeden aynen kullanılır
+
+            val keyBytes = Base64.decode(privKeyB64, Base64.NO_WRAP)
+            val privKey  = KeyFactory.getInstance("EC")
+                .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes)) as ECPrivateKey
+
+            val header = b64Url("""{"alg":"ES384","x5u":"$pubKeyB64"}""".toByteArray())
+            val data   = "$header.$payloadJson"
+            val sig    = Signature.getInstance("SHA384withECDSA").apply {
+                initSign(privKey)
+                update(data.toByteArray(Charsets.US_ASCII))
+            }.sign()
+
+            return "$data.${b64Url(derToRaw(sig))}"
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "clientJwt yeniden imzalama hatası: ${e.message}", e)
+            return null
+        }
     }
 
     private fun b64Url(data: ByteArray) =

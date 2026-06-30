@@ -108,7 +108,7 @@ object AccountManager {
     }
 
     /** Token yenilendiğinde hesabı güncelle ve persist et. */
-    fun refreshAccount(gamertag: String, newMcToken: String, newExpireMs: Long) {
+    fun refreshAccount(gamertag: String, newMcToken: String, newExpireMs: Long, newPrivateKeyB64: String? = null, newPublicKeyB64: String? = null) {
         val idx = _accounts.indexOfFirst { it.gamertag == gamertag }
         if (idx < 0) {
             Log.w(TAG, "refreshAccount: hesap bulunamadı → $gamertag")
@@ -116,7 +116,9 @@ object AccountManager {
         }
         _accounts[idx] = _accounts[idx].copy(
             mcToken      = newMcToken,
-            expireTimeMs = newExpireMs
+            expireTimeMs = newExpireMs,
+            privateKeyB64 = newPrivateKeyB64 ?: _accounts[idx].privateKeyB64,
+            publicKeyB64  = newPublicKeyB64 ?: _accounts[idx].publicKeyB64
         )
         persist()
         Log.i(TAG, "Token yenilendi: $gamertag")

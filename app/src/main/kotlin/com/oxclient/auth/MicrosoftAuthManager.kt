@@ -115,6 +115,24 @@ object MicrosoftAuthManager {
         return account.mcToken.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Chain'in ilk linkini (deviceJwt) imzalayan EC private key — PKCS8 Base64.
+     * LoginPacketListener bunu, client'ın orijinal clientJwt'sini (skin/client
+     * data) AYNI key ile yeniden imzalamak için kullanır. Bu olmadan sunucu
+     * "Invalid login data (identifier)" ile bağlantıyı reddeder, çünkü chain'in
+     * public key'i ile clientJwt'nin imzalayanı eşleşmez.
+     */
+    fun getActivePrivateKeyForRelay(): String? {
+        val account = AccountManager.selectedAccount ?: return null
+        return account.privateKeyB64.takeIf { it.isNotBlank() }
+    }
+
+    /** Aynı keypair'in public key'i — clientJwt yeniden imzalanırken JWT header'ı için. */
+    fun getActivePublicKeyForRelay(): String? {
+        val account = AccountManager.selectedAccount ?: return null
+        return account.publicKeyB64.takeIf { it.isNotBlank() }
+    }
+
     private suspend fun doTokenExchangeFlow(code: String) {
         Log.d(TAG, "Authorization code ile token alınıyor...")
 
@@ -154,7 +172,9 @@ object MicrosoftAuthManager {
             gamertag     = gamertag,
             refreshToken = refreshToken,
             mcToken      = mcResult.chainJson,
-            expireTimeMs = System.currentTimeMillis() + 6 * 3_600_000L
+            expireTimeMs = System.currentTimeMillis() + 6 * 3_600_000L,
+            privateKeyB64 = mcResult.privateKeyB64,
+            publicKeyB64  = mcResult.publicKeyB64
         )
         AccountManager.addAccount(account)
         AccountManager.selectAccount(account)
@@ -188,7 +208,7 @@ object MicrosoftAuthManager {
             val mcResult   = fetchMinecraftChain(xstsResult.token, xstsResult.userHash)
 
             val newExpire = System.currentTimeMillis() + 6 * 3_600_000L
-            AccountManager.refreshAccount(account.gamertag, mcResult.chainJson, newExpire)
+            AccountManager.refreshAccount(account.gamertag, mcResult.chainJson, newExpire, mcResult.privateKeyB64, mcResult.publicKeyB64)
             AccountManager.selectedAccount?.let { updated ->
                 AccountManager.addAccount(updated.copy(refreshToken = refreshToken))
             }
@@ -281,13 +301,16 @@ object MicrosoftAuthManager {
 
     private fun fetchMinecraftChain(xstsToken: String, userHash: String): McAuthResult {
         val keyGen  = KeyPairGenerator.getInstance("EC")
-        keyGen.initialize(ECGenParameterSpec("secp256r1"))
+        keyGen.initialize(ECGenParameterSpec("secp384r1"))
         val keyPair = keyGen.generateKeyPair()
         val pubKey  = keyPair.public  as ECPublicKey
         val privKey = keyPair.private as ECPrivateKey
         val pubKeyB64 = Base64.encodeToString(
             pubKey.encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
         )
+        // PKCS8 — Base64.DEFAULT (standart, URL-safe değil) olarak saklıyoruz,
+        // LoginPacketListener bunu PKCS8EncodedKeySpec ile geri okuyacak.
+        val privKeyB64 = Base64.encodeToString(privKey.encoded, Base64.NO_WRAP)
 
         val deviceJwt = buildDeviceJwt(privKey, pubKeyB64)
 
@@ -330,7 +353,7 @@ object MicrosoftAuthManager {
 
             val gamertag = extractGamertagFromJwtList(fullChain)
             Log.i(TAG, "MC chain alındı: ${fullChain.size} JWT, gamertag=$gamertag")
-            return McAuthResult(chainWrapper, gamertag)
+            return McAuthResult(chainWrapper, gamertag, privKeyB64, pubKeyB64)
         }
 
         val token = json.optString("token").takeIf { it.isNotBlank() }
@@ -340,7 +363,7 @@ object MicrosoftAuthManager {
         val fallbackChain = JSONObject().apply {
             put("chain", JSONArray().apply { put(deviceJwt); put(token) })
         }.toString()
-        return McAuthResult(fallbackChain, "")
+        return McAuthResult(fallbackChain, "", privKeyB64, pubKeyB64)
     }
 
     private fun resolveGamertag(
@@ -395,14 +418,16 @@ object MicrosoftAuthManager {
 
     private fun buildDeviceJwt(privateKey: ECPrivateKey, pubKeyB64: String): String {
         val now     = System.currentTimeMillis() / 1000L
-        val header  = b64Url("""{"alg":"ES256","x5u":"$pubKeyB64"}""".toByteArray())
+        // Mojang Bedrock auth secp384r1 (P-384) + ES384 kullanır — secp256r1/ES256
+        // İLE imzalanan zincirler sunucu tarafında "Invalid login data" ile reddedilir.
+        val header  = b64Url("""{"alg":"ES384","x5u":"$pubKeyB64"}""".toByteArray())
         val payload = b64Url(
             ("""{"certificateAuthority":true,"identityPublicKey":"$pubKeyB64",""" +
              """"exp":${now + 86400},"nbf":${now - 1},"iat":$now,"iss":"Minecraft"}""")
                 .toByteArray()
         )
         val sigInput = "$header.$payload"
-        val signer   = Signature.getInstance("SHA256withECDSA")
+        val signer   = Signature.getInstance("SHA384withECDSA")
         signer.initSign(privateKey)
         signer.update(sigInput.toByteArray(Charsets.US_ASCII))
         val sig = derToRaw(signer.sign())
@@ -419,8 +444,9 @@ object MicrosoftAuthManager {
         i++
         val sLen = der[i++].toInt() and 0xFF
         val s    = der.copyOfRange(i, i + sLen)
-        return padOrTrim(BigInteger(1, r).toByteArray(), 32) +
-               padOrTrim(BigInteger(1, s).toByteArray(), 32)
+        // P-384 imza bileşenleri 48 byte'tır (P-256'da olduğu gibi 32 değil)
+        return padOrTrim(BigInteger(1, r).toByteArray(), 48) +
+               padOrTrim(BigInteger(1, s).toByteArray(), 48)
     }
 
     private fun padOrTrim(b: ByteArray, size: Int) = when {
