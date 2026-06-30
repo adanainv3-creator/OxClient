@@ -253,6 +253,33 @@ class LoginPacketListener : OxPacketListener {
     // AuthType.FULL — wclient'in OnlineLoginPacketListener.kt'sinde aynı
     // pattern doğrulandı: loginPacket.authPayload = CertificateChainPayload(chain, AuthType.FULL)
 
+    // ── Auth Chain Inject ─────────────────────────────────────────────────
+    //
+    // v818+ ile LoginPacket.chain/extra alanları kaldırıldı, yerine geldi:
+    //   packet.authPayload : AuthPayload (CertificateChainPayload ya da TokenPayload)
+    //   packet.clientJwt    : String      (eski "extra"nın doğrudan karşılığı)
+    //
+    // AuthType.FULL — wclient'in OnlineLoginPacketListener.kt'sinde aynı
+    // pattern doğrulandı: loginPacket.authPayload = CertificateChainPayload(chain, AuthType.FULL)
+    //
+    // ═══════════════════════════════════════════════════════════════════
+    // KRİTİK FİX — "Invalid login data (identifier)" sebebi:
+    // ──────────────────────────────────────────────────────
+    // MicrosoftAuthManager.fetchMinecraftChain() ZATEN kendi içinde bir
+    // keypair üretip onunla imzalanmış bir "deviceJwt"yi chain'in başına
+    // ekliyor (bkz. MicrosoftAuthManager.kt satır ~282-296) — yani
+    // getActiveChainForRelay()'den dönen chain, baştan sona kriptografik
+    // olarak TUTARLI ve TAMAMLANMIŞ bir zincir.
+    //
+    // Önceki sürümde burada İKİNCİ bir rastgele keypair daha üretilip
+    // ikinci bir deviceJwt zincirin başına ekleniyordu. Bu ikinci JWT'nin
+    // public key'i, zaten var olan ilk elemanın imza zincirine hiç
+    // bağlı değildi — sunucu chain[0]→chain[1] imza doğrulamasını
+    // yaparken tutarsızlık buluyor ve "Invalid login data" ile
+    // reddediyordu. Çözüm: ekstra keypair/deviceJwt üretmeyi tamamen
+    // kaldırıp kayıtlı chain'i OLDUĞU GİBİ kullanmak.
+    // ═══════════════════════════════════════════════════════════════════
+
     private fun injectAuthChain(packet: LoginPacket) {
         val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
         if (savedChain.isNullOrBlank()) {
@@ -261,28 +288,14 @@ class LoginPacketListener : OxPacketListener {
         }
 
         try {
-            val kpg    = KeyPairGenerator.getInstance("EC")
-            kpg.initialize(ECGenParameterSpec("secp256r1"))
-            val kp     = kpg.generateKeyPair()
-            val pub    = kp.public  as ECPublicKey
-            val priv   = kp.private as ECPrivateKey
-            val pubB64 = Base64.encodeToString(
-                pub.encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-            )
-
-            // MicrosoftAuthManager'dan gelen JWT listesi
             val savedJwts = parseSavedChain(savedChain)
-
-            // Geçici device JWT — relay'in kendi keypair'i ile imzalanmış
-            val deviceJwt  = buildDeviceJwt(priv, pubB64)
-
-            val fullChain  = buildList {
-                add(deviceJwt)
-                addAll(savedJwts)
+            if (savedJwts.isEmpty()) {
+                OverlayLogger.e(TAG, "Kayıtlı chain boş/parse edilemedi — enjeksiyon atlandı")
+                return
             }
 
-            packet.authPayload = CertificateChainPayload(fullChain, AuthType.FULL)
-            OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${fullChain.size} JWT, authType=FULL")
+            packet.authPayload = CertificateChainPayload(savedJwts, AuthType.FULL)
+            OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${savedJwts.size} JWT (orijinal, değiştirilmeden), authType=FULL")
 
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Chain inject hatası: ${e.message}", e)
