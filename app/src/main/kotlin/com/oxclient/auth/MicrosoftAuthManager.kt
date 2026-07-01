@@ -305,9 +305,7 @@ object MicrosoftAuthManager {
         val keyPair = keyGen.generateKeyPair()
         val pubKey  = keyPair.public  as ECPublicKey
         val privKey = keyPair.private as ECPrivateKey
-        val pubKeyB64 = Base64.encodeToString(
-            pubKey.encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
-        )
+        val pubKeyB64 = Base64.encodeToString(pubKey.encoded, Base64.NO_WRAP)
         // PKCS8 — Base64.DEFAULT (standart, URL-safe değil) olarak saklıyoruz,
         // LoginPacketListener bunu PKCS8EncodedKeySpec ile geri okuyacak.
         val privKeyB64 = Base64.encodeToString(privKey.encoded, Base64.NO_WRAP)
