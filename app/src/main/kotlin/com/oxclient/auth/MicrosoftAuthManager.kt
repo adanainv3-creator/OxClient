@@ -2,7 +2,7 @@ package com.oxclient.auth
 
 import android.content.Context
 import android.util.Base64
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import com.google.gson.Gson
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,9 +64,9 @@ object MicrosoftAuthManager {
         val saved = AccountManager.selectedAccount
         if (saved != null && saved.isRelayReady()) {
             _authState.value = AuthState.Success(saved.gamertag, saved.mcToken)
-            Log.i(TAG, "Kaydedilen hesap yüklendi: ${saved.gamertag}")
+            OverlayLogger.i(TAG, "Kaydedilen hesap yüklendi: ${saved.gamertag}")
         } else if (saved != null && saved.isExpired()) {
-            Log.w(TAG, "Token süresi dolmuş, yenileniyor: ${saved.gamertag}")
+            OverlayLogger.w(TAG, "Token süresi dolmuş, yenileniyor: ${saved.gamertag}")
             scope.launch { refreshTokenSilently(saved) }
         }
     }
@@ -74,7 +74,7 @@ object MicrosoftAuthManager {
     fun startSignIn() {
         if (_authState.value.isLoading) return
         _authState.value = AuthState.WaitingForWebView
-        Log.i(TAG, "WebView giriş bekleniyor")
+        OverlayLogger.i(TAG, "WebView giriş bekleniyor")
     }
 
     fun exchangeCodeForToken(code: String) {
@@ -84,7 +84,7 @@ object MicrosoftAuthManager {
             runCatching { doTokenExchangeFlow(code) }
                 .onFailure { e ->
                     if (e !is CancellationException) {
-                        Log.e(TAG, "Token exchange başarısız", e)
+                        OverlayLogger.e(TAG, "Token exchange başarısız", e)
                         _authState.value = AuthState.Error(e.message ?: "Giriş başarısız")
                     } else {
                         _authState.value = AuthState.Idle
@@ -103,13 +103,19 @@ object MicrosoftAuthManager {
         AccountManager.selectedAccount?.let { AccountManager.removeAccount(it) }
         AccountManager.clearSelectedAccount()
         _authState.value = AuthState.Idle
-        Log.i(TAG, "Çıkış yapıldı")
+        OverlayLogger.i(TAG, "Çıkış yapıldı")
     }
 
     fun getActiveChainForRelay(): String? {
-        val account = AccountManager.selectedAccount ?: return null
+        val account = AccountManager.selectedAccount ?: run {
+            OverlayLogger.w(TAG, "getActiveChainForRelay: seçili hesap yok")
+            return null
+        }
+        val remainingMs = account.expireTimeMs - System.currentTimeMillis()
+        OverlayLogger.d(TAG, "getActiveChainForRelay: gamertag=${account.gamertag} " +
+            "kalan=${remainingMs / 1000}s pubKey(ilk32)=${account.publicKeyB64.take(32)}…")
         if (account.isExpired()) {
-            Log.w(TAG, "Token süresi dolmuş, arka planda yenileniyor")
+            OverlayLogger.w(TAG, "Token süresi dolmuş, arka planda yenileniyor")
             scope.launch { refreshTokenSilently(account) }
         }
         return account.mcToken.takeIf { it.isNotBlank() }
@@ -134,7 +140,7 @@ object MicrosoftAuthManager {
     }
 
     private suspend fun doTokenExchangeFlow(code: String) {
-        Log.d(TAG, "Authorization code ile token alınıyor...")
+        OverlayLogger.d(TAG, "Authorization code ile token alınıyor...")
 
         val tokenResp = postForm(TOKEN_URL, mapOf(
             "client_id"    to CLIENT_ID,
@@ -147,15 +153,15 @@ object MicrosoftAuthManager {
         val accessToken  = tokenResp.str("access_token")
         val refreshToken = tokenResp["refresh_token"] as? String ?: ""
         currentCoroutineContext().ensureActive()
-        Log.d(TAG, "Access token alındı ✓")
+        OverlayLogger.d(TAG, "Access token alındı ✓")
 
         val xblResult = fetchXblToken(accessToken)
         currentCoroutineContext().ensureActive()
-        Log.d(TAG, "XBL token alındı ✓  uhs=${xblResult.userHash}  gtg=${xblResult.gamertag}")
+        OverlayLogger.d(TAG, "XBL token alındı ✓  uhs=${xblResult.userHash}  gtg=${xblResult.gamertag}")
 
         val xstsResult = fetchXsts(xblResult.token, "https://multiplayer.minecraft.net/")
         currentCoroutineContext().ensureActive()
-        Log.d(TAG, "XSTS token alındı ✓  uhs=${xstsResult.userHash}  gtg=${xstsResult.gamertag}")
+        OverlayLogger.d(TAG, "XSTS token alındı ✓  uhs=${xstsResult.userHash}  gtg=${xstsResult.gamertag}")
 
         val mcResult = fetchMinecraftChain(xstsResult.token, xstsResult.userHash)
         currentCoroutineContext().ensureActive()
@@ -166,7 +172,7 @@ object MicrosoftAuthManager {
             xblGamertag  = xblResult.gamertag,
             xblToken     = xblResult.token
         )
-        Log.i(TAG, "Giriş tamamlandı: $gamertag")
+        OverlayLogger.i(TAG, "Giriş tamamlandı: $gamertag")
 
         val account = SavedAccount(
             gamertag     = gamertag,
@@ -186,13 +192,13 @@ object MicrosoftAuthManager {
 
     private suspend fun refreshTokenSilently(account: SavedAccount) {
         if (account.refreshToken.isBlank()) {
-            Log.w(TAG, "Refresh token yok, manuel giriş gerekli")
+            OverlayLogger.w(TAG, "Refresh token yok, manuel giriş gerekli")
             _authState.value = AuthState.Idle
             return
         }
 
         try {
-            Log.d(TAG, "Token yenileniyor: ${account.gamertag}")
+            OverlayLogger.d(TAG, "Token yenileniyor: ${account.gamertag}")
             val tokenResp = postForm(TOKEN_URL, mapOf(
                 "client_id"     to CLIENT_ID,
                 "grant_type"    to "refresh_token",
@@ -214,10 +220,10 @@ object MicrosoftAuthManager {
             }
 
             _authState.value = AuthState.Success(account.gamertag, mcResult.chainJson)
-            Log.i(TAG, "Token yenilendi: ${account.gamertag}")
+            OverlayLogger.i(TAG, "Token yenilendi: ${account.gamertag}")
 
         } catch (e: Exception) {
-            Log.e(TAG, "Token yenileme başarısız: ${e.message}", e)
+            OverlayLogger.e(TAG, "Token yenileme başarısız: ${e.message}", e)
             _authState.value = AuthState.Error("Token yenileme başarısız: ${e.message}")
         }
     }
@@ -234,7 +240,7 @@ object MicrosoftAuthManager {
         }.toString()
 
         val respText = postJsonRaw(XBL_URL, bodyJson)
-        Log.d(TAG, "XBL yanıt (ilk 300): ${respText.take(300)}")
+        OverlayLogger.d(TAG, "XBL yanıt (ilk 300): ${respText.take(300)}")
 
         val resp = JSONObject(respText)
 
@@ -254,7 +260,7 @@ object MicrosoftAuthManager {
         val uhs      = xui?.optString("uhs") ?: ""
         val gamertag = xui?.optString("gtg") ?: ""
 
-        Log.d(TAG, "XBL XUI: uhs=$uhs  gtg=$gamertag")
+        OverlayLogger.d(TAG, "XBL XUI: uhs=$uhs  gtg=$gamertag")
         return XblAuthResult(token, uhs, gamertag)
     }
 
@@ -269,7 +275,7 @@ object MicrosoftAuthManager {
         }.toString()
 
         val respText = postJsonRaw(XSTS_URL, bodyJson)
-        Log.d(TAG, "XSTS yanıt (ilk 300): ${respText.take(300)}")
+        OverlayLogger.d(TAG, "XSTS yanıt (ilk 300): ${respText.take(300)}")
 
         val resp = JSONObject(respText)
 
@@ -295,8 +301,38 @@ object MicrosoftAuthManager {
             ?: error("XSTS uhs boş")
         val gamertag = xui.optString("gtg") ?: ""
 
-        Log.d(TAG, "XSTS XUI: uhs=$uhs  gtg=$gamertag")
+        OverlayLogger.d(TAG, "XSTS XUI: uhs=$uhs  gtg=$gamertag")
         return XblAuthResult(token, uhs, gamertag)
+    }
+
+    /**
+     * Login anında alınan chain'in exp/nbf/identityPublicKey özetini loglar.
+     * Bu log, LoginPacketListener'daki "Chain diagnostiği" logu ile birebir
+     * karşılaştırılabilir — eğer buradaki pubKeyB64, relay bağlantısı sırasında
+     * loglanan pubKeyB64 ile FARKLIYSA, hesap arada yenilenmiş/bozulmuş demektir.
+     */
+    private fun logFetchedChainSummary(chain: List<String>, expectedPubKeyB64: String) {
+        val nowSec = System.currentTimeMillis() / 1000L
+        chain.forEachIndexed { idx, jwt ->
+            val parts = jwt.split(".")
+            if (parts.size != 3) return@forEachIndexed
+            val payload = try {
+                val padded = parts[1] + "=".repeat((4 - parts[1].length % 4) % 4)
+                JSONObject(String(Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8))
+            } catch (_: Exception) { null } ?: return@forEachIndexed
+
+            val exp = payload.optLong("exp", -1L)
+            val nbf = payload.optLong("nbf", -1L)
+            val expIn = if (exp > 0) exp - nowSec else null
+            OverlayLogger.d(TAG, "  chain[$idx] exp=${expIn?.let { "${it}s kaldı" } ?: "-"} nbf=$nbf")
+
+            if (idx == 0) {
+                val idKey = payload.optString("identityPublicKey", "")
+                if (idKey.isNotBlank() && idKey != expectedPubKeyB64) {
+                    OverlayLogger.e(TAG, "  ★ chain[0].identityPublicKey üretilen pubKeyB64 ile eşleşmiyor — bu login akışında bir tutarsızlık var!")
+                }
+            }
+        }
     }
 
     private fun fetchMinecraftChain(xstsToken: String, userHash: String): McAuthResult {
@@ -309,6 +345,7 @@ object MicrosoftAuthManager {
         // PKCS8 — Base64.DEFAULT (standart, URL-safe değil) olarak saklıyoruz,
         // LoginPacketListener bunu PKCS8EncodedKeySpec ile geri okuyacak.
         val privKeyB64 = Base64.encodeToString(privKey.encoded, Base64.NO_WRAP)
+        OverlayLogger.d(TAG, "fetchMinecraftChain: yeni keypair üretildi — pubKeyB64 (ilk 32)=${pubKeyB64.take(32)}…")
 
         val deviceJwt = buildDeviceJwt(privKey, pubKeyB64)
 
@@ -317,6 +354,11 @@ object MicrosoftAuthManager {
             put("chain", JSONArray().apply { put(deviceJwt) })
         }.toString()
 
+        // NOT: client-version sabit "1.21.80" — gerçek bağlanan protokol/versiyon
+        // (örn. 898 / 1.21.132) ile TUTARSIZ olabilir. Bazı sıkı sunucular login
+        // sırasında GameVersion ile bu header'ı çapraz kontrol edebilir. Şu an
+        // relay'in gerçek protokol versiyonuna erişimi bu aşamada olmadığı için
+        // sabit bırakıldı — sorun devam ederse burası bir sonraki şüphelidir.
         val req = Request.Builder()
             .url(MC_BEDROCK_URL)
             .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -335,7 +377,7 @@ object MicrosoftAuthManager {
             body.ifBlank { error("MC /authentication yanıtı boş") }
         }
 
-        Log.d(TAG, "MC /authentication yanıtı: ${responseText.take(200)}…")
+        OverlayLogger.d(TAG, "MC /authentication yanıtı: ${responseText.take(200)}…")
 
         val json             = JSONObject(responseText)
         val serverChainArray = json.optJSONArray("chain")
@@ -350,14 +392,15 @@ object MicrosoftAuthManager {
             }.toString()
 
             val gamertag = extractGamertagFromJwtList(fullChain)
-            Log.i(TAG, "MC chain alındı: ${fullChain.size} JWT, gamertag=$gamertag")
+            OverlayLogger.i(TAG, "MC chain alındı: ${fullChain.size} JWT, gamertag=$gamertag")
+            logFetchedChainSummary(fullChain, pubKeyB64)
             return McAuthResult(chainWrapper, gamertag, privKeyB64, pubKeyB64)
         }
 
         val token = json.optString("token").takeIf { it.isNotBlank() }
             ?: error("MC token alınamadı: $responseText")
 
-        Log.w(TAG, "MC yanıtında chain yok, ham token kullanılıyor")
+        OverlayLogger.w(TAG, "MC yanıtında chain yok, ham token kullanılıyor")
         val fallbackChain = JSONObject().apply {
             put("chain", JSONArray().apply { put(deviceJwt); put(token) })
         }.toString()
@@ -371,15 +414,15 @@ object MicrosoftAuthManager {
         xblToken: String
     ): String {
         if (chainResult.gamertag.isNotBlank()) {
-            Log.d(TAG, "Gamertag kaynağı: MC chain → ${chainResult.gamertag}")
+            OverlayLogger.d(TAG, "Gamertag kaynağı: MC chain → ${chainResult.gamertag}")
             return chainResult.gamertag
         }
         if (xstsGamertag.isNotBlank()) {
-            Log.d(TAG, "Gamertag kaynağı: XSTS gtg → $xstsGamertag")
+            OverlayLogger.d(TAG, "Gamertag kaynağı: XSTS gtg → $xstsGamertag")
             return xstsGamertag
         }
         if (xblGamertag.isNotBlank()) {
-            Log.d(TAG, "Gamertag kaynağı: XBL gtg → $xblGamertag")
+            OverlayLogger.d(TAG, "Gamertag kaynağı: XBL gtg → $xblGamertag")
             return xblGamertag
         }
 
@@ -401,15 +444,15 @@ object MicrosoftAuthManager {
                     val s = settings.getJSONObject(i)
                     if (s.optString("id") == "Gamertag") {
                         val gt = s.optString("value")
-                        Log.d(TAG, "Gamertag kaynağı: Profile API → $gt")
+                        OverlayLogger.d(TAG, "Gamertag kaynağı: Profile API → $gt")
                         return gt
                     }
                 }
             }
-            Log.w(TAG, "Profile API'den gamertag alınamadı")
+            OverlayLogger.w(TAG, "Profile API'den gamertag alınamadı")
             "OxPlayer"
         } catch (e: Exception) {
-            Log.w(TAG, "Profile API hatası: ${e.message}")
+            OverlayLogger.w(TAG, "Profile API hatası: ${e.message}")
             "OxPlayer"
         }
     }
@@ -482,7 +525,7 @@ object MicrosoftAuthManager {
             .execute().use { resp ->
                 val b = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
-                    Log.e(TAG, "postForm HTTP ${resp.code} [$url]: $b")
+                    OverlayLogger.e(TAG, "postForm HTTP ${resp.code} [$url]: $b")
                     error("HTTP ${resp.code}: $b")
                 }
                 b
@@ -498,10 +541,10 @@ object MicrosoftAuthManager {
             .build()
         return http.newCall(req).execute().use { resp ->
             val text = resp.body?.string() ?: ""
-            Log.d(TAG, "postJsonRaw HTTP ${resp.code} [$url]")
+            OverlayLogger.d(TAG, "postJsonRaw HTTP ${resp.code} [$url]")
             val isXstsError = text.contains("XErr")
             if (!resp.isSuccessful && !isXstsError) {
-                Log.e(TAG, "postJsonRaw HTTP ${resp.code} [$url]: ${text.take(400)}")
+                OverlayLogger.e(TAG, "postJsonRaw HTTP ${resp.code} [$url]: ${text.take(400)}")
                 error("HTTP ${resp.code}: ${text.take(300)}")
             }
             text

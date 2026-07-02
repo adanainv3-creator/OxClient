@@ -1,7 +1,7 @@
 package com.oxclient.auth
 
 import android.content.Context
-import android.util.Log
+import com.oxclient.ui.overlay.OverlayLogger
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
@@ -63,14 +63,14 @@ object AccountManager {
                     val type = object : TypeToken<List<SavedAccount>>() {}.type
                     val loaded = gson.fromJson<List<SavedAccount>>(accountsJson, type)
                     _accounts = loaded.toMutableList()
-                    Log.d(TAG, "Yüklendi: ${_accounts.size} hesap")
+                    OverlayLogger.d(TAG, "Yüklendi: ${_accounts.size} hesap")
                 }
 
                 _selectedGamertag = prefs[KEY_SELECTED_ACCOUNT]
-                Log.d(TAG, "Seçili hesap: $_selectedGamertag")
+                OverlayLogger.d(TAG, "Seçili hesap: $_selectedGamertag")
 
             } catch (e: Exception) {
-                Log.e(TAG, "AccountManager init hatası", e)
+                OverlayLogger.e(TAG, "AccountManager init hatası", e)
             }
         }
     }
@@ -82,14 +82,15 @@ object AccountManager {
         val idx = _accounts.indexOfFirst { it.gamertag == account.gamertag }
         if (idx >= 0) _accounts[idx] = account else _accounts.add(account)
         persist()
-        Log.i(TAG, "Hesap eklendi/güncellendi: ${account.gamertag}")
+        OverlayLogger.i(TAG, "Hesap eklendi/güncellendi: ${account.gamertag}")
+        OverlayLogger.d(TAG, "  pubKey(ilk32)=${account.publicKeyB64.take(32)}… privKey.boş=${account.privateKeyB64.isBlank()}")
     }
 
     fun removeAccount(account: SavedAccount) {
         _accounts.removeAll { it.gamertag == account.gamertag }
         if (_selectedGamertag == account.gamertag) clearSelectedAccount()
         persist()
-        Log.i(TAG, "Hesap silindi: ${account.gamertag}")
+        OverlayLogger.i(TAG, "Hesap silindi: ${account.gamertag}")
     }
 
     fun selectAccount(account: SavedAccount) {
@@ -97,7 +98,7 @@ object AccountManager {
         scope.launch {
             dataStore?.edit { it[KEY_SELECTED_ACCOUNT] = account.gamertag }
         }
-        Log.d(TAG, "Hesap seçildi: ${account.gamertag}")
+        OverlayLogger.d(TAG, "Hesap seçildi: ${account.gamertag}")
     }
 
     fun clearSelectedAccount() {
@@ -111,7 +112,7 @@ object AccountManager {
     fun refreshAccount(gamertag: String, newMcToken: String, newExpireMs: Long, newPrivateKeyB64: String? = null, newPublicKeyB64: String? = null) {
         val idx = _accounts.indexOfFirst { it.gamertag == gamertag }
         if (idx < 0) {
-            Log.w(TAG, "refreshAccount: hesap bulunamadı → $gamertag")
+            OverlayLogger.w(TAG, "refreshAccount: hesap bulunamadı → $gamertag")
             return
         }
         _accounts[idx] = _accounts[idx].copy(
@@ -121,7 +122,8 @@ object AccountManager {
             publicKeyB64  = newPublicKeyB64 ?: _accounts[idx].publicKeyB64
         )
         persist()
-        Log.i(TAG, "Token yenilendi: $gamertag")
+        OverlayLogger.i(TAG, "Token yenilendi: $gamertag")
+        OverlayLogger.d(TAG, "  yeni pubKey(ilk32)=${_accounts[idx].publicKeyB64.take(32)}…")
     }
 
     // ── Relay Yardımcıları ────────────────────────────────────────────
@@ -152,7 +154,7 @@ object AccountManager {
                         ?: prefs.remove(KEY_SELECTED_ACCOUNT)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Persist hatası", e)
+                OverlayLogger.e(TAG, "Persist hatası", e)
             }
         }
     }

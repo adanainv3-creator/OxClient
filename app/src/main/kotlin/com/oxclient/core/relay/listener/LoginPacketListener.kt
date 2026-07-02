@@ -68,6 +68,7 @@ class LoginPacketListener : OxPacketListener {
 
     @Volatile private var loginProcessed = false
     @Volatile private var pendingLogin  : LoginPacket? = null
+    @Volatile private var loginSentAtMs : Long = 0L
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -79,6 +80,7 @@ class LoginPacketListener : OxPacketListener {
 
     override fun onSessionEnd(session: OxRelaySession) {
         pendingLogin = null
+        loginSentAtMs = 0L
         ConnectionManager.onDisconnected()
     }
 
@@ -112,7 +114,7 @@ class LoginPacketListener : OxPacketListener {
                 }
 
                 // Xbox chain'i inject et
-                injectAuthChain(packet)
+                injectAuthChain(packet, session)
 
                 // Login'i sakla — server NetworkSettings gönderince iletiriz
                 pendingLogin = packet
@@ -162,6 +164,7 @@ class LoginPacketListener : OxPacketListener {
                 val login = pendingLogin
                 if (login != null) {
                     OverlayLogger.i(TAG, "Login server'a gönderiliyor")
+                    loginSentAtMs = System.currentTimeMillis()
                     session.sendToServer(login)
                     pendingLogin = null
                 } else {
@@ -211,7 +214,19 @@ class LoginPacketListener : OxPacketListener {
             }
 
             is DisconnectPacket -> {
+                val elapsed = if (loginSentAtMs > 0) System.currentTimeMillis() - loginSentAtMs else -1L
                 OverlayLogger.w(TAG, "Server Disconnect: ${packet.kickMessage}")
+                if (elapsed in 0..5000) {
+                    OverlayLogger.e(TAG, "↳ Login gönderildikten ${elapsed}ms sonra disconnect — " +
+                        "sunucu LoginPacket/authPayload/clientJwt doğrulamasında reddetti.")
+                    OverlayLogger.e(TAG, "↳ Kontrol sırası: 1) chain[0] anahtar tutarlılığı  " +
+                        "2) JWT exp/nbf süresi  3) clientJwt imzası  4) ServerAddress/DeviceId alanları " +
+                        "— yukarıdaki 'Chain diagnostiği' ve 'clientJwt' loglarına bak.")
+                } else if (elapsed > 5000) {
+                    OverlayLogger.w(TAG, "↳ Login'den ${elapsed}ms sonra disconnect — muhtemelen auth " +
+                        "sonrası bir aşamada (encryption/StartGame) kopma, kimlik doğrulaması sorunu olmayabilir.")
+                }
+                loginSentAtMs = 0L
             }
         }
         return true
@@ -275,7 +290,7 @@ class LoginPacketListener : OxPacketListener {
     // önceden kullanılan secp256r1/ES256 tek başına reddedilme sebebiydi.
     // ═══════════════════════════════════════════════════════════════════
 
-    private fun injectAuthChain(packet: LoginPacket) {
+    private fun injectAuthChain(packet: LoginPacket, session: OxRelaySession) {
         val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
         if (savedChain.isNullOrBlank()) {
             OverlayLogger.w(TAG, "Kayıtlı chain yok — offline mod (orijinal authPayload iletiliyor)")
@@ -292,6 +307,10 @@ class LoginPacketListener : OxPacketListener {
             return
         }
 
+        OverlayLogger.d(TAG, "injectAuthChain başladı — hedef=${session.remoteHost}:${session.remotePort}")
+        OverlayLogger.d(TAG, "  pubKeyB64  (ilk 32) = ${pubKeyB64.take(32)}…  (len=${pubKeyB64.length})")
+        OverlayLogger.d(TAG, "  privKeyB64 (ilk 16) = ${privKeyB64.take(16)}…  (len=${privKeyB64.length})")
+
         try {
             val savedJwts = parseSavedChain(savedChain)
             if (savedJwts.isEmpty()) {
@@ -299,20 +318,33 @@ class LoginPacketListener : OxPacketListener {
                 return
             }
 
+            // ── DIAGNOSTIK #1 — chain'in kendisi tutarlı mı? ────────────────
+            // exp/nbf süresi dolmuş mu, chain[0].identityPublicKey kayıtlı
+            // pubKeyB64 ile eşleşiyor mu (eşleşmezse imza zinciri baştan
+            // kırık demektir — sunucu "identifier" ile anında reddeder).
+            logChainDiagnostics(savedJwts, pubKeyB64)
+
             packet.authPayload = CertificateChainPayload(savedJwts, AuthType.FULL)
             OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${savedJwts.size} JWT (orijinal, değiştirilmeden), authType=FULL")
 
             // ── clientJwt (skin/client data) yeniden imzalama — KRİTİK ─────
             // Sunucu clientJwt'nin imzasını chain'in ilk linkinin public
             // key'ine göre doğruluyor. Orijinal client kendi key'iyle
-            // imzalamış, bizim chain'imizle alakası yok — payload'ı
-            // (değiştirmeden) alıp AYNI key ile yeniden imzalıyoruz.
+            // imzalamış, bizim chain'imizle alakası yok — payload'ı AYNI
+            // key ile yeniden imzalıyoruz. Ayrıca ServerAddress/DeviceId
+            // alanları client'ın RELAY'e bağlandığı bilgiyi taşıdığı için
+            // gerçek hedefe göre override ediliyor (bkz. resignClientJwt).
             val originalClientJwt = packet.clientJwt
             if (!originalClientJwt.isNullOrBlank()) {
-                val resigned = resignClientJwt(originalClientJwt, privKeyB64, pubKeyB64)
+                OverlayLogger.d(TAG, "── clientJwt (ORİJİNAL, client'tan geldi) ──")
+                logClientJwtFields(originalClientJwt)
+
+                val resigned = resignClientJwt(originalClientJwt, privKeyB64, pubKeyB64, session)
                 if (resigned != null) {
                     packet.clientJwt = resigned
                     OverlayLogger.i(TAG, "clientJwt yeniden imzalandı ✓ (chain key'i ile)")
+                    OverlayLogger.d(TAG, "── clientJwt (YENİDEN İMZALANMIŞ, sunucuya gidecek) ──")
+                    logClientJwtFields(resigned)
                 } else {
                     OverlayLogger.e(TAG, "clientJwt yeniden imzalanamadı — login muhtemelen reddedilecek")
                 }
@@ -322,6 +354,118 @@ class LoginPacketListener : OxPacketListener {
 
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Chain inject hatası: ${e.message}", e)
+        }
+    }
+
+    // ── Diagnostik Yardımcıları ──────────────────────────────────────────
+    //
+    // Bu fonksiyonlar hiçbir imzalama/enjeksiyon mantığını DEĞİŞTİRMİYOR,
+    // sadece sunucunun neden reddettiğini anlamak için chain/clientJwt
+    // içeriğini okunabilir şekilde loglar. "Invalid login data (identifier)"
+    // hatası genellikle şu 3 sebepten biridir — hepsi burada kontrol edilir:
+    //   1. chain[0].identityPublicKey ≠ kayıtlı pubKeyB64 (anahtar tutarsız)
+    //   2. Chain JWT'lerden biri süresi dolmuş (exp geçmiş / nbf gelecekte)
+    //   3. clientJwt'deki ServerAddress/DeviceId gerçek bağlantıyla uyuşmuyor
+
+    private fun decodeJwtPart(b64UrlPart: String): JSONObject? = try {
+        val padded = b64UrlPart + "=".repeat((4 - b64UrlPart.length % 4) % 4)
+        val bytes  = Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP)
+        JSONObject(String(bytes, Charsets.UTF_8))
+    } catch (e: Exception) {
+        OverlayLogger.w(TAG, "JWT parça decode edilemedi: ${e.message}")
+        null
+    }
+
+    private fun logChainDiagnostics(chainJwts: List<String>, expectedPubKeyB64: String) {
+        val nowSec = System.currentTimeMillis() / 1000L
+        OverlayLogger.i(TAG, "── Chain diagnostiği (${chainJwts.size} JWT) ──")
+
+        chainJwts.forEachIndexed { idx, jwt ->
+            val parts = jwt.split(".")
+            if (parts.size != 3) {
+                OverlayLogger.e(TAG, "  [$idx] geçersiz JWT formatı (${parts.size} parça, beklenen 3)")
+                return@forEachIndexed
+            }
+            val header  = decodeJwtPart(parts[0])
+            val payload = decodeJwtPart(parts[1])
+
+            val alg     = header?.optString("alg") ?: "?"
+            val x5u     = header?.optString("x5u")?.takeIf { it.isNotBlank() }
+            val certAuthority  = payload?.optBoolean("certificateAuthority", false) ?: false
+            val identityPubKey = payload?.optString("identityPublicKey")?.takeIf { it.isNotBlank() }
+            val hasExtraData   = payload?.has("extraData") == true
+            val xuid = payload?.optJSONObject("extraData")?.optString("XUID")
+            val displayName = payload?.optJSONObject("extraData")?.optString("displayName")
+
+            val exp = payload?.optLong("exp", -1L) ?: -1L
+            val nbf = payload?.optLong("nbf", -1L) ?: -1L
+            val iat = payload?.optLong("iat", -1L) ?: -1L
+
+            val expStatus = when {
+                exp < 0      -> "yok"
+                exp < nowSec -> "★ SÜRESİ DOLMUŞ (${nowSec - exp}s önce) ★"
+                else         -> "geçerli (${exp - nowSec}s kaldı)"
+            }
+            val nbfStatus = if (nbf > 0 && nbf > nowSec) "★ HENÜZ BAŞLAMADI (${nbf - nowSec}s sonra) ★" else "ok"
+
+            OverlayLogger.i(TAG, "  [$idx] alg=$alg certAuthority=$certAuthority extraData=$hasExtraData" +
+                if (hasExtraData) " xuid=${xuid ?: "-"} name=${displayName ?: "-"}" else "")
+            OverlayLogger.i(TAG, "        exp=$expStatus nbf=$nbfStatus iat=$iat x5u=${x5u?.take(28) ?: "-"}…")
+
+            if (exp in 1 until nowSec) {
+                OverlayLogger.e(TAG, "        ↳ BU JWT SÜRESİ DOLMUŞ — sunucu chain'i tamamen reddedebilir!")
+            }
+
+            // chain[0] = self-signed device sertifikası: identityPublicKey
+            // buradan itibaren chain[1]'in imzasını doğrulamak için trust
+            // anchor olarak kullanılır. Kayıtlı public key ile eşleşmiyorsa
+            // relay'in kendi ürettiği key ile Mojang'a kayıtlı key TUTARSIZ
+            // demektir — "identifier" hatasının en klasik sebebi budur.
+            if (idx == 0) {
+                when {
+                    identityPubKey == null ->
+                        OverlayLogger.e(TAG, "        ↳ chain[0].identityPublicKey YOK — self-signed sertifika eksik!")
+                    identityPubKey == expectedPubKeyB64 ->
+                        OverlayLogger.i(TAG, "        ↳ chain[0].identityPublicKey ✓ kayıtlı pubKeyB64 ile eşleşiyor")
+                    else -> {
+                        OverlayLogger.e(TAG, "        ↳ ★★★ ANAHTAR UYUŞMUYOR ★★★ chain[0].identityPublicKey ≠ kayıtlı pubKeyB64")
+                        OverlayLogger.e(TAG, "          chain[0] : ${identityPubKey.take(40)}…")
+                        OverlayLogger.e(TAG, "          kayıtlı  : ${expectedPubKeyB64.take(40)}…")
+                        OverlayLogger.e(TAG, "          → Bu tutarsızlık TEK BAŞINA 'Invalid login data (identifier)' sebebi olabilir.")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun logClientJwtFields(jwt: String) {
+        val parts = jwt.split(".")
+        if (parts.size != 3) {
+            OverlayLogger.e(TAG, "  clientJwt formatı geçersiz (${parts.size} parça)")
+            return
+        }
+        val header  = decodeJwtPart(parts[0])
+        val payload = decodeJwtPart(parts[1])
+
+        OverlayLogger.d(TAG, "  header.alg=${header?.optString("alg")} x5u=${header?.optString("x5u")?.take(28)}…")
+
+        if (payload == null) {
+            OverlayLogger.w(TAG, "  payload decode edilemedi")
+            return
+        }
+        // Sunucuların identity/relay tespiti için en sık kontrol ettiği alanlar.
+        listOf(
+            "ServerAddress", "DeviceId", "DeviceOS", "ClientRandomId", "SelfSignedId",
+            "GameVersion", "PlayFabId", "ThirdPartyName", "LanguageCode",
+            "CurrentInputMode", "DefaultInputMode", "UIProfile"
+        ).forEach { key ->
+            if (payload.has(key)) OverlayLogger.d(TAG, "  $key = ${payload.opt(key)}")
+        }
+        OverlayLogger.d(TAG, "  (payload toplam alan sayısı = ${payload.length()})")
+
+        if (payload.has("PlayFabId")) {
+            OverlayLogger.w(TAG, "  ↳ PlayFabId mevcut AMA hesabın gerçek kimliğine bağlı DEĞİL " +
+                "(MicrosoftAuthManager PlayFab login yapmıyor) — sunucu bunu doğruluyorsa reddedilebilir.")
         }
     }
 
@@ -381,19 +525,48 @@ class LoginPacketListener : OxPacketListener {
     }
 
     /**
-     * clientJwt'nin (skin/client data) PAYLOAD'ını değiştirmeden alıp,
-     * MicrosoftAuthManager'da saklanan chain key'i ile yeniden imzalar.
-     * pubKeyB64 doğrudan SavedAccount'tan geldiği için EC point çarpımı
-     * gibi riskli manuel kriptografiye gerek yok.
+     * clientJwt'nin (skin/client data) PAYLOAD'ını alıp:
+     *   1. ServerAddress'i client'ın relay'e bağlandığı adresten GERÇEK
+     *      hedef sunucunun adresine (session.remoteHost:remotePort) çevirir
+     *   2. DeviceId'yi yeniler
+     * ardından MicrosoftAuthManager'da saklanan chain key'i ile yeniden imzalar.
+     *
+     * NEDEN: Gerçek MCPE client relay'e (LAN) bağlanıyor, bu yüzden kendi
+     * ClientData JWT'sinde ServerAddress = relay'in adresi olur — asıl hedef
+     * (2b2tpe.org:19132) DEĞİL. Anti-relay/strict sunucular bu alanı
+     * bağlantının geldiği gerçek adresle çapraz doğruluyor olabilir; eşleşmezse
+     * "Invalid login data (identifier)" ile reddedilir. wclient referansı
+     * (AuthUtils.fetchOnlineSkinData) aynı overrideleri yapıyor.
      */
-    private fun resignClientJwt(originalClientJwt: String, privKeyB64: String, pubKeyB64: String): String? {
+    private fun resignClientJwt(originalClientJwt: String, privKeyB64: String, pubKeyB64: String, session: OxRelaySession): String? {
         try {
             val parts = originalClientJwt.split(".")
             if (parts.size != 3) {
                 OverlayLogger.e(TAG, "clientJwt formatı geçersiz (3 parça bekleniyor, ${parts.size} bulundu)")
                 return null
             }
-            val payloadJson = parts[1] // skin/cape/vb. veriler — değiştirilmeden aynen kullanılır
+
+            val payloadJson = try {
+                val padded  = parts[1] + "=".repeat((4 - parts[1].length % 4) % 4)
+                val decoded = String(Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
+                val obj = JSONObject(decoded)
+
+                val oldServerAddress = obj.optString("ServerAddress", "-")
+                val oldDeviceId      = obj.optString("DeviceId", "-")
+                val newServerAddress = "${session.remoteHost}:${session.remotePort}"
+                val newDeviceId      = java.util.UUID.randomUUID().toString()
+
+                obj.put("ServerAddress", newServerAddress)
+                obj.put("DeviceId", newDeviceId)
+
+                OverlayLogger.i(TAG, "  ServerAddress override: '$oldServerAddress' → '$newServerAddress'")
+                OverlayLogger.i(TAG, "  DeviceId override     : '$oldDeviceId' → '$newDeviceId'")
+
+                b64Url(obj.toString().toByteArray(Charsets.UTF_8))
+            } catch (e: Exception) {
+                OverlayLogger.w(TAG, "clientJwt payload override edilemedi, ORİJİNAL payload kullanılıyor: ${e.message}")
+                parts[1]
+            }
 
             val keyBytes = Base64.decode(privKeyB64, Base64.NO_WRAP)
             val privKey  = KeyFactory.getInstance("EC")
