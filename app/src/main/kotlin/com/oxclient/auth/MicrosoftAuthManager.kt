@@ -383,8 +383,54 @@ object MicrosoftAuthManager {
         val serverChainArray = json.optJSONArray("chain")
 
         if (serverChainArray != null && serverChainArray.length() > 0) {
+            // ═══════════════════════════════════════════════════════════
+            // KRİTİK DÜZELTME (wclient AuthUtils.fetchOnlineChain ile
+            // birebir hizalama):
+            //
+            // Önceki kod chain[0]'ın payload'ındaki "identityPublicKey"
+            // alanını bizim GÖNDERDİĞİMİZ pubKeyB64 olarak varsayıyordu.
+            // Ama zincirin kriptografik olarak GEÇERLİ olması için bu alan
+            // chain[1]'i (Mojang'ın döndürdüğü ilk link) İMZALAMAK İÇİN
+            // GERÇEKTEN KULLANILAN key'e (yani chain[1]'in KENDİ x5u
+            // header'ına) birebir eşit olmalı. Mojang'ın /authentication
+            // yanıtı bunu bize aynen geri yansıtıyor OLABİLİR ama byte-byte
+            // aynı olduğunu VARSAYMAK yerine chain[1]'in header'ından
+            // OKUYUP kullanıyoruz — wclient tam olarak bunu yapıyor:
+            //   claimsSet.setClaim("identityPublicKey", mojangJws.getHeader("x5u"))
+            //
+            // Mojang'ın kendi /authentication doğrulaması bu tutarsızlığı
+            // yakalamıyor (o sadece bizim gönderdiğimiz self-signed JWT'yi
+            // kabul ediyor), ama sıkı bir sunucu (2b2tpe.org gibi) chain[0]
+            // ile chain[1] arasındaki imza zincirini GERÇEKTEN doğruluyorsa
+            // bu fark tam olarak "Invalid login data (identifier)" sebebi
+            // olabilir.
+            // ═══════════════════════════════════════════════════════════
+            val firstServerJwt = serverChainArray.getString(0)
+            val actualSigningKey = try {
+                val parts = firstServerJwt.split(".")
+                val headerJson = String(
+                    Base64.decode(
+                        parts[0] + "=".repeat((4 - parts[0].length % 4) % 4),
+                        Base64.URL_SAFE or Base64.NO_WRAP
+                    ), Charsets.UTF_8
+                )
+                JSONObject(headerJson).optString("x5u").takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                OverlayLogger.w(TAG, "chain[1].x5u okunamadı, pubKeyB64 fallback kullanılacak: ${e.message}")
+                null
+            }
+
+            val finalDeviceJwt = if (actualSigningKey != null && actualSigningKey != pubKeyB64) {
+                OverlayLogger.w(TAG, "★ chain[1].x5u ≠ gönderdiğimiz pubKeyB64 — chain[0] GERÇEK key ile yeniden kuruluyor")
+                OverlayLogger.w(TAG, "  gönderilen : ${pubKeyB64.take(40)}…")
+                OverlayLogger.w(TAG, "  chain[1].x5u: ${actualSigningKey.take(40)}…")
+                buildDeviceJwt(privKey, pubKeyB64, identityPublicKeyClaim = actualSigningKey)
+            } else {
+                deviceJwt
+            }
+
             val fullChain = buildList {
-                add(deviceJwt)
+                add(finalDeviceJwt)
                 for (i in 0 until serverChainArray.length()) add(serverChainArray.getString(i))
             }
             val chainWrapper = JSONObject().apply {
@@ -457,13 +503,25 @@ object MicrosoftAuthManager {
         }
     }
 
-    private fun buildDeviceJwt(privateKey: ECPrivateKey, pubKeyB64: String): String {
+    private fun buildDeviceJwt(
+        privateKey: ECPrivateKey,
+        pubKeyB64: String,
+        identityPublicKeyClaim: String = pubKeyB64
+    ): String {
         val now     = System.currentTimeMillis() / 1000L
         // Mojang Bedrock auth secp384r1 (P-384) + ES384 kullanır — secp256r1/ES256
         // İLE imzalanan zincirler sunucu tarafında "Invalid login data" ile reddedilir.
+        //
+        // NOT: header.x5u = BU JWT'yi kimin imzaladığı (bizim key'imiz, pubKeyB64).
+        //      payload.identityPublicKey = zincirdeki BİR SONRAKİ linki imzalaması
+        //      gereken key. Normalde bunlar aynıdır (kendi key'imizi bir sonraki
+        //      adıma da yetkilendiriyoruz), ama Mojang'ın döndürdüğü chain[1]
+        //      GERÇEKTE farklı bir key ile imzalanmışsa (identityPublicKeyClaim
+        //      parametresiyle override edilir), zincirin geçerli olması için
+        //      payload'da O GERÇEK key'in yazması gerekir.
         val header  = b64Url("""{"alg":"ES384","x5u":"$pubKeyB64"}""".toByteArray())
         val payload = b64Url(
-            ("""{"certificateAuthority":true,"identityPublicKey":"$pubKeyB64",""" +
+            ("""{"certificateAuthority":true,"identityPublicKey":"$identityPublicKeyClaim",""" +
              """"exp":${now + 86400},"nbf":${now - 1},"iat":$now,"iss":"Minecraft"}""")
                 .toByteArray()
         )
