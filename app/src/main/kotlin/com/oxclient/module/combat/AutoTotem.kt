@@ -7,7 +7,6 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.*
-import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
 
 class AutoTotem : BaseModule(
@@ -24,12 +23,15 @@ class AutoTotem : BaseModule(
     private val shortcut        = bool ("Shortcut",         false)
 
     companion object {
-        private const val TAG              = "AutoTotem"
-        private const val TOTEM_NETWORK_ID = 702
+        private const val TAG = "AutoTotem"
     }
 
     @Volatile private var currentHealth   = 20f
     @Volatile private var totemSlot       = -1
+    // ✅ FIX: sabit "702" yerine slottaki gerçek totem stack'inin netId'si saklanıyor.
+    // MobEquipmentPacket, server'ın doğru stack'i tanıyabilmesi için o stack'e ait
+    // gerçek netId'yi bekler — sabit bir sayı göndermek isteği başarısız kılıyordu.
+    @Volatile private var totemNetId      = 0
     @Volatile private var offhandHasTotem = false
     @Volatile private var lastEquipMs     = 0L
     @Volatile private var lastDamageMs    = 0L
@@ -59,17 +61,19 @@ class AutoTotem : BaseModule(
                 if (pkt.containerId != 0) return
                 totemSlot = -1; offhandHasTotem = false
                 pkt.contents.forEachIndexed { slot, item ->
-                    if (isTotem(item)) when {
+                    if (InventoryUtil.isTotem(item)) when {
                         slot == InventoryUtil.OFFHAND_SLOT && !offhandHasTotem -> offhandHasTotem = true
-                        totemSlot == -1 -> totemSlot = slot
+                        totemSlot == -1 -> { totemSlot = slot; totemNetId = item.netId }
                     }
                 }
             }
             is InventorySlotPacket -> {
                 if (pkt.containerId != 0) return
                 when (pkt.slot) {
-                    InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = isTotem(pkt.item)
-                    in 0..35 -> if (isTotem(pkt.item) && totemSlot == -1) totemSlot = pkt.slot
+                    InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = InventoryUtil.isTotem(pkt.item)
+                    in 0..35 -> if (InventoryUtil.isTotem(pkt.item) && totemSlot == -1) {
+                        totemSlot = pkt.slot; totemNetId = pkt.item.netId
+                    }
                 }
             }
             is EntityEventPacket -> {
@@ -79,11 +83,6 @@ class AutoTotem : BaseModule(
             }
             else -> {}
         }
-    }
-
-    private fun isTotem(item: ItemData?): Boolean {
-        if (item == null || item == ItemData.AIR) return false
-        return try { item.netId == TOTEM_NETWORK_ID } catch (_: Exception) { false }
     }
 
     private suspend fun watchLoop() {
@@ -108,8 +107,8 @@ class AutoTotem : BaseModule(
     private fun equipTotem() {
         val slot    = totemSlot; if (slot < 0) return
         val session = PacketEventBus.currentSession ?: return
-        Log.d(TAG, "Totem takılıyor slot=$slot")
-        InventoryUtil.sendOffhandEquip(session, slot, TOTEM_NETWORK_ID)
+        Log.d(TAG, "Totem takılıyor slot=$slot netId=$totemNetId")
+        InventoryUtil.sendOffhandEquip(session, slot, totemNetId)
         offhandHasTotem = true
     }
 }

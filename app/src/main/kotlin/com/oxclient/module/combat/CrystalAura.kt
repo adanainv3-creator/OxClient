@@ -140,8 +140,17 @@ class CrystalAura : BaseModule(
                 val r = RotationUtil.toPoint(bx + 0.5f, by.toFloat(), bz + 0.5f)
                 PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
             }
+            // ✅ FIX: eski kod sadece transactionType set edip gönderiyordu — server'a hangi
+            // bloğa, hangi yüzeye, hangi item ile tıklandığı bilgisi gitmediği için sunucu
+            // isteği geçersiz sayıp yok sayıyordu. ITEM_USE (place) için gerekli alanlar eklendi.
             session.serverBound(InventoryTransactionPacket().apply {
                 transactionType = InventoryTransactionType.ITEM_USE
+                actionType      = 0 // 0 = CLICK_BLOCK (place)
+                blockPosition   = org.cloudburstmc.math.vector.Vector3i.from(bx, by, bz)
+                blockFace       = 1 // yukarı yüz
+                hotbarSlot      = 0
+                clickPosition   = Vector3f.from(0.5f, 1f, 0.5f)
+                playerPosition  = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
             })
             placedPositions[bKey] = now
             placed++

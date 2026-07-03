@@ -17,7 +17,9 @@ import kotlinx.coroutines.*
 import org.cloudburstmc.protocol.bedrock.packet.LevelChunkPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateBlockPacket
 import org.cloudburstmc.protocol.bedrock.packet.BlockEntityDataPacket
+import org.cloudburstmc.protocol.bedrock.packet.StartGamePacket
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.*
 
 class ESP : BaseModule(
@@ -42,20 +44,34 @@ class ESP : BaseModule(
     private val showSpawner   = bool ("Spawner",       true)
     private val showHopper    = bool ("Hopper",        true)
     private val showBarrel    = bool ("Barrel",        true)
+    private val fadeByDistance= bool ("Distance Fade", true)
+    private val minAlpha      = int  ("Min Alpha",     40,   0,   255)
+    private val showRadar     = bool ("Off-Screen Radar", true)
+    private val radarMargin   = float("Radar Margin",  36f,  10f, 100f)
+    private val showSummary   = bool ("Summary Panel", true)
+    private val smoothTracer  = bool ("Smooth Tracer", true)
+    private val smoothFactor  = float("Smooth Factor", 0.35f,0.05f, 1f)
+    private val nearestGlow   = bool ("Highlight Nearest", true)
+    private val updateRateMs  = int  ("Update Rate (ms)", 150, 50, 1000)
     private val shortcut      = bool ("Shortcut",      false)
 
     private val renderList = CopyOnWriteArrayList<RenderEntry>()
     private var updateJob: Job? = null
 
+    // Ekran koordinatlarında yumuşatma (jitter azaltma) için önceki pozisyon önbelleği
+    private val smoothedScreenPos = ConcurrentHashMap<Long, FloatArray>()
+
     data class RenderEntry(
         val x: Float, val y: Float, val z: Float,
         val type: TrackedBlockType,
-        val distance: Float
+        val distance: Float,
+        val key: Long
     )
 
     override fun onEnable() {
         super.onEnable()
         BlockTracker.clear()
+        smoothedScreenPos.clear()
         updateJob = scope.launch { updateLoop() }
     }
 
@@ -63,12 +79,16 @@ class ESP : BaseModule(
         updateJob?.cancel()
         super.onDisable()
         renderList.clear()
+        smoothedScreenPos.clear()
         BlockTracker.clear()
     }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         when (val pkt = event.packet) {
+            // ✅ EKLENDİ: StartGamePacket'teki dinamik blok paleti olmadan resolveBlockId
+            // hiçbir zaman doğru sonuç vermiyordu (bkz. BlockTracker.loadPalette).
+            is StartGamePacket -> BlockTracker.loadPalette(pkt)
             is UpdateBlockPacket -> handleUpdateBlock(pkt)
             is BlockEntityDataPacket -> handleBlockEntity(pkt)
             is LevelChunkPacket -> handleChunk(pkt)
@@ -100,6 +120,13 @@ class ESP : BaseModule(
     }
 
     private fun handleChunk(pkt: LevelChunkPacket) {
+        // NOT: LevelChunkPacket'in içeriği ham/sıkıştırılmış sub-chunk verisi olarak gelir
+        // (blok state paleti + block-entity NBT listesi bu blob'un içinde). Bunu burada
+        // decode etmiyoruz — bu yüzden ESP, chunk ilk yüklendiğinde zaten var olan
+        // sandık/spawner gibi blokları henüz göremez; yalnızca palet düzeltmesinden sonra
+        // UpdateBlockPacket/BlockEntityDataPacket ile SONRADAN değişen/görünen bloklar
+        // yakalanır. İlk yükte var olan blokları da yakalamak istersen chunk blob'unu
+        // decode eden bir parser lazım (relay dosyanı paylaşırsan ekleyebilirim).
     }
 
     private suspend fun updateLoop() {
@@ -123,7 +150,8 @@ class ESP : BaseModule(
                     b.pos.y + 0.5f,
                     b.pos.z + 0.5f,
                     b.type,
-                    MathUtil.dist3(b.pos.x + 0.5f, b.pos.y + 0.5f, b.pos.z + 0.5f, cx, cy, cz)
+                    MathUtil.dist3(b.pos.x + 0.5f, b.pos.y + 0.5f, b.pos.z + 0.5f, cx, cy, cz),
+                    BlockTracker.packKey(b.pos.x, b.pos.y, b.pos.z)
                 )
             }
 
@@ -132,8 +160,13 @@ class ESP : BaseModule(
             SortMode.Type     -> entries.sortedBy { it.type.ordinal }
         }
 
+        val trimmed = sorted.take(maxDisplay.value)
         renderList.clear()
-        renderList.addAll(sorted.take(maxDisplay.value))
+        renderList.addAll(trimmed)
+
+        // Görünürlüğü kalmayan bloklar için smoothing önbelleğini temizle (bellek sızıntısını önler)
+        val activeKeys = trimmed.mapTo(HashSet()) { it.key }
+        smoothedScreenPos.keys.retainAll(activeKeys)
     }
 
     fun render(canvas: Canvas, screenW: Int, screenH: Int) {
@@ -167,45 +200,167 @@ class ESP : BaseModule(
             setShadowLayer(3f, 1f, 1f, Color.BLACK)
         }
 
+        val radarPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+
         val centerX = screenW / 2f
         val centerY = screenH / 2f
+        val maxRange = scanRange.value
+        val nearest = if (nearestGlow.value) renderList.minByOrNull { it.distance } else null
 
         for (entry in renderList) {
             val color = entry.type.colorArgb
-            val screenPos = MathUtil.worldToScreen(
+            val rawPos = MathUtil.worldToScreen(
                 entry.x, entry.y, entry.z,
                 cx, cy, cz,
                 yaw, pitch,
                 screenW, screenH
             )
 
-            when (renderMode.value) {
-                RenderMode.Tracer, RenderMode.Both -> {
-                    tracerPaint.color = color
-                    tracerPaint.alpha = 200
-                    if (screenPos != null) {
-                        canvas.drawLine(centerX, centerY, screenPos.first, screenPos.second, tracerPaint)
-                    }
-                }
-                else -> {}
-            }
+            // Mesafeye göre saydamlık: yakın bloklar tam opak, uzak bloklar (minAlpha'ya kadar) sönük
+            val alphaScale = if (fadeByDistance.value) {
+                val t = (1f - (entry.distance / maxRange)).coerceIn(0f, 1f)
+                (minAlpha.value + (255 - minAlpha.value) * t) / 255f
+            } else 1f
+
+            val screenPos = if (rawPos != null && smoothTracer.value) {
+                smooth(entry.key, rawPos.first, rawPos.second)
+            } else rawPos
+
+            val isNearest = nearestGlow.value && entry === nearest
 
             if (screenPos != null) {
                 when (renderMode.value) {
+                    RenderMode.Tracer, RenderMode.Both -> {
+                        tracerPaint.color = color
+                        tracerPaint.alpha = (200 * alphaScale).toInt().coerceIn(0, 255)
+                        tracerPaint.strokeWidth = if (isNearest) tracerWidth.value + 1.5f else tracerWidth.value
+                        canvas.drawLine(centerX, centerY, screenPos.first, screenPos.second, tracerPaint)
+                    }
+                    else -> {}
+                }
+
+                when (renderMode.value) {
                     RenderMode.Box, RenderMode.Both -> {
                         drawBox(canvas, screenPos.first, screenPos.second,
-                            entry.distance, color, boxPaint, fillPaint)
+                            entry.distance, color, boxPaint, fillPaint, alphaScale, isNearest)
                     }
                     else -> {}
                 }
 
                 if (showLabels.value) {
                     var label = entry.type.displayName
+                    if (isNearest) label = "» $label «"
                     if (showDistance.value) label += " §${entry.distance.toInt()}m"
+                    textPaint.alpha = (255 * alphaScale).toInt().coerceIn(0, 255)
                     val labelY = screenPos.second - 28f
                     canvas.drawText(label, screenPos.first, labelY, textPaint)
                 }
+            } else if (showRadar.value) {
+                drawRadarArrow(canvas, entry, centerX, centerY, screenW, screenH, yaw, color, radarPaint)
             }
+        }
+
+        if (showSummary.value) drawSummaryPanel(canvas, screenW)
+    }
+
+    /** Ekran koordinatlarını üstel yumuşatma ile titremeyi (jitter) azaltır. */
+    private fun smooth(key: Long, x: Float, y: Float): Pair<Float, Float> {
+        val f = smoothFactor.value
+        val prev = smoothedScreenPos[key]
+        return if (prev == null) {
+            smoothedScreenPos[key] = floatArrayOf(x, y)
+            Pair(x, y)
+        } else {
+            val nx = prev[0] + (x - prev[0]) * f
+            val ny = prev[1] + (y - prev[1]) * f
+            smoothedScreenPos[key] = floatArrayOf(nx, ny)
+            Pair(nx, ny)
+        }
+    }
+
+    /** Görüş alanı dışındaki bloklar için ekran kenarında yön oku çizer (radar tarzı). */
+    private fun drawRadarArrow(
+        canvas: Canvas, entry: RenderEntry,
+        centerX: Float, centerY: Float,
+        screenW: Int, screenH: Int,
+        selfYaw: Float, color: Int, paint: Paint
+    ) {
+        val angleToTarget = Math.toDegrees(
+            atan2((entry.x - EntityTracker.selfX).toDouble(), (entry.z - EntityTracker.selfZ).toDouble())
+        ).toFloat()
+        val relative = ((angleToTarget - selfYaw) % 360f + 540f) % 360f - 180f
+        val rad = Math.toRadians(relative.toDouble())
+
+        val margin = radarMargin.value
+        val maxX = screenW / 2f - margin
+        val maxY = screenH / 2f - margin
+        val dirX = sin(rad).toFloat()
+        val dirY = -cos(rad).toFloat()
+
+        val scale = min(
+            if (abs(dirX) > 0.0001f) maxX / abs(dirX) else Float.MAX_VALUE,
+            if (abs(dirY) > 0.0001f) maxY / abs(dirY) else Float.MAX_VALUE
+        )
+        val px = centerX + dirX * scale
+        val py = centerY + dirY * scale
+
+        paint.color = color
+        paint.alpha = 220
+
+        val size = 14f
+        val perpX = -dirY; val perpY = dirX
+        val tipX = px + dirX * size; val tipY = py + dirY * size
+        val leftX = px - dirX * size * 0.5f + perpX * size * 0.6f
+        val leftY = py - dirY * size * 0.5f + perpY * size * 0.6f
+        val rightX = px - dirX * size * 0.5f - perpX * size * 0.6f
+        val rightY = py - dirY * size * 0.5f - perpY * size * 0.6f
+
+        val path = Path().apply {
+            moveTo(tipX, tipY)
+            lineTo(leftX, leftY)
+            lineTo(rightX, rightY)
+            close()
+        }
+        canvas.drawPath(path, paint)
+    }
+
+    /** Ekranın köşesinde bulunan blokların türe göre sayısını gösteren özet panel. */
+    private fun drawSummaryPanel(canvas: Canvas, screenW: Int) {
+        val counts = renderList.groupingBy { it.type }.eachCount()
+        if (counts.isEmpty()) return
+
+        val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.BLACK
+            alpha = 130
+        }
+        val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize  = 24f
+            textAlign = Paint.Align.LEFT
+            setShadowLayer(2f, 1f, 1f, Color.BLACK)
+        }
+
+        val entries = counts.entries.sortedByDescending { it.value }
+        val lineHeight = 30f
+        val paddingX = 14f
+        val paddingY = 10f
+        val panelW = 190f
+        val panelH = paddingY * 2 + lineHeight * entries.size
+        val startX = screenW - panelW - 16f
+        val startY = 16f
+
+        canvas.drawRoundRect(startX, startY, startX + panelW, startY + panelH, 10f, 10f, panelPaint)
+
+        entries.forEachIndexed { i, (type, count) ->
+            linePaint.color = type.colorArgb
+            canvas.drawText(
+                "${type.displayName}: $count",
+                startX + paddingX,
+                startY + paddingY + lineHeight * (i + 1) - 8f,
+                linePaint
+            )
         }
     }
 
@@ -215,16 +370,18 @@ class ESP : BaseModule(
         distance: Float,
         colorArgb: Int,
         strokePaint: Paint,
-        fillPaint: Paint
+        fillPaint: Paint,
+        alphaScale: Float = 1f,
+        isNearest: Boolean = false
     ) {
         val size = (40f / (distance * 0.1f + 1f)).coerceIn(6f, 40f)
         val half = size / 2f
 
         strokePaint.color = colorArgb
-        strokePaint.alpha = 220
+        strokePaint.alpha = (220 * alphaScale).toInt().coerceIn(0, 255)
 
         fillPaint.color = colorArgb
-        fillPaint.alpha = boxAlpha.value
+        fillPaint.alpha = (boxAlpha.value * alphaScale).toInt().coerceIn(0, 255)
 
         val left   = sx - half
         val top    = sy - half
@@ -235,7 +392,7 @@ class ESP : BaseModule(
         canvas.drawRect(left, top, right, bottom, strokePaint)
 
         val cornerLen = size * 0.3f
-        strokePaint.strokeWidth = tracerWidth.value + 1f
+        strokePaint.strokeWidth = if (isNearest) tracerWidth.value + 2f else tracerWidth.value + 1f
         canvas.drawLine(left,  top,    left  + cornerLen, top,            strokePaint)
         canvas.drawLine(left,  top,    left,              top + cornerLen, strokePaint)
         canvas.drawLine(right, top,    right - cornerLen, top,            strokePaint)
@@ -244,6 +401,14 @@ class ESP : BaseModule(
         canvas.drawLine(left,  bottom, left,              bottom - cornerLen, strokePaint)
         canvas.drawLine(right, bottom, right - cornerLen, bottom,         strokePaint)
         canvas.drawLine(right, bottom, right,             bottom - cornerLen, strokePaint)
+
+        if (isNearest) {
+            val glowPaint = Paint(strokePaint)
+            glowPaint.color = colorArgb
+            glowPaint.alpha = (90 * alphaScale).toInt().coerceIn(0, 255)
+            glowPaint.strokeWidth = strokePaint.strokeWidth + 3f
+            canvas.drawRect(left - 3f, top - 3f, right + 3f, bottom + 3f, glowPaint)
+        }
     }
 
     private fun isTypeEnabled(type: TrackedBlockType): Boolean = when (type) {

@@ -56,6 +56,17 @@ object InventoryUtil {
         })
     }
 
+    // ✅ FIX: ItemData.netId, item TİPİNİN id'si değil — her stack'e özel, dinamik olarak
+    // atanan "network stack id"dir (item stack request sisteminde kullanılır). Sabit bir
+    // "totem = 702" karşılaştırması bu yüzden pratikte hiç eşleşmiyordu. Doğru kontrol,
+    // item'ın definition/identifier alanı üzerinden isim karşılaştırmasıdır.
+    fun isTotem(item: org.cloudburstmc.protocol.bedrock.data.inventory.ItemData?): Boolean {
+        if (item == null || item == ItemData.AIR) return false
+        val identifier = try { item.definition?.identifier } catch (_: Exception) { null }
+        return identifier == "minecraft:totem_of_undying"
+    }
+
+    @Deprecated("netId item tipini değil stack'i temsil eder, isTotem() kullan", ReplaceWith("isTotem(item)"))
     fun isTotemNetId(netId: Int): Boolean = netId == 702
 
     private val FOOD_NET_IDS = setOf(

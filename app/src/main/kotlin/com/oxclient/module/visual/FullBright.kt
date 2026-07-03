@@ -73,27 +73,30 @@ class FullBright : BaseModule(
     }
 
     private fun injectNightVision() {
-        val uid = EntityTracker.selfUniqueId
-        if (uid == 0L) { OverlayLogger.w(TAG, "NV atlandı: selfUniqueId=0"); return }
+        // ✅ FIX: MobEffectPacket.runtimeEntityId RUNTIME id bekliyor, UNIQUE id değil.
+        // selfUniqueId kullanıldığı için istemci paketi kendi oyuncusuna ait tanımıyordu
+        // ve efekt hiçbir zaman görünmüyordu.
+        val rid = EntityTracker.selfRuntimeId
+        if (rid == 0L) { OverlayLogger.w(TAG, "NV atlandı: selfRuntimeId=0"); return }
         val session = PacketEventBus.currentSession
             ?: run { OverlayLogger.w(TAG, "NV atlandı: session yok"); return }
         session.clientBound(MobEffectPacket().apply {
-            runtimeEntityId = uid
+            runtimeEntityId = rid
             event           = MobEffectPacket.Event.ADD
             effectId        = 16
             amplifier       = (strength.value / 200f).toInt().coerceIn(0, 255)
             isParticles     = false
             duration        = 2_000_000
         })
-        OverlayLogger.i(TAG, "NV enjekte edildi (uid=$uid)")
+        OverlayLogger.i(TAG, "NV enjekte edildi (rid=$rid)")
     }
 
     private fun removeNightVision() {
-        val uid = EntityTracker.selfUniqueId
-        if (uid == 0L) return
+        val rid = EntityTracker.selfRuntimeId
+        if (rid == 0L) return
         val session = PacketEventBus.currentSession ?: return
         session.clientBound(MobEffectPacket().apply {
-            runtimeEntityId = uid
+            runtimeEntityId = rid
             event           = MobEffectPacket.Event.REMOVE
             effectId        = 16
             amplifier       = 0

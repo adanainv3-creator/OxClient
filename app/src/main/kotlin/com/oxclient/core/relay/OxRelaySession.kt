@@ -349,7 +349,6 @@ class OxRelaySession internal constructor(
         BedrockServerSession(peer, subClientId) {
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
-            OverlayLogger.e(TAG, "PROBE ServerSession.onPacket TETİKLENDİ — packetId=${wrapper.packetId}")
             try {
                 if (!handleClientPacket(wrapper)) return // listener kendi gönderimini yaptı veya engelledi
 
@@ -368,7 +367,6 @@ class OxRelaySession internal constructor(
         BedrockClientSession(peer, subClientId) {
 
         override fun onPacket(wrapper: BedrockPacketWrapper) {
-            OverlayLogger.e(TAG, "PROBE ClientSession.onPacket TETİKLENDİ — packetId=${wrapper.packetId}")
             try {
                 if (!handleServerPacket(wrapper)) return
 
