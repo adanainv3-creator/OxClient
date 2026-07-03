@@ -1,10 +1,10 @@
 package com.oxclient.module.combat
 
-import android.util.Log
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.*
 import org.cloudburstmc.protocol.bedrock.packet.*
@@ -41,10 +41,15 @@ class AutoTotem : BaseModule(
     override fun onEnable() {
         super.onEnable()
         currentHealth = 20f; totemSlot = -1; offhandHasTotem = false
+        OverlayLogger.d(TAG, "Enabled: triggerMode=${triggerMode.value} threshold=${healthThreshold.value} delay=${delay.value}")
         watchJob = launchTickLoop(20L) { watchTick() }
     }
 
-    override fun onDisable() { watchJob?.cancel(); super.onDisable() }
+    override fun onDisable() {
+        watchJob?.cancel()
+        super.onDisable()
+        OverlayLogger.d(TAG, "Disabled")
+    }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
@@ -55,6 +60,7 @@ class AutoTotem : BaseModule(
                 pkt.attributes.firstOrNull { it.name == "minecraft:health" }?.let {
                     if (it.value < prev) lastDamageMs = System.currentTimeMillis()
                     currentHealth = it.value
+                    OverlayLogger.v(TAG, "Health güncellendi: $prev -> ${it.value}")
                 }
             }
             is InventoryContentPacket -> {
@@ -66,6 +72,7 @@ class AutoTotem : BaseModule(
                         totemSlot == -1 -> { totemSlot = slot; totemNetId = item.netId }
                     }
                 }
+                OverlayLogger.v(TAG, "InventoryContent tarandı: totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem")
             }
             is InventorySlotPacket -> {
                 if (pkt.containerId != 0) return
@@ -73,13 +80,17 @@ class AutoTotem : BaseModule(
                     InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = InventoryUtil.isTotem(pkt.item)
                     in 0..35 -> if (InventoryUtil.isTotem(pkt.item) && totemSlot == -1) {
                         totemSlot = pkt.slot; totemNetId = pkt.item.netId
+                        OverlayLogger.v(TAG, "Yeni totem slotu bulundu: slot=$totemSlot netId=$totemNetId")
                     }
                 }
             }
             is EntityEventPacket -> {
                 if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
                 val t = try { pkt.type?.toString()?.uppercase() ?: "" } catch (_: Exception) { "" }
-                if (t.contains("CONSUME") || t.contains("TOTEM")) offhandHasTotem = false
+                if (t.contains("CONSUME") || t.contains("TOTEM")) {
+                    offhandHasTotem = false
+                    OverlayLogger.v(TAG, "Totem tüketildi (EntityEvent=$t), offhandHasTotem=false")
+                }
             }
             else -> {}
         }
@@ -91,6 +102,9 @@ class AutoTotem : BaseModule(
             TriggerMode.Always      -> !offhandHasTotem || reEquipAlways.value
             TriggerMode.OnDamage    -> !offhandHasTotem && (System.currentTimeMillis() - lastDamageMs < 2000L)
         }
+        if (shouldEquip && totemSlot < 0) {
+            OverlayLogger.v(TAG, "shouldEquip=true ama totemSlot=-1 (envanterde totem yok / InventoryContentPacket henüz gelmedi)")
+        }
         if (shouldEquip && totemSlot >= 0) {
             val now = System.currentTimeMillis()
             if (now - lastEquipMs >= delay.value) {
@@ -101,8 +115,11 @@ class AutoTotem : BaseModule(
 
     private fun equipTotem() {
         val slot    = totemSlot; if (slot < 0) return
-        val session = PacketEventBus.currentSession ?: return
-        Log.d(TAG, "Totem takılıyor slot=$slot netId=$totemNetId")
+        val session = PacketEventBus.currentSession ?: run {
+            OverlayLogger.w(TAG, "equipTotem: session null — relay bağlı değil")
+            return
+        }
+        OverlayLogger.d(TAG, "Totem takılıyor slot=$slot netId=$totemNetId")
         InventoryUtil.sendOffhandEquip(session, slot, totemNetId)
         offhandHasTotem = true
     }

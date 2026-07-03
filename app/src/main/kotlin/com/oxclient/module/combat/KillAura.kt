@@ -4,6 +4,7 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -36,6 +37,8 @@ class KillAura : BaseModule(
     private val autoBlock       = bool ("Auto Block",       false)
     private val shortcut        = bool ("Shortcut",         false)
 
+    private companion object { const val TAG = "KillAura" }
+
     private var currentTargetId   = 0L
     private var lastSwitchMs      = 0L
     private var lastAttackMs      = 0L
@@ -46,12 +49,14 @@ class KillAura : BaseModule(
         super.onEnable()
         currentTargetId   = 0L
         consecutiveMisses = 0
+        OverlayLogger.d(TAG, "Enabled: mode=${attackMode.value} range=${range.value} fov=${fov.value} rotation=${rotationMode.value} swing=${swingMode.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
         super.onDisable()
+        OverlayLogger.d(TAG, "Disabled")
     }
 
     private suspend fun tickLoop() {
@@ -65,6 +70,12 @@ class KillAura : BaseModule(
         val now = System.currentTimeMillis()
         if (now - lastAttackMs < MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)) return
 
+        val inRange = EntityTracker.getEntitiesInRange(range.value)
+        if (inRange.isEmpty() && consecutiveMisses % 40 == 0) {
+            // Range içinde hiç entity yoksa periyodik olarak logla (spam olmasın diye %40)
+            OverlayLogger.v(TAG, "tick: range=${range.value} içinde entity yok (EntityTracker boş dönüyor mu kontrol et)")
+        }
+
         when (attackMode.value) {
             AttackMode.Multi   -> attackMulti(now)
             AttackMode.Closest -> attackClosest(now)
@@ -73,17 +84,29 @@ class KillAura : BaseModule(
     }
 
     private fun attackSingle(now: Long) {
-        val target = selectTarget() ?: run { consecutiveMisses++; return }
+        val target = selectTarget() ?: run {
+            consecutiveMisses++
+            if (consecutiveMisses == 1 || consecutiveMisses % 50 == 0) {
+                OverlayLogger.v(TAG, "selectTarget() null döndü (consecutiveMisses=$consecutiveMisses) — FOV=${fov.value} range=${range.value}")
+            }
+            return
+        }
         consecutiveMisses = 0
-        if (shouldFail()) return
+        if (shouldFail()) {
+            OverlayLogger.v(TAG, "shouldFail() true — saldırı bilerek atlandı (failRate=${failRate.value})")
+            return
+        }
         lastAttackMs = now
         doAttack(target)
     }
 
     private fun attackClosest(now: Long) {
-        val target = EntityTracker.getEntitiesInRange(range.value)
-            .filter { inFov(it) }
-            .minByOrNull { EntityTracker.distanceTo(it) } ?: return
+        val candidates = EntityTracker.getEntitiesInRange(range.value).filter { inFov(it) }
+        val target = candidates.minByOrNull { EntityTracker.distanceTo(it) }
+        if (target == null) {
+            OverlayLogger.v(TAG, "attackClosest: uygun hedef yok (candidates=${candidates.size})")
+            return
+        }
         if (shouldFail()) return
         lastAttackMs = now
         doAttack(target)
@@ -93,13 +116,20 @@ class KillAura : BaseModule(
         val targets = EntityTracker.getEntitiesInRange(range.value)
             .filter { inFov(it) }
             .take(maxTargets.value)
-        if (targets.isEmpty()) return
+        if (targets.isEmpty()) {
+            OverlayLogger.v(TAG, "attackMulti: hedef listesi boş")
+            return
+        }
         lastAttackMs = now
         targets.forEach { e -> if (!shouldFail()) doAttack(e) }
     }
 
     private fun doAttack(e: EntityTracker.TrackedEntity) {
-        val session = PacketEventBus.currentSession ?: return
+        val session = PacketEventBus.currentSession ?: run {
+            OverlayLogger.w(TAG, "doAttack: PacketEventBus.currentSession null — relay bağlı değil mi?")
+            return
+        }
+        OverlayLogger.v(TAG, "doAttack: target=${e.runtimeId} dist=${"%.2f".format(EntityTracker.distanceTo(e))} rotation=${rotationMode.value} swing=${swingMode.value}")
 
         when (rotationMode.value) {
             RotationMode.Lock -> {

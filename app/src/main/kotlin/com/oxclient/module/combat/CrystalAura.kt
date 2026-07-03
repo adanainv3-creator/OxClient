@@ -4,6 +4,7 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -50,16 +51,20 @@ class CrystalAura : BaseModule(
     private var seqIndex = 0
     private var tickJob: Job? = null
 
+    private companion object { const val TAG = "CrystalAura" }
+
     override fun onEnable() {
         super.onEnable()
         activeCrystals.clear(); uniqueToRuntime.clear(); placedPositions.clear()
         seqIndex = 0
+        OverlayLogger.d(TAG, "Enabled: autoPlace=${autoPlace.value} autoBreak=${autoBreak.value} placeMode=${placeMode.value} breakMode=${breakMode.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
         super.onDisable()
+        OverlayLogger.d(TAG, "Disabled — activeCrystals=${activeCrystals.size} temizlendi")
         activeCrystals.clear(); uniqueToRuntime.clear(); placedPositions.clear()
     }
 
@@ -70,11 +75,15 @@ class CrystalAura : BaseModule(
                 if (pkt.identifier.contains("crystal", ignoreCase = true)) {
                     activeCrystals[pkt.runtimeEntityId] = pkt.position
                     uniqueToRuntime[pkt.uniqueEntityId] = pkt.runtimeEntityId
+                    OverlayLogger.v(TAG, "Crystal AddEntity yakalandı: runtimeId=${pkt.runtimeEntityId} pos=${pkt.position} (toplam=${activeCrystals.size})")
                 }
             }
             is RemoveEntityPacket -> {
                 val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
-                if (rid != null) activeCrystals.remove(rid)
+                if (rid != null) {
+                    activeCrystals.remove(rid)
+                    OverlayLogger.v(TAG, "Crystal RemoveEntity: runtimeId=$rid (kalan=${activeCrystals.size})")
+                }
             }
             is LevelEventPacket -> {
                 val typeStr = pkt.type?.toString()?.uppercase() ?: ""
@@ -93,6 +102,8 @@ class CrystalAura : BaseModule(
                 if (target != null) {
                     if (autoBreak.value) doBreak(target)
                     if (autoPlace.value) doPlace(target)
+                } else if (System.currentTimeMillis() % 3000L < 10L) {
+                    OverlayLogger.v(TAG, "tickLoop: hedef bulunamadı (placeRange=${placeRange.value} breakRange=${breakRange.value} throughWalls=${throughWalls.value})")
                 }
             }
             delay(10L)
@@ -113,7 +124,10 @@ class CrystalAura : BaseModule(
         val now = System.currentTimeMillis()
         if (now - lastPlaceMs < placeDelay.value) return
         lastPlaceMs = now
-        val session = PacketEventBus.currentSession ?: return
+        val session = PacketEventBus.currentSession ?: run {
+            OverlayLogger.w(TAG, "doPlace: session null — relay bağlı değil")
+            return
+        }
         val tx = target.x.toInt(); val ty = target.y.toInt(); val tz = target.z.toInt()
         var placed = 0
         val range = if (throughWalls.value) wallsRange.value else placeRange.value
@@ -155,17 +169,26 @@ class CrystalAura : BaseModule(
             placedPositions[bKey] = now
             placed++
         }
+        if (placed > 0) OverlayLogger.v(TAG, "doPlace: $placed kristal yerleştirme paketi gönderildi (target=${target.runtimeId})")
+        else OverlayLogger.v(TAG, "doPlace: uygun blok pozisyonu bulunamadı (range=$range antiSuicide=${antiSuicide.value})")
     }
 
     private fun doBreak(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         if (now - lastBreakMs < breakDelay.value) return
         lastBreakMs = now
-        val session = PacketEventBus.currentSession ?: return
+        val session = PacketEventBus.currentSession ?: run {
+            OverlayLogger.w(TAG, "doBreak: session null — relay bağlı değil")
+            return
+        }
         val sorted = activeCrystals.entries
             .filter { (_, p) -> MathUtil.dist3(p.x, p.y, p.z,
                 EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= breakRange.value }
             .sortedBy { (_, p) -> MathUtil.dist3(p.x, p.y, p.z, target.x, target.y, target.z) }
+
+        if (sorted.isEmpty()) {
+            OverlayLogger.v(TAG, "doBreak: range içinde kırılacak crystal yok (breakRange=${breakRange.value}, activeCrystals=${activeCrystals.size})")
+        }
 
         when (breakMode.value) {
             BreakMode.Instant -> {

@@ -3,6 +3,7 @@ package com.oxclient.module.combat
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.PacketUtil
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
@@ -23,7 +24,19 @@ class Criticals : BaseModule(
     private val cooldown = int  ("Cooldown",       100, 0, 500)
     private val shortcut = bool ("Shortcut",       false)
 
+    private companion object { const val TAG = "Criticals" }
+
     @Volatile private var lastCritMs = 0L
+
+    override fun onEnable() {
+        super.onEnable()
+        OverlayLogger.d(TAG, "Enabled: mode=${mode.value} cooldown=${cooldown.value}")
+    }
+
+    override fun onDisable() {
+        super.onDisable()
+        OverlayLogger.d(TAG, "Disabled")
+    }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
@@ -35,13 +48,23 @@ class Criticals : BaseModule(
         val isAttack = pkt.transactionType == InventoryTransactionType.ITEM_USE_ON_ENTITY &&
                        pkt.actionType == 1
 
-        if (!isAttack) return
+        if (!isAttack) {
+            OverlayLogger.v(TAG, "onPacket: InventoryTransactionPacket ama attack değil (transactionType=${pkt.transactionType} actionType=${pkt.actionType})")
+            return
+        }
 
         val now = System.currentTimeMillis()
-        if (now - lastCritMs < cooldown.value) return
+        if (now - lastCritMs < cooldown.value) {
+            OverlayLogger.v(TAG, "Attack tespit edildi ama cooldown içinde (kalan=${cooldown.value - (now - lastCritMs)}ms)")
+            return
+        }
         lastCritMs = now
 
-        val session = PacketEventBus.currentSession ?: return
+        val session = PacketEventBus.currentSession ?: run {
+            OverlayLogger.w(TAG, "onPacket: session null — relay bağlı değil")
+            return
+        }
+        OverlayLogger.v(TAG, "Attack tespit edildi, crit enjekte ediliyor: mode=${mode.value}")
         when (mode.value) {
             CritMode.Vanilla    -> injectVanilla(session)
             CritMode.MovePacket -> injectMovePacket(session)

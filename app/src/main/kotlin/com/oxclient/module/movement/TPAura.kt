@@ -4,6 +4,7 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -35,11 +36,14 @@ class TPAura : BaseModule(
     private var orbitAngle  = 0.0
     private var tickJob: Job? = null
 
+    private companion object { const val TAG = "TPAura" }
+
     override fun onEnable() {
         super.onEnable()
         tpInProgress = false
         strafeAngle  = 0.0
         orbitAngle   = 0.0
+        OverlayLogger.d(TAG, "Enabled: mode=${mode.value} range=${range.value} returnMode=${returnMode.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -47,6 +51,7 @@ class TPAura : BaseModule(
         tickJob?.cancel()
         super.onDisable()
         tpInProgress = false
+        OverlayLogger.d(TAG, "Disabled")
     }
 
     private suspend fun tickLoop() {
@@ -55,7 +60,11 @@ class TPAura : BaseModule(
             if (isEnabled && !tpInProgress && now - lastAttackMs >= attackCooldown.value) {
                 val target = EntityTracker.getEntitiesInRange(range.value)
                     .minByOrNull { EntityTracker.distanceTo(it) }
-                if (target != null) tpAttack(target, now)
+                if (target != null) {
+                    tpAttack(target, now)
+                } else if (now % 3000L < 50L) {
+                    OverlayLogger.v(TAG, "tickLoop: range=${range.value} içinde hedef yok")
+                }
             }
             delay(50L)
         }
@@ -64,7 +73,12 @@ class TPAura : BaseModule(
     private suspend fun tpAttack(target: EntityTracker.TrackedEntity, now: Long) {
         tpInProgress = true
         lastAttackMs = now
-        val session = PacketEventBus.currentSession ?: run { tpInProgress = false; return }
+        val session = PacketEventBus.currentSession ?: run {
+            OverlayLogger.w(TAG, "tpAttack: session null — relay bağlı değil")
+            tpInProgress = false
+            return
+        }
+        OverlayLogger.v(TAG, "tpAttack başlıyor: target=${target.runtimeId} mode=${mode.value}")
 
         val origX = EntityTracker.selfX
         val origY = EntityTracker.selfY
@@ -101,6 +115,7 @@ class TPAura : BaseModule(
             ReturnMode.None -> {}
         }
 
+        OverlayLogger.v(TAG, "tpAttack tamamlandı: target=${target.runtimeId} attacksPerTp=${attacksPerTp.value} returnMode=${returnMode.value}")
         tpInProgress = false
     }
 

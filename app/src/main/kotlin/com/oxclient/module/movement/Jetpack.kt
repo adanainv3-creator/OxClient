@@ -3,6 +3,7 @@ package com.oxclient.module.movement
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.PacketUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
@@ -30,10 +31,18 @@ class Jetpack : BaseModule(
     @Volatile private var tickCount   = 0
     @Volatile private var hoverBaseY  = 0f
 
+    private companion object { const val TAG = "Jetpack" }
+
     override fun onEnable() {
         super.onEnable()
         tickCount  = 0
         hoverBaseY = EntityTracker.selfY
+        OverlayLogger.d(TAG, "Enabled: mode=${jetMode.value} vSpeed=${verticalSpeed.value} hoverBaseY=$hoverBaseY")
+    }
+
+    override fun onDisable() {
+        super.onDisable()
+        OverlayLogger.d(TAG, "Disabled (tickCount=$tickCount)")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -50,11 +59,18 @@ class Jetpack : BaseModule(
 
         jumpPressed = try {
             pkt.inputData?.any { it.toString().uppercase().contains("JUMP") } == true
-        } catch (_: Exception) { false }
+        } catch (_: Exception) {
+            OverlayLogger.v(TAG, "inputData okunamadı, jumpPressed=false varsayıldı")
+            false
+        }
 
         tickCount++
         val newY = calcNewY(pkt.position.y)
-        if (newY == pkt.position.y) return
+        if (newY == pkt.position.y) {
+            if (tickCount % 100 == 0) OverlayLogger.v(TAG, "handleAuthInput: newY == pkt.position.y, paket değiştirilmedi (mode=${jetMode.value})")
+            return
+        }
+        if (tickCount % 20 == 0) OverlayLogger.v(TAG, "handleAuthInput: y ${pkt.position.y} -> $newY (mode=${jetMode.value})")
 
         // FIX: PlayerAuthInputPacket'te inputData val'dır, doğrudan atama yapılamaz.
         // Yeni bir paket oluşturulurken inputData set edilmez; bunun yerine
@@ -77,7 +93,10 @@ class Jetpack : BaseModule(
 
     private fun handleMovePlayer(event: PacketEvent, pkt: MovePlayerPacket) {
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
+        if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) {
+            OverlayLogger.v(TAG, "handleMovePlayer: runtimeEntityId eşleşmiyor (pkt=${pkt.runtimeEntityId} self=${EntityTracker.selfRuntimeId}) — selfRuntimeId doğru set edilmiş mi kontrol et")
+            return
+        }
         tickCount++
         val newY = calcNewY(pkt.position.y)
         if (newY == pkt.position.y) return
