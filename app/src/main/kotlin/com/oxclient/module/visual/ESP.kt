@@ -10,6 +10,7 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.BlockTracker
 import com.oxclient.utils.BlockTracker.TrackedBlockType
 import com.oxclient.utils.MathUtil

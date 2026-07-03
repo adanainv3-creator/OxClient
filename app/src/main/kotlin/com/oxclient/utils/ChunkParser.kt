@@ -70,7 +70,7 @@ object ChunkParser {
             OverlayLogger.v(TAG, "Doğrudan NBT parse boş döndü, tarama moduna geçiliyor")
             scanForCompounds(buf)
         } catch (e: Exception) {
-            OverlayLogger.v(TAG, "Chunk parse edilemedi (${pkt.subChunkCount.let { "" }}): ${e.message}")
+            OverlayLogger.v(TAG, "Chunk parse edilemedi (subChunkLimit=${pkt.subChunkLimit}): ${e.message}")
             emptyList()
         }
     }
