@@ -41,7 +41,7 @@ class AutoTotem : BaseModule(
     override fun onEnable() {
         super.onEnable()
         currentHealth = 20f; totemSlot = -1; offhandHasTotem = false
-        watchJob = scope.launch { watchLoop() }
+        watchJob = launchTickLoop(20L) { watchTick() }
     }
 
     override fun onDisable() { watchJob?.cancel(); super.onDisable() }
@@ -85,22 +85,17 @@ class AutoTotem : BaseModule(
         }
     }
 
-    private suspend fun watchLoop() {
-        while (currentCoroutineContext().isActive) {
-            if (isEnabled) {
-                val shouldEquip = when (triggerMode.value) {
-                    TriggerMode.HealthBased -> currentHealth <= healthThreshold.value && !offhandHasTotem
-                    TriggerMode.Always      -> !offhandHasTotem || reEquipAlways.value
-                    TriggerMode.OnDamage    -> !offhandHasTotem && (System.currentTimeMillis() - lastDamageMs < 2000L)
-                }
-                if (shouldEquip && totemSlot >= 0) {
-                    val now = System.currentTimeMillis()
-                    if (now - lastEquipMs >= delay.value) {
-                        lastEquipMs = now; equipTotem()
-                    }
-                }
+    private fun watchTick() {
+        val shouldEquip = when (triggerMode.value) {
+            TriggerMode.HealthBased -> currentHealth <= healthThreshold.value && !offhandHasTotem
+            TriggerMode.Always      -> !offhandHasTotem || reEquipAlways.value
+            TriggerMode.OnDamage    -> !offhandHasTotem && (System.currentTimeMillis() - lastDamageMs < 2000L)
+        }
+        if (shouldEquip && totemSlot >= 0) {
+            val now = System.currentTimeMillis()
+            if (now - lastEquipMs >= delay.value) {
+                lastEquipMs = now; equipTotem()
             }
-            delay(20L)
         }
     }
 

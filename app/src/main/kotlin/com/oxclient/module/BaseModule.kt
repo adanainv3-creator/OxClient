@@ -2,12 +2,18 @@ package com.oxclient.module
 
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
+import com.oxclient.ui.overlay.OverlayLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 enum class ModuleCategory(val displayName: String) {
     COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc")
@@ -62,6 +68,7 @@ abstract class BaseModule(
     fun setEnabled(v: Boolean) {
         if (_enabledFlow.value == v) return
         _enabledFlow.value = v
+        OverlayLogger.d(name, if (v) "Etkinleştirildi" else "Devre dışı bırakıldı")
         if (v) onEnable() else onDisable()
     }
 
@@ -71,6 +78,30 @@ abstract class BaseModule(
     protected open fun onDisable() { PacketEventBus.unregister(this) }
 
     override fun onPacket(event: PacketEvent) {}
+
+    /**
+     * Modüllerin tick-bazlı loop'ları için ortak, güvenli launcher.
+     * Eskiden her modül kendi `scope.launch { while(...) { tick() } }` yapısını
+     * kuruyordu ve tick() içinde atılan bir exception loop'u SESSİZCE öldürüyordu
+     * (hiçbir yere log düşmüyordu). Artık her tick try-catch içinde ve hata
+     * OverlayLogger'a düşüyor, loop bir sonraki tick'te devam ediyor.
+     *
+     * @param intervalMs tick'ler arası bekleme
+     * @param block       her tick'te (sadece isEnabled iken) çalışacak kod
+     */
+    protected fun launchTickLoop(intervalMs: Long, block: suspend () -> Unit): Job =
+        scope.launch {
+            while (currentCoroutineContext().isActive) {
+                if (isEnabled) {
+                    try {
+                        block()
+                    } catch (e: Exception) {
+                        OverlayLogger.e(name, "Tick hatası: ${e.message}", e)
+                    }
+                }
+                delay(intervalMs)
+            }
+        }
 
     protected fun bool(name: String, default: Boolean = false) =
         BoolSetting(name, default).also { settings.add(it) }

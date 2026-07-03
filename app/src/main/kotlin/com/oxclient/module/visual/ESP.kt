@@ -72,7 +72,7 @@ class ESP : BaseModule(
         super.onEnable()
         BlockTracker.clear()
         smoothedScreenPos.clear()
-        updateJob = scope.launch { updateLoop() }
+        updateJob = launchTickLoop(updateRateMs.value.toLong()) { updateTick() }
     }
 
     override fun onDisable() {
@@ -120,20 +120,30 @@ class ESP : BaseModule(
     }
 
     private fun handleChunk(pkt: LevelChunkPacket) {
-        // NOT: LevelChunkPacket'in içeriği ham/sıkıştırılmış sub-chunk verisi olarak gelir
-        // (blok state paleti + block-entity NBT listesi bu blob'un içinde). Bunu burada
-        // decode etmiyoruz — bu yüzden ESP, chunk ilk yüklendiğinde zaten var olan
-        // sandık/spawner gibi blokları henüz göremez; yalnızca palet düzeltmesinden sonra
-        // UpdateBlockPacket/BlockEntityDataPacket ile SONRADAN değişen/görünen bloklar
-        // yakalanır. İlk yükte var olan blokları da yakalamak istersen chunk blob'unu
-        // decode eden bir parser lazım (relay dosyanı paylaşırsan ekleyebilirim).
+        // Block section'ları atlayıp block-entity NBT listesini çıkarır (bkz. ChunkParser.kt
+        // başındaki not: block section parse'ı stabil, biome/border sonrası kısım için
+        // katmanlı fallback var). Başarısız olursa bu chunk için sadece log düşer,
+        // relay passthrough'u hiç etkilemez — ESP o bloğu UpdateBlockPacket/
+        // BlockEntityDataPacket geldiğinde yine yakalar.
+        val entities = com.oxclient.utils.ChunkParser.extractBlockEntities(pkt)
+        if (entities.isEmpty()) return
+
+        var matched = 0
+        for (be in entities) {
+            val id = be.tag.getString("id") ?: continue
+            val type = BlockTracker.resolveBlockName(id) ?: continue
+            if (isTypeEnabled(type)) {
+                BlockTracker.add(be.x, be.y, be.z, type)
+                matched++
+            }
+        }
+        if (matched > 0) {
+            OverlayLogger.v("ESP", "Chunk taraması: ${entities.size} block-entity, $matched eşleşti")
+        }
     }
 
-    private suspend fun updateLoop() {
-        while (currentCoroutineContext().isActive) {
-            if (isEnabled) rebuildRenderList()
-            delay(200L)
-        }
+    private fun updateTick() {
+        rebuildRenderList()
     }
 
     private fun rebuildRenderList() {
