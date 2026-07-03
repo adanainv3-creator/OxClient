@@ -65,6 +65,17 @@ object MicrosoftAuthManager {
         if (saved != null && saved.isRelayReady()) {
             _authState.value = AuthState.Success(saved.gamertag, saved.mcToken)
             OverlayLogger.i(TAG, "Kaydedilen hesap yüklendi: ${saved.gamertag}")
+            // Kayıtlı private key'i hemen belleğe al — uygulama açılışında relay hazır olsun
+            try {
+                if (saved.privateKeyB64.isNotBlank()) {
+                    val keyBytes = android.util.Base64.decode(saved.privateKeyB64, android.util.Base64.NO_WRAP)
+                    encryptionPrivateKey = java.security.KeyFactory.getInstance("EC")
+                        .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
+                    OverlayLogger.d(TAG, "encryptionPrivateKey (kayıtlı hesaptan) set edildi ✓")
+                }
+            } catch (e: Exception) {
+                OverlayLogger.e(TAG, "encryptionPrivateKey (kayıtlı) set edilemedi: ${e.message}")
+            }
         } else if (saved != null && saved.isExpired()) {
             OverlayLogger.w(TAG, "Token süresi dolmuş, yenileniyor: ${saved.gamertag}")
             scope.launch { refreshTokenSilently(saved) }
@@ -185,6 +196,21 @@ object MicrosoftAuthManager {
         AccountManager.addAccount(account)
         AccountManager.selectAccount(account)
 
+        // Handshake encryption için private key'i belleğe al
+        // (AccountManager'daki Base64 string'i her bağlantıda decode etmek yerine
+        // hazır ECPrivateKey olarak tutuyoruz — getPrivateKeyForEncryption() bunu döner)
+        try {
+            if (mcResult.privateKeyB64.isNotBlank()) {
+                val keyBytes = android.util.Base64.decode(mcResult.privateKeyB64, android.util.Base64.NO_WRAP)
+                val privKey  = java.security.KeyFactory.getInstance("EC")
+                    .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
+                encryptionPrivateKey = privKey
+                OverlayLogger.d(TAG, "encryptionPrivateKey set edildi ✓")
+            }
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "encryptionPrivateKey set edilemedi: ${e.message}")
+        }
+
         withContext(Dispatchers.Main) {
             _authState.value = AuthState.Success(gamertag, mcResult.chainJson)
         }
@@ -218,6 +244,15 @@ object MicrosoftAuthManager {
             AccountManager.selectedAccount?.let { updated ->
                 AccountManager.addAccount(updated.copy(refreshToken = refreshToken))
             }
+
+            // Yeni key'i belleğe al
+            try {
+                if (mcResult.privateKeyB64.isNotBlank()) {
+                    val keyBytes = android.util.Base64.decode(mcResult.privateKeyB64, android.util.Base64.NO_WRAP)
+                    encryptionPrivateKey = java.security.KeyFactory.getInstance("EC")
+                        .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
+                }
+            } catch (_: Exception) {}
 
             _authState.value = AuthState.Success(account.gamertag, mcResult.chainJson)
             OverlayLogger.i(TAG, "Token yenilendi: ${account.gamertag}")
