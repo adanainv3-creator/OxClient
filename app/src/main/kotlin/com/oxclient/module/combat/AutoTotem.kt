@@ -41,8 +41,24 @@ class AutoTotem : BaseModule(
     override fun onEnable() {
         super.onEnable()
         currentHealth = 20f; totemSlot = -1; offhandHasTotem = false
-        OverlayLogger.d(TAG, "Enabled: triggerMode=${triggerMode.value} threshold=${healthThreshold.value} delay=${delay.value}")
+        // ✅ FIX: InventoryContentPacket sadece bağlantı başında/envanter açıldığında
+        // gelir. Oyuna girdikten SONRA AutoTotem enable edilirse bu paket bir daha hiç
+        // gelmeyebilir ve totemSlot hep -1 kalırdı. EntityTracker'ın her zaman güncel
+        // tuttuğu envanter önbelleğinden burada anında tarama yapıyoruz.
+        scanCachedInventory()
+        OverlayLogger.d(TAG, "Enabled: triggerMode=${triggerMode.value} threshold=${healthThreshold.value} delay=${delay.value} (cache'ten totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem)")
         watchJob = launchTickLoop(20L) { watchTick() }
+    }
+
+    private fun scanCachedInventory() {
+        val snapshot = EntityTracker.getInventorySnapshot()
+        if (snapshot.isEmpty()) return
+        snapshot.forEach { (slot, item) ->
+            if (InventoryUtil.isTotem(item)) when {
+                slot == InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = true
+                slot in 0..35 && totemSlot == -1 -> { totemSlot = slot; totemNetId = item.netId }
+            }
+        }
     }
 
     override fun onDisable() {

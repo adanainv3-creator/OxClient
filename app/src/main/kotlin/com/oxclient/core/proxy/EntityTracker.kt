@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityEventType
 import org.cloudburstmc.protocol.bedrock.data.entity.EntityLinkData
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.*
@@ -69,6 +70,13 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
     private val playerNames     = ConcurrentHashMap<Long, String>()
 
+    // ✅ FIX: Kendi envanterimizin sürekli/oturum-boyunca önbelleği. InventoryContentPacket
+    // sadece bağlantı başında/envanter açıldığında gelir; AutoTotem gibi modüller oyuna
+    // girdikten SONRA enable edilirse bu paketi bir daha hiç göremiyordu (BlockTracker'daki
+    // palet sorununun envanter karşılığı). EntityTracker zaten her zaman aktif olduğu için
+    // envanter durumu burada tutulup modüller enable anında buradan "yakalanabiliyor".
+    private val selfInventory = ConcurrentHashMap<Int, ItemData>()
+
     @Volatile var selfRuntimeId  : Long    = 0L
     @Volatile var selfUniqueId   : Long    = 0L
     @Volatile var selfX          : Float   = 0f
@@ -100,6 +108,7 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
+        selfInventory.clear()
         selfRuntimeId = 0L; selfUniqueId = 0L
         selfX = 0f; selfY = 0f; selfZ = 0f; selfYaw = 0f; selfPitch = 0f
         selfHealth = 20f; selfMaxHealth = 20f; selfAbsorb = 0f; selfArmor = 0f
@@ -129,6 +138,8 @@ object EntityTracker : PacketEventBus.PacketListener {
             is ChangeDimensionPacket    -> handleDimension(p)
             is SetEntityLinkPacket      -> handleEntityLink(p)
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
+            is InventoryContentPacket   -> handleInventoryContent(p)
+            is InventorySlotPacket      -> handleInventorySlot(p)
             else -> {}
         }
     }
@@ -345,6 +356,28 @@ object EntityTracker : PacketEventBus.PacketListener {
             }
         } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
     }
+
+    private fun handleInventoryContent(p: InventoryContentPacket) {
+        if (p.containerId != 0) return // sadece ana envanter (0) — envanter dışı container'ları takip etmiyoruz
+        selfInventory.clear()
+        p.contents.forEachIndexed { slot, item ->
+            if (item != null && item != ItemData.AIR) selfInventory[slot] = item
+        }
+    }
+
+    private fun handleInventorySlot(p: InventorySlotPacket) {
+        if (p.containerId != 0) return
+        val item = p.item
+        if (item == null || item == ItemData.AIR) selfInventory.remove(p.slot)
+        else selfInventory[p.slot] = item
+    }
+
+    /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
+    fun getInventoryItem(slot: Int): ItemData? = selfInventory[slot]
+
+    /** Ana envanterin anlık kopyası — slot -> ItemData. Modüller geç enable olsa bile
+     *  buradan mevcut durumu okuyabilir (bkz. selfInventory üstteki not). */
+    fun getInventorySnapshot(): Map<Int, ItemData> = selfInventory.toMap()
 
     private fun applyMetadata(entity: TrackedEntity, metadata: Map<*, *>?) {
         if (metadata == null) return

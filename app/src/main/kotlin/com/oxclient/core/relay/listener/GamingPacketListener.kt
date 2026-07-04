@@ -4,6 +4,8 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.ConnectionManager
 import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.ui.overlay.OverlayLogger
+import com.oxclient.utils.BlockTracker
+import com.oxclient.utils.ChunkParser
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleNamedDefinition
 import org.cloudburstmc.protocol.bedrock.packet.*
@@ -74,8 +76,24 @@ class GamingPacketListener : OxPacketListener {
             is StartGamePacket -> {
                 OverlayLogger.i(TAG, "StartGame → entityId=${packet.runtimeEntityId} dim=${packet.dimensionId}")
                 applyStartGameDefinitions(packet, session)
+                // ✅ FIX: Blok paleti artık ESP modülünün enable durumundan BAĞIMSIZ,
+                // oturum seviyesinde her zaman yükleniyor. Önceden bu çağrı sadece
+                // ESP.onPacket() içindeydi — StartGamePacket bağlantı başında BİR KERE
+                // geldiği için, ESP oyuna girdikten sonra açılırsa palet asla yüklenmiyor
+                // ve ESP sürekli eski/statik BLOCK_ID_MAP'e (eşleşmeyen id'ler) düşüyordu.
+                BlockTracker.loadPalette(packet)
                 ConnectionManager.onGameStarted()
             }
+
+            // ── Blok takibi (ESP için veri kaynağı) ───────────────────────
+            // Aşağıdaki üç paket de artık modül enable durumundan bağımsız,
+            // oturum boyunca her zaman BlockTracker'a besleniyor (EntityTracker'ın
+            // entity verisini her zaman toplaması ile aynı mantık). ESP modülü
+            // sadece BlockTracker'daki veriyi kendi ayarlarına göre FİLTRELEYİP
+            // render ediyor — artık veri toplama işini yapmıyor.
+            is UpdateBlockPacket -> handleUpdateBlock(packet)
+            is BlockEntityDataPacket -> handleBlockEntity(packet)
+            is LevelChunkPacket -> handleChunk(packet)
 
             // ── CameraPresetsPacket ───────────────────────────────────────
             // MC 1.21.20+ sürümlerde CameraPreset definitions yoksa crash.
@@ -140,6 +158,40 @@ class GamingPacketListener : OxPacketListener {
             }
         }
         return true
+    }
+
+    // ── Block Tracking Helpers (BlockTracker'ın veri kaynağı) ─────────────
+
+    private fun handleUpdateBlock(pkt: UpdateBlockPacket) {
+        val pos = pkt.blockPosition
+        val runtimeId = pkt.definition?.runtimeId ?: return
+        val type = BlockTracker.resolveBlockId(runtimeId)
+        if (type != null) BlockTracker.add(pos.x, pos.y, pos.z, type)
+        else BlockTracker.remove(pos.x, pos.y, pos.z)
+    }
+
+    private fun handleBlockEntity(pkt: BlockEntityDataPacket) {
+        val pos = pkt.blockPosition
+        val tag = pkt.data ?: return
+        val id  = tag.getString("id") ?: return
+        val type = BlockTracker.resolveBlockName(id) ?: return
+        BlockTracker.add(pos.x, pos.y, pos.z, type)
+    }
+
+    private fun handleChunk(pkt: LevelChunkPacket) {
+        // Chunk ilk yüklendiğinde zaten var olan block-entity'leri (sandık/spawner/vb.)
+        // yakalamak için. Parse başarısız olursa sessizce atlanır — relay passthrough'u
+        // etkilemez, o blok UpdateBlockPacket/BlockEntityDataPacket geldiğinde yine yakalanır.
+        val entities = try { ChunkParser.extractBlockEntities(pkt) } catch (e: Exception) {
+            OverlayLogger.v(TAG, "Chunk parse hatası: ${e.message}")
+            return
+        }
+        if (entities.isEmpty()) return
+        for (be in entities) {
+            val id = be.tag.getString("id") ?: continue
+            val type = BlockTracker.resolveBlockName(id) ?: continue
+            BlockTracker.add(be.x, be.y, be.z, type)
+        }
     }
 
     // ── Definition Helpers ────────────────────────────────────────────────

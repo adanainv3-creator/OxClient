@@ -7,18 +7,12 @@ import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.events.PacketEvent
-import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.BlockTracker
 import com.oxclient.utils.BlockTracker.TrackedBlockType
 import com.oxclient.utils.MathUtil
 import kotlinx.coroutines.*
-import org.cloudburstmc.protocol.bedrock.packet.LevelChunkPacket
-import org.cloudburstmc.protocol.bedrock.packet.UpdateBlockPacket
-import org.cloudburstmc.protocol.bedrock.packet.BlockEntityDataPacket
-import org.cloudburstmc.protocol.bedrock.packet.StartGamePacket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.*
@@ -71,7 +65,10 @@ class ESP : BaseModule(
 
     override fun onEnable() {
         super.onEnable()
-        BlockTracker.clear()
+        // ✅ FIX: BlockTracker.clear() artık BURADA çağrılmıyor. BlockTracker, EntityTracker
+        // gibi oturum boyunca her zaman aktif (bkz. GamingPacketListener) — modül enable/disable
+        // durumundan bağımsız veri topluyor. ESP burada temizlerse, ESP kapalıyken toplanmış
+        // tüm bloklar (chunk yüklenmesi vb.) enable anında silinip render için hiç kalmıyordu.
         smoothedScreenPos.clear()
         updateJob = launchTickLoop(updateRateMs.value.toLong()) { updateTick() }
     }
@@ -81,66 +78,8 @@ class ESP : BaseModule(
         super.onDisable()
         renderList.clear()
         smoothedScreenPos.clear()
-        BlockTracker.clear()
-    }
-
-    override fun onPacket(event: PacketEvent) {
-        if (!isEnabled) return
-        when (val pkt = event.packet) {
-            // ✅ EKLENDİ: StartGamePacket'teki dinamik blok paleti olmadan resolveBlockId
-            // hiçbir zaman doğru sonuç vermiyordu (bkz. BlockTracker.loadPalette).
-            is StartGamePacket -> BlockTracker.loadPalette(pkt)
-            is UpdateBlockPacket -> handleUpdateBlock(pkt)
-            is BlockEntityDataPacket -> handleBlockEntity(pkt)
-            is LevelChunkPacket -> handleChunk(pkt)
-            else -> {}
-        }
-    }
-
-    private fun handleUpdateBlock(pkt: UpdateBlockPacket) {
-        val pos = pkt.blockPosition
-        val runtimeId = pkt.definition?.runtimeId ?: return
-        val type = BlockTracker.resolveBlockId(runtimeId)
-        if (type != null) {
-            if (isTypeEnabled(type)) {
-                BlockTracker.add(pos.x, pos.y, pos.z, type)
-            }
-        } else {
-            BlockTracker.remove(pos.x, pos.y, pos.z)
-        }
-    }
-
-    private fun handleBlockEntity(pkt: BlockEntityDataPacket) {
-        val pos = pkt.blockPosition
-        val tag = pkt.data ?: return
-        val id  = tag.getString("id") ?: return
-        val type = BlockTracker.resolveBlockName(id) ?: return
-        if (isTypeEnabled(type)) {
-            BlockTracker.add(pos.x, pos.y, pos.z, type)
-        }
-    }
-
-    private fun handleChunk(pkt: LevelChunkPacket) {
-        // Block section'ları atlayıp block-entity NBT listesini çıkarır (bkz. ChunkParser.kt
-        // başındaki not: block section parse'ı stabil, biome/border sonrası kısım için
-        // katmanlı fallback var). Başarısız olursa bu chunk için sadece log düşer,
-        // relay passthrough'u hiç etkilemez — ESP o bloğu UpdateBlockPacket/
-        // BlockEntityDataPacket geldiğinde yine yakalar.
-        val entities = com.oxclient.utils.ChunkParser.extractBlockEntities(pkt)
-        if (entities.isEmpty()) return
-
-        var matched = 0
-        for (be in entities) {
-            val id = be.tag.getString("id") ?: continue
-            val type = BlockTracker.resolveBlockName(id) ?: continue
-            if (isTypeEnabled(type)) {
-                BlockTracker.add(be.x, be.y, be.z, type)
-                matched++
-            }
-        }
-        if (matched > 0) {
-            OverlayLogger.v("ESP", "Chunk taraması: ${entities.size} block-entity, $matched eşleşti")
-        }
+        // NOT: BlockTracker.clear() burada da çağrılmıyor — veri kaynağı artık ESP'nin
+        // enable durumuna bağlı değil, session sonlanana kadar (SessionManager) kalıcı.
     }
 
     private fun updateTick() {
