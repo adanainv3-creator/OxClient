@@ -1,169 +1,171 @@
 package com.oxclient.module.movement
 
 import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
-import com.oxclient.utils.MathUtil
-import com.oxclient.utils.PacketUtil
-import com.oxclient.utils.RotationUtil
 import kotlinx.coroutines.*
+import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
+import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.random.Random
 
+/**
+ * TPAuraOrbit — hedef etrafında Random/Strafe/Behind modlarıyla dolanır.
+ *
+ * DÜZELTMELER (önceki bozuk sürüme göre):
+ *  - `by enumValue(...)/floatValue(...)` BaseModule'de yok, `by` delegate
+ *    desteklenmiyor (EnumSetting/FloatSetting getValue/setValue implement
+ *    etmiyor) -> gerçek API'ye çevrildi: enum(...), float(...) (min,max ayrı param).
+ *  - `EntityTracker.selfId` yok -> `EntityTracker.selfRuntimeId`.
+ *  - Reflection ile `sendPacket` arama tamamen kaldırıldı (metod adı zaten
+ *    yanlıştı, her zaman NoSuchMethodException atıp paketi sessizce yutuyordu).
+ *    Bunun yerine projenin geri kalanıyla tutarlı şekilde `session.serverBound(...)`
+ *    direkt kullanılıyor.
+ *  - `it.name != null` anlamsızdı (name zaten non-null String) -> kaldırıldı.
+ *
+ */
 class TPAura : BaseModule(
     name        = "TPAura",
     category    = ModuleCategory.MOVEMENT,
-    description = "Hedefe ışınlanarak saldırır"
+    description = "Rakip etrafında hareket eder"
 ) {
-    enum class TpMode    { Random, Strafe, Behind, Speed, Orbit }
-    enum class ReturnMode{ Instant, Delayed, None }
+    enum class MoveMode { Random, Strafe, Behind }
 
-    private val mode            = enum ("Mode",             TpMode.Strafe)
-    private val returnMode      = enum ("Return Mode",      ReturnMode.Delayed)
-    private val range           = float("Range",            1.5f,  0.5f,  6f)
-    private val yOffset         = float("Y Offset",         0f,   -2f,    2f)
-    private val horizontalSpeed = float("Horizontal Speed", 6.11f, 0.1f, 20f)
-    private val verticalSpeed   = float("Vertical Speed",   4f,    0.1f, 10f)
-    private val strafeSpeed     = float("Strafe Speed",     20f,   1f,   50f)
-    private val attackCooldown  = int  ("Attack Cooldown",  200,   50,  1000)
-    private val attacksPerTp    = int  ("Attacks Per TP",   1,     1,    5)
-    private val rotate          = bool ("Rotate",           true)
-    private val shortcut        = bool ("Shortcut",         true)
+    private val moveMode         = enum ("Mode",              MoveMode.Strafe)
+    private val range            = float("Range",             3f,   1f,   8f)
+    private val horizontalSpeed  = float("Horizontal Speed",  2f,   0.5f, 10f)
+    private val verticalSpeed    = float("Vertical Speed",    1f,   0.1f, 5f)
+    private val yOffset          = float("Y Offset",          0f,  -2f,   2f)
+    private val shortcut         = bool ("Shortcut",          false)
 
-    @Volatile private var tpInProgress = false
-    @Volatile private var lastAttackMs = 0L
+    @Volatile private var isMoving = false
     private var strafeAngle = 0.0
-    private var orbitAngle  = 0.0
     private var tickJob: Job? = null
 
     private companion object { const val TAG = "TPAura" }
 
     override fun onEnable() {
         super.onEnable()
-        tpInProgress = false
-        strafeAngle  = 0.0
-        orbitAngle   = 0.0
-        OverlayLogger.d(TAG, "Enabled: mode=${mode.value} range=${range.value} returnMode=${returnMode.value}")
-        tickJob = scope.launch { tickLoop() }
+        isMoving = false
+        strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
+        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} hSpeed=${horizontalSpeed.value} vSpeed=${verticalSpeed.value}")
+        tickJob = scope.launch { movementLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
         super.onDisable()
-        tpInProgress = false
+        isMoving = false
         OverlayLogger.d(TAG, "Disabled")
     }
 
-    private suspend fun tickLoop() {
+    private suspend fun movementLoop() {
         while (currentCoroutineContext().isActive) {
-            val now = System.currentTimeMillis()
-            if (isEnabled && !tpInProgress && now - lastAttackMs >= attackCooldown.value) {
-                val target = EntityTracker.getEntitiesInRange(range.value)
-                    .minByOrNull { EntityTracker.distanceTo(it) }
+            if (isEnabled && !isMoving) {
+                val target = findTarget()
                 if (target != null) {
-                    tpAttack(target, now)
-                } else if (now % 3000L < 50L) {
-                    OverlayLogger.v(TAG, "tickLoop: range=${range.value} içinde hedef yok")
+                    isMoving = true
+                    try {
+                        moveAroundTarget(target)
+                    } catch (e: Exception) {
+                        OverlayLogger.e(TAG, "moveAroundTarget hatası: ${e.message}", e)
+                    } finally {
+                        isMoving = false
+                    }
                 }
             }
             delay(50L)
         }
     }
 
-    private suspend fun tpAttack(target: EntityTracker.TrackedEntity, now: Long) {
-        tpInProgress = true
-        lastAttackMs = now
+    private fun findTarget(): EntityTracker.TrackedEntity? {
+        return EntityTracker.getEntitiesInRange(range.value + 1f)
+            .filter { it.runtimeId != EntityTracker.selfRuntimeId }
+            .minByOrNull { EntityTracker.distanceTo(it) }
+    }
+
+    private suspend fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: run {
-            OverlayLogger.w(TAG, "tpAttack: session null — relay bağlı değil")
-            tpInProgress = false
+            OverlayLogger.w(TAG, "moveAroundTarget: session null — relay bağlı değil")
             return
         }
-        OverlayLogger.v(TAG, "tpAttack başlıyor: target=${target.runtimeId} mode=${mode.value}")
 
-        val origX = EntityTracker.selfX
-        val origY = EntityTracker.selfY
-        val origZ = EntityTracker.selfZ
+        val selfPos   = getCurrentPosition()
+        val targetPos = Vector3f.from(target.x, target.y + yOffset.value, target.z)
+        val newPos    = calculatePosition(targetPos)
 
-        val (tpX, tpY, tpZ) = calcPosition(target)
+        val motionX = (newPos.x - selfPos.x) * horizontalSpeed.value * 0.1f
+        val motionY = (newPos.y - selfPos.y) * verticalSpeed.value * 0.1f
+        val motionZ = (newPos.z - selfPos.z) * horizontalSpeed.value * 0.1f
 
-        PacketUtil.sendMove(session, tpX, tpY + verticalSpeed.value * 0.1f, tpZ,
-            EntityTracker.selfYaw, EntityTracker.selfPitch, onGround = true, teleport = true)
-        delay(30L)
+        session.serverBound(SetEntityMotionPacket().apply {
+            runtimeEntityId = EntityTracker.selfRuntimeId
+            motion          = Vector3f.from(motionX, motionY, motionZ)
+        })
 
-        if (rotate.value) {
-            val r = RotationUtil.toEntity(target)
-            PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
-        }
+        delay(20L)
 
-        repeat(attacksPerTp.value) {
-            PacketUtil.sendSwingAndAttack(session, target.runtimeId)
-            if (attacksPerTp.value > 1) delay(50L)
-        }
+        session.serverBound(MovePlayerPacket().apply {
+            runtimeEntityId       = EntityTracker.selfRuntimeId
+            position              = newPos
+            rotation              = Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, EntityTracker.selfYaw)
+            mode                  = MovePlayerPacket.Mode.TELEPORT
+            isOnGround            = false
+            ridingRuntimeEntityId = 0L
+        })
 
-        delay(50L)
-
-        when (returnMode.value) {
-            ReturnMode.Instant -> {
-                PacketUtil.sendMove(session, origX, origY, origZ,
-                    EntityTracker.selfYaw, EntityTracker.selfPitch, onGround = true, teleport = true)
-            }
-            ReturnMode.Delayed -> {
-                delay(100L)
-                PacketUtil.sendMove(session, origX, origY, origZ,
-                    EntityTracker.selfYaw, EntityTracker.selfPitch, onGround = true, teleport = true)
-            }
-            ReturnMode.None -> {}
-        }
-
-        OverlayLogger.v(TAG, "tpAttack tamamlandı: target=${target.runtimeId} attacksPerTp=${attacksPerTp.value} returnMode=${returnMode.value}")
-        tpInProgress = false
+        val avgSpeed = (horizontalSpeed.value + verticalSpeed.value) / 2f
+        val delayMs  = (100f / avgSpeed.coerceAtLeast(0.5f)).toLong()
+        delay(delayMs)
     }
 
-    private fun calcPosition(t: EntityTracker.TrackedEntity): Triple<Float, Float, Float> {
-        val tx = t.x
-        val ty = t.y + yOffset.value
-        val tz = t.z
-        val hs = horizontalSpeed.value * 0.1f
-        return when (mode.value) {
-            TpMode.Behind -> {
-                val dx = tx - EntityTracker.selfX
-                val dz = tz - EntityTracker.selfZ
-                val dist = MathUtil.dist2(tx, tz, EntityTracker.selfX, EntityTracker.selfZ).coerceAtLeast(0.001f)
-                Triple(tx + (dx / dist) * hs, ty, tz + (dz / dist) * hs)
-            }
-            TpMode.Random -> {
-                val a = Math.random() * Math.PI * 2
-                Triple(
-                    (tx + Math.cos(a) * hs).toFloat(),
-                    ty,
-                    (tz + Math.sin(a) * hs).toFloat()
+    private fun calculatePosition(targetPos: Vector3f): Vector3f {
+        val radius = range.value
+
+        return when (moveMode.value) {
+            MoveMode.Random -> {
+                val angle            = Random.nextDouble(0.0, Math.PI * 2)
+                val horizontalOffset = radius * (0.5f + Random.nextFloat() * 0.5f)
+                val verticalOffset   = (Random.nextFloat() - 0.5f) * 0.5f * verticalSpeed.value
+
+                Vector3f.from(
+                    targetPos.x + (cos(angle) * horizontalOffset).toFloat(),
+                    targetPos.y + verticalOffset,
+                    targetPos.z + (sin(angle) * horizontalOffset).toFloat()
                 )
             }
-            TpMode.Strafe -> {
-                strafeAngle += 0.3 * (strafeSpeed.value / 20f)
-                Triple(
-                    (tx + Math.cos(strafeAngle) * hs).toFloat(),
-                    ty,
-                    (tz + Math.sin(strafeAngle) * hs).toFloat()
+
+            MoveMode.Strafe -> {
+                strafeAngle += horizontalSpeed.value * 0.03
+                val verticalWave = sin(strafeAngle * 0.5f).toFloat() * 0.3f * verticalSpeed.value
+
+                Vector3f.from(
+                    targetPos.x + (cos(strafeAngle) * radius).toFloat(),
+                    targetPos.y + verticalWave,
+                    targetPos.z + (sin(strafeAngle) * radius).toFloat()
                 )
             }
-            TpMode.Speed -> {
-                val dx = tx - EntityTracker.selfX
-                val dz = tz - EntityTracker.selfZ
-                val dist = MathUtil.dist2(tx, tz, EntityTracker.selfX, EntityTracker.selfZ)
-                val spd = horizontalSpeed.value * 0.5f
-                val ratio = if (dist > spd) (dist - spd) / dist else 0f
-                Triple(EntityTracker.selfX + dx * ratio, ty, EntityTracker.selfZ + dz * ratio)
-            }
-            TpMode.Orbit -> {
-                orbitAngle += 0.15 * (strafeSpeed.value / 20f)
-                val orbitRadius = range.value * 0.9f
-                Triple(
-                    (tx + Math.cos(orbitAngle) * orbitRadius).toFloat(),
-                    ty,
-                    (tz + Math.sin(orbitAngle) * orbitRadius).toFloat()
+
+            MoveMode.Behind -> {
+                val selfPos = getCurrentPosition()
+                val dx = targetPos.x - selfPos.x
+                val dz = targetPos.z - selfPos.z
+                val angle = atan2(dz.toDouble(), dx.toDouble()) + Math.PI
+                val behindRadius = radius * 0.7f
+
+                Vector3f.from(
+                    targetPos.x + (cos(angle) * behindRadius).toFloat(),
+                    targetPos.y,
+                    targetPos.z + (sin(angle) * behindRadius).toFloat()
                 )
             }
         }
     }
+
+    private fun getCurrentPosition(): Vector3f =
+        Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
 }
