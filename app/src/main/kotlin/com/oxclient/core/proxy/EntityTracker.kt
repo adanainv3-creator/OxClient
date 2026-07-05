@@ -4,6 +4,7 @@ import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.utils.MathUtil
+import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,11 +70,6 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
     private val playerNames     = ConcurrentHashMap<Long, String>()
 
-    // ✅ FIX: Kendi envanterimizin sürekli/oturum-boyunca önbelleği. InventoryContentPacket
-    // sadece bağlantı başında/envanter açıldığında gelir; AutoTotem gibi modüller oyuna
-    // girdikten SONRA enable edilirse bu paketi bir daha hiç göremiyordu (BlockTracker'daki
-    // palet sorununun envanter karşılığı). EntityTracker zaten her zaman aktif olduğu için
-    // envanter durumu burada tutulup modüller enable anında buradan "yakalanabiliyor".
     private val selfInventory = ConcurrentHashMap<Int, ItemData>()
 
     @Volatile var selfRuntimeId  : Long    = 0L
@@ -108,6 +104,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
         selfInventory.clear()
+        InventoryUtil.clearTotemNetIds()
         selfRuntimeId = 0L; selfUniqueId = 0L
         selfX = 0f; selfY = 0f; selfZ = 0f; selfYaw = 0f; selfPitch = 0f
         selfHealth = 20f; selfMaxHealth = 20f; selfAbsorb = 0f; selfArmor = 0f
@@ -118,12 +115,6 @@ object EntityTracker : PacketEventBus.PacketListener {
         OverlayLogger.i(TAG, "EntityTracker sıfırlandı")
     }
 
-    // ✅ DEBUG: Bir sürüm boyunca görülen HER FARKLI paket tipini bir KEZ loglar.
-    // Spam yapmaz (her tip için sadece ilk görülüşte yazar). AutoTotem envanteri
-    // hâlâ boş görüyorsa, bu logu arayıp "Inventory" geçen satır var mı diye bak:
-    //  - Hiç "InventoryContentPacket" görünmüyorsa   → paket server'dan hiç gelmiyor/routing sorunu
-    //  - Sadece "UnknownPacket" görünüyorsa (sık sık) → codec bu protokol sürümünde paketi tanımıyor, decode edemiyor
-    //  - "InventoryContentPacket" görünüyor ama envanter boşsa → containerId beklenenden farklı, aşağıdaki log'a bak
     private val seenPacketTypes = ConcurrentHashMap<String, Boolean>()
 
     override fun onPacket(event: PacketEvent) {
@@ -150,6 +141,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             is ChangeDimensionPacket    -> handleDimension(p)
             is SetEntityLinkPacket      -> handleEntityLink(p)
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
+            is CreativeContentPacket    -> handleCreativeContent(p)
             is InventoryContentPacket   -> {
                 OverlayLogger.d(TAG, "InventoryContentPacket alındı: containerId=${p.containerId} itemCount=${p.contents?.size}")
                 handleInventoryContent(p)
@@ -377,49 +369,29 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     /**
-     * ✅ FIX: isEmptyItem kontrolü artık exception fırlatmıyor ve doğru çalışıyor.
-     * 
-     * SORUN: Eski kod exception'da true döndürüyordu → TÜM item'lar boş sayılıyordu
-     * ÇÖZÜM: Önce netId'yi kontrol et, sonra definition'ı dene, exception'da netId'ye güven
+     * ✅ CreativeContentPacket'ten totem runtimeId'lerini InventoryUtil'e kaydet
+     */
+    private fun handleCreativeContent(p: CreativeContentPacket) {
+        try {
+            val definitions = p.contents.mapNotNull { it.definition }
+            InventoryUtil.registerTotemNetIds(definitions)
+            OverlayLogger.d(TAG, "CreativeContentPacket: ${definitions.size} definition kaydedildi")
+        } catch (e: Exception) {
+            OverlayLogger.v(TAG, "CreativeContentPacket işlenirken hata: ${e.message}")
+        }
+    }
+
+    /**
+     * ✅ InventoryUtil.isEmpty() kullanarak item kontrolü
      */
     private fun isEmptyItem(item: ItemData?): Boolean {
-        if (item == null) return true
-        
-        // NetId kontrolü - en güvenilir yöntem (AIR item'ların netId'si 0 veya negatiftir)
-        val netId = try { item.netId } catch (_: Exception) { 0 }
-        if (netId <= 0) {
-            OverlayLogger.v(TAG, "isEmptyItem: netId=$netId → boş item")
-            return true
-        }
-        
-        return try {
-            val def = item.definition
-            if (def == null) {
-                // definition null ise netId'ye göre karar ver
-                OverlayLogger.v(TAG, "isEmptyItem: definition null, netId=$netId")
-                netId <= 0
-            } else {
-                val id = def.identifier
-                val isEmpty = id == "minecraft:air" || id == "minecraft:air" || item.count <= 0
-                if (isEmpty) {
-                    OverlayLogger.v(TAG, "isEmptyItem: identifier=$id → boş item")
-                }
-                isEmpty
-            }
-        } catch (e: Exception) {
-            // Exception durumunda netId'ye güven (AIR değilse netId > 0'dır)
-            OverlayLogger.w(TAG, "isEmptyItem exception: ${e.message} — netId=$netId, fallback to netId check")
-            netId <= 0
-        }
+        return InventoryUtil.isEmpty(item)
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {
         when (p.containerId) {
             0 -> {
-                // Ana envanteri temizle
                 for (s in 0..35) selfInventory.remove(s)
-                
-                // Tüm item'ları ekle (boş olmayanlar)
                 var addedCount = 0
                 p.contents.forEachIndexed { slot, item ->
                     if (!isEmptyItem(item)) {
@@ -430,7 +402,6 @@ object EntityTracker : PacketEventBus.PacketListener {
                 OverlayLogger.d(TAG, "InventoryContent containerId=0: ${p.contents.size} item, $addedCount non-empty eklendi")
             }
             119 -> {
-                // Offhand
                 val item = p.contents.firstOrNull()
                 if (item == null || isEmptyItem(item)) {
                     selfInventory.remove(119)
@@ -461,11 +432,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         }
     }
 
-    /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
     fun getInventoryItem(slot: Int): ItemData? = selfInventory[slot]
-
-    /** Ana envanterin anlık kopyası — slot -> ItemData. Modüller geç enable olsa bile
-     *  buradan mevcut durumu okuyabilir (bkz. selfInventory üstteki not). */
     fun getInventorySnapshot(): Map<Int, ItemData> = selfInventory.toMap()
 
     private fun applyMetadata(entity: TrackedEntity, metadata: Map<*, *>?) {
