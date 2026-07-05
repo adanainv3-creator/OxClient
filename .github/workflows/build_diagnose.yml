@@ -81,11 +81,31 @@ jobs:
           find ~/.gradle/caches -iname "bedrock-codec*.jar" -exec ls -la {} \;
 
           echo ""
-          echo "── Her jar içindeki versiyon paketleri ──"
+          echo "── Her jar içindeki TÜM versiyon paketleri ──"
           for jar in $(find ~/.gradle/caches -iname "bedrock-codec*.jar"); do
             echo "=== $jar ==="
             unzip -l "$jar" | grep -oE "v[0-9]+/Bedrock_v[0-9]+\.class" | sed 's#/Bedrock_v[0-9]*\.class##' | sort -t v -k2 -n -u
           done
+
+          echo ""
+          echo "════════════════════════════════════════════════════════"
+          echo "── KRİTİK KONTROL: 2b2tpe.org protocol=944 istiyor.     ──"
+          echo "── CodecRegistry.kt fallback zincirindeki 924/935/944/  ──"
+          echo "── 948/975 sürümleri jar içinde GERÇEKTEN var mı?      ──"
+          echo "════════════════════════════════════════════════════════"
+          JAR=$(find ~/.gradle/caches -iname "bedrock-codec*.jar" | head -1)
+          if [ -z "$JAR" ]; then
+            echo "!! bedrock-codec jar hiç bulunamadı — dependency çözülememiş olabilir"
+          else
+            echo "Kontrol edilen jar: $JAR"
+            for v in 898 924 935 944 948 975; do
+              if unzip -l "$JAR" | grep -q "v${v}/Bedrock_v${v}\.class"; then
+                echo "  [VAR]  v${v}  → org.cloudburstmc.protocol.bedrock.codec.v${v}.Bedrock_v${v}"
+              else
+                echo "  [YOK]  v${v}"
+              fi
+            done
+          fi
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
