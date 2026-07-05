@@ -394,18 +394,28 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {
-        if (p.containerId != 0) return // sadece ana envanter (0) — envanter dışı container'ları takip etmiyoruz
-        selfInventory.clear()
-        p.contents.forEachIndexed { slot, item ->
-            if (!isEmptyItem(item)) selfInventory[slot] = item
+        when (p.containerId) {
+            0 -> {
+                for (s in 0..35) selfInventory.remove(s)
+                p.contents.forEachIndexed { slot, item ->
+                    if (!isEmptyItem(item)) selfInventory[slot] = item
+                }
+            }
+            119 -> {
+                val item = p.contents.firstOrNull()
+                if (item == null || isEmptyItem(item)) selfInventory.remove(119)
+                else selfInventory[119] = item
+            }
+            else -> return
         }
     }
 
     private fun handleInventorySlot(p: InventorySlotPacket) {
-        if (p.containerId != 0) return
+        if (p.containerId != 0 && p.containerId != 119) return
+        val slotKey = if (p.containerId == 119) 119 else p.slot
         val item = p.item
-        if (isEmptyItem(item)) selfInventory.remove(p.slot)
-        else selfInventory[p.slot] = item
+        if (isEmptyItem(item)) selfInventory.remove(slotKey)
+        else selfInventory[slotKey] = item
     }
 
     /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */

@@ -51,6 +51,7 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.session.SessionManager
 import com.oxclient.ui.theme.*
+import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -88,6 +89,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private var fabView  : ComposeView? = null
     private var menuView : ComposeView? = null
+    private var totemView: ComposeView? = null
     private val shortcutViews = mutableMapOf<String, ComposeView>()
 
     private var fabX = 50f; private var fabY = 300f
@@ -136,6 +138,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     PacketEventBus.stats.serverToClient
                 )
                 OverlayState.updateActiveModuleCount(ModuleManager.enabledCount())
+                val invSnapshot = EntityTracker.getInventorySnapshot()
+                val totemCount = invSnapshot.count { (slot, item) ->
+                    (slot in 0..35 || slot == 119) && InventoryUtil.isTotem(item)
+                }
+                OverlayState.updateTotemCount(totemCount)
                 delay(500L)
             }
         }
@@ -185,6 +192,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
             }
             wm.addView(fabView, fabParams)
+
+            val totemParams = overlayParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                16f, 16f
+            )
+            totemView = composeView { TotemCounterIcon() }
+            wm.addView(totemView, totemParams)
+
             refreshShortcuts()
             isAttached = true
         } catch (e: Exception) {
@@ -269,10 +285,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun removeAllOverlays() {
         hideMenu()
-        listOfNotNull(fabView).plus(shortcutViews.values).forEach { v ->
+        listOfNotNull(fabView, totemView).plus(shortcutViews.values).forEach { v ->
             try { wm.removeViewImmediate(v) } catch (_: Exception) {}
         }
-        fabView = null; shortcutViews.clear(); isAttached = false
+        fabView = null; totemView = null; shortcutViews.clear(); isAttached = false
     }
 
     private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
@@ -300,6 +316,61 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_MIN)
         .build()
+}
+
+@Composable
+private fun TotemCounterIcon() {
+    val count = OverlayState.totemCount
+
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0A0A0A))
+            .border(1.dp, Color(0xFF2A2A2A), RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.size(22.dp)) {
+            val w = size.width; val h = size.height
+            val bodyColor = Color(0xFF1C1C1C)
+            drawRect(
+                color = bodyColor,
+                topLeft = androidx.compose.ui.geometry.Offset(w * 0.4f, h * 0.15f),
+                size = androidx.compose.ui.geometry.Size(w * 0.2f, h * 0.55f)
+            )
+            drawRect(
+                color = bodyColor,
+                topLeft = androidx.compose.ui.geometry.Offset(w * 0.2f, h * 0.62f),
+                size = androidx.compose.ui.geometry.Size(w * 0.6f, h * 0.14f)
+            )
+            drawRect(
+                color = bodyColor,
+                topLeft = androidx.compose.ui.geometry.Offset(w * 0.3f, h * 0.78f),
+                size = androidx.compose.ui.geometry.Size(w * 0.4f, h * 0.14f)
+            )
+            drawCircle(
+                color = bodyColor,
+                radius = w * 0.16f,
+                center = androidx.compose.ui.geometry.Offset(w * 0.5f, h * 0.12f)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .offset(x = 3.dp, y = 3.dp)
+                .clip(RoundedCornerShape(50))
+                .background(if (count > 0) Color(0xFF111111) else Color(0xFF330000))
+                .border(1.dp, if (count > 0) Color(0xFF444444) else Color(0xFF662222), RoundedCornerShape(50))
+                .padding(horizontal = 4.dp, vertical = 1.dp)
+        ) {
+            Text(
+                "$count", fontSize = 9.sp, fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = if (count > 0) Color(0xFFCCCCCC) else Color(0xFFFF5555)
+            )
+        }
+    }
 }
 
 @Composable

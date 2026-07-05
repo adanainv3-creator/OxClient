@@ -51,6 +51,9 @@ object OverlayState {
     var espBlockCount by mutableIntStateOf(0)
         private set
 
+    var totemCount by mutableIntStateOf(0)
+        private set
+
     var packetCtoS by mutableLongStateOf(0L)
         private set
     var packetStoC by mutableLongStateOf(0L)
@@ -92,6 +95,8 @@ object OverlayState {
     }
 
     fun updateEspBlockCount(count: Int) { espBlockCount = count }
+
+    fun updateTotemCount(count: Int) { totemCount = count }
 
     fun updateActiveModuleCount(count: Int) { activeModuleCount = count }
 
