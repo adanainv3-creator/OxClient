@@ -1,4 +1,3 @@
-
 package com.oxclient.core.proxy
 
 import com.oxclient.ui.overlay.OverlayLogger
@@ -152,7 +151,6 @@ object EntityTracker : PacketEventBus.PacketListener {
             is SetEntityLinkPacket      -> handleEntityLink(p)
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
             is InventoryContentPacket   -> {
-                // ✅ DEBUG: containerId'yi filtre uygulamadan ÖNCE logla — beklenen 0 mı değil mi görelim.
                 OverlayLogger.d(TAG, "InventoryContentPacket alındı: containerId=${p.containerId} itemCount=${p.contents?.size}")
                 handleInventoryContent(p)
             }
@@ -161,10 +159,6 @@ object EntityTracker : PacketEventBus.PacketListener {
                 handleInventorySlot(p)
             }
             is org.cloudburstmc.protocol.bedrock.packet.UnknownPacket -> {
-                // ✅ DEBUG: codec bu paketi decode edemedi (bilinmeyen/versiyon uyumsuz paket).
-                // Eğer envanter hâlâ boş geliyorsa ve burada sık sık log görülüyorsa,
-                // InventoryContentPacket'in bu protokol sürümünde (975) decode edilemediği
-                // ihtimali güçlenir — CloudburstMC codec'i bu paket ID'sini tanımıyor demektir.
                 OverlayLogger.v(TAG, "UnknownPacket alındı: packetId=${p.packetId}")
             }
             else -> {}
@@ -327,8 +321,6 @@ object EntityTracker : PacketEventBus.PacketListener {
             playerNames[entry.entityId] = name
             if (rid != null) {
                 entities[rid]?.name = name
-                // FIX: latencyMs ve latency alanları yeni Cloudburst API'sinde kaldırıldı.
-                // Reflection ile güvenli okuma; yoksa 0 döner.
                 val ping = runCatching {
                     entry.javaClass.getDeclaredField("latencyMs")
                         .also { it.isAccessible = true }
@@ -384,46 +376,89 @@ object EntityTracker : PacketEventBus.PacketListener {
         } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
     }
 
-    /** ✅ FIX: Beta6-SNAPSHOT'ta gelen "boş" slotlar `ItemData.AIR` ile referans/structural
-     *  olarak eşleşmiyor (netId farkı nedeniyle) — bu yüzden `item != ItemData.AIR` kontrolü
-     *  boş slotları da "dolu item" sanıyordu (definition=null, netId sabit bir değer).
-     *  Artık anlamsal kontrol yapılıyor: definition null ise veya count <= 0 ise slot boştur. */
+    /**
+     * ✅ FIX: isEmptyItem kontrolü artık exception fırlatmıyor ve doğru çalışıyor.
+     * 
+     * SORUN: Eski kod exception'da true döndürüyordu → TÜM item'lar boş sayılıyordu
+     * ÇÖZÜM: Önce netId'yi kontrol et, sonra definition'ı dene, exception'da netId'ye güven
+     */
     private fun isEmptyItem(item: ItemData?): Boolean {
         if (item == null) return true
+        
+        // NetId kontrolü - en güvenilir yöntem (AIR item'ların netId'si 0 veya negatiftir)
+        val netId = try { item.netId } catch (_: Exception) { 0 }
+        if (netId <= 0) {
+            OverlayLogger.v(TAG, "isEmptyItem: netId=$netId → boş item")
+            return true
+        }
+        
         return try {
-            item.count <= 0 || item.definition.identifier == "minecraft:air"
-        } catch (e: Exception) { 
-            OverlayLogger.w(TAG, "isEmptyItem exception: ${e.javaClass.simpleName} ${e.message} — item 'empty' sayıldı (güvensiz fallback)")
-            // ✅ FIX: Exception'ı log ettik ama yine de item empty sayıyoruz (modüle NPE riskini almamak için).
-            // Gerçek sebep çıktığında (mesela ItemData.definition field'ı expose edilmiyor, ya da
-            // API farklıysa) buraya proper access kodu yazabiliriz (örn: item.netId > 0 check).
-            true 
+            val def = item.definition
+            if (def == null) {
+                // definition null ise netId'ye göre karar ver
+                OverlayLogger.v(TAG, "isEmptyItem: definition null, netId=$netId")
+                netId <= 0
+            } else {
+                val id = def.identifier
+                val isEmpty = id == "minecraft:air" || id == "minecraft:air" || item.count <= 0
+                if (isEmpty) {
+                    OverlayLogger.v(TAG, "isEmptyItem: identifier=$id → boş item")
+                }
+                isEmpty
+            }
+        } catch (e: Exception) {
+            // Exception durumunda netId'ye güven (AIR değilse netId > 0'dır)
+            OverlayLogger.w(TAG, "isEmptyItem exception: ${e.message} — netId=$netId, fallback to netId check")
+            netId <= 0
         }
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {
         when (p.containerId) {
             0 -> {
+                // Ana envanteri temizle
                 for (s in 0..35) selfInventory.remove(s)
+                
+                // Tüm item'ları ekle (boş olmayanlar)
+                var addedCount = 0
                 p.contents.forEachIndexed { slot, item ->
-                    if (!isEmptyItem(item)) selfInventory[slot] = item
+                    if (!isEmptyItem(item)) {
+                        selfInventory[slot] = item
+                        addedCount++
+                    }
                 }
+                OverlayLogger.d(TAG, "InventoryContent containerId=0: ${p.contents.size} item, $addedCount non-empty eklendi")
             }
             119 -> {
+                // Offhand
                 val item = p.contents.firstOrNull()
-                if (item == null || isEmptyItem(item)) selfInventory.remove(119)
-                else selfInventory[119] = item
+                if (item == null || isEmptyItem(item)) {
+                    selfInventory.remove(119)
+                    OverlayLogger.d(TAG, "InventoryContent containerId=119: boş/air → removed")
+                } else {
+                    selfInventory[119] = item
+                    OverlayLogger.d(TAG, "InventoryContent containerId=119: ${item.definition?.identifier} eklendi")
+                }
             }
-            else -> return
+            else -> {
+                OverlayLogger.v(TAG, "InventoryContent containerId=${p.containerId} ignored")
+            }
         }
     }
 
     private fun handleInventorySlot(p: InventorySlotPacket) {
         if (p.containerId != 0 && p.containerId != 119) return
+        
         val slotKey = if (p.containerId == 119) 119 else p.slot
         val item = p.item
-        if (isEmptyItem(item)) selfInventory.remove(slotKey)
-        else selfInventory[slotKey] = item
+        
+        if (isEmptyItem(item)) {
+            selfInventory.remove(slotKey)
+            OverlayLogger.v(TAG, "InventorySlot containerId=${p.containerId} slot=$slotKey → removed (empty)")
+        } else {
+            selfInventory[slotKey] = item
+            OverlayLogger.v(TAG, "InventorySlot containerId=${p.containerId} slot=$slotKey → ${item.definition?.identifier} eklendi")
+        }
     }
 
     /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */

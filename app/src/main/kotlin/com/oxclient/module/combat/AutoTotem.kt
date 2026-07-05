@@ -65,11 +65,12 @@ class AutoTotem : BaseModule(
             OverlayLogger.d(TAG, "── Envanter taraması (${snapshot.size} item, offhand dahil) ──")
             if (snapshot.isEmpty()) {
                 OverlayLogger.d(TAG, "  (snapshot BOŞ — EntityTracker henüz hiç InventoryContentPacket görmemiş olabilir)")
-            }
-            snapshot.toSortedMap().forEach { (slot, item) ->
-                val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
-                val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
-                OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count}")
+            } else {
+                snapshot.toSortedMap().forEach { (slot, item) ->
+                    val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
+                    val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
+                    OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count}")
+                }
             }
         }
 
@@ -124,6 +125,11 @@ class AutoTotem : BaseModule(
                 val type = try { pkt.type?.toString()?.uppercase() ?: "" } catch (_: Exception) { "" }
                 if (type.contains("CONSUME") || type.contains("TOTEM")) {
                     offhandHasTotem = false
+                    // Totem kullanıldı, hemen yeniden takmayı dene
+                    scanCachedInventory()
+                    if (totemSlot >= 0) {
+                        equipTotem()
+                    }
                 }
             }
 
