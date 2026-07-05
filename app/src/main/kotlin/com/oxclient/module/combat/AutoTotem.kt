@@ -1,3 +1,4 @@
+
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
@@ -24,6 +25,9 @@ class AutoTotem : BaseModule(
     @Volatile private var offhandHasTotem = false
 
     private var watchJob: kotlinx.coroutines.Job? = null
+
+    // 🔍 DEBUG: tam envanter dump'ı spam yapmasın diye en fazla 2 saniyede bir yazılır
+    @Volatile private var lastDumpMs = 0L
 
     override fun onEnable() {
         super.onEnable()
@@ -55,14 +59,18 @@ class AutoTotem : BaseModule(
         totemSlot = -1; totemNetId = 0; totemDefinition = null
         offhandHasTotem = InventoryUtil.isTotem(snapshot[119])
 
-        OverlayLogger.d(TAG, "── Envanter taraması (${snapshot.size} item, offhand dahil) ──")
-        if (snapshot.isEmpty()) {
-            OverlayLogger.d(TAG, "  (snapshot BOŞ — EntityTracker henüz hiç InventoryContentPacket görmemiş olabilir)")
-        }
-        snapshot.toSortedMap().forEach { (slot, item) ->
-            val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
-            val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
-            OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count}")
+        val now = System.currentTimeMillis()
+        if (now - lastDumpMs > 2000L) {
+            lastDumpMs = now
+            OverlayLogger.d(TAG, "── Envanter taraması (${snapshot.size} item, offhand dahil) ──")
+            if (snapshot.isEmpty()) {
+                OverlayLogger.d(TAG, "  (snapshot BOŞ — EntityTracker henüz hiç InventoryContentPacket görmemiş olabilir)")
+            }
+            snapshot.toSortedMap().forEach { (slot, item) ->
+                val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
+                val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
+                OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count}")
+            }
         }
 
         snapshot.forEach { (slot, item) ->

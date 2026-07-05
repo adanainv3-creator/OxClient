@@ -93,17 +93,10 @@ object InventoryUtil {
     /**
      * ItemData'nın totem olup olmadığını kontrol eder.
      *
-     * 🔍 DEBUG (GEÇİCİ): AutoTotem, envanterde totem GÖRÜNÜRDE var olmasına
-     * rağmen bulamıyor. Bunun sebebi ya (a) item.definition.identifier
-     * beklenmedik bir string dönüyor (StartGame.itemDefinitions boş geldiği
-     * için stale/varsayılan codec paleti kullanılıyor olabilir), ya da
-     * (b) definition erişiminde exception atılıp sessizce yutuluyor.
-     * Eşleşme olmayan HER durumda artık ne geldiğini logluyoruz — bir sonraki
-     * AutoTotem denemesinde bu logu paylaş, kalıcı düzeltmeyi netId/identifier
-     * gerçek değerine göre yapalım. Sorun bulunup düzeltilince bu logu
-     * kaldırabiliriz (spam yapmaması için sadece "totem olabilecek" adaylarda
-     * değil, HER non-empty item'da bir kere loglanıyor — istersen sonra
-     * sadeleştiririz).
+     * 🔍 DEBUG (GEÇİCİ): Asıl teşhis bilgisi (her slotun gerçek identifier'ı)
+     * artık AutoTotem.scanCachedInventory()'deki throttle'lı dump'tan geliyor.
+     * Burada sadece exception'ı sessizce yutmak yerine loglayarak (b) ihtimalini
+     * (definition erişiminde hata) de görünür kılıyoruz.
      */
     fun isTotem(item: ItemData?): Boolean {
         if (isEmpty(item)) return false
@@ -115,18 +108,7 @@ object InventoryUtil {
             null
         }
 
-        val result = identifier == "minecraft:totem_of_undying"
-
-        if (!result && item != null) {
-            val runtimeId = try { item.definition?.runtimeId } catch (_: Exception) { null }
-            OverlayLogger.d(
-                TAG,
-                "isTotem=false → identifier='$identifier' definitionRuntimeId=$runtimeId " +
-                    "stackNetId=${item.netId} count=${item.count} usingNetId=${item.isUsingNetId}"
-            )
-        }
-
-        return result
+        return identifier == "minecraft:totem_of_undying"
     }
 
     @Deprecated("netId item tipini değil stack'i temsil eder, isTotem() kullan", ReplaceWith("isTotem(item)"))
