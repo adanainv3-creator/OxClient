@@ -11,6 +11,7 @@ import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.CrystalAura
 import com.oxclient.module.combat.KillAura
+import com.oxclient.module.movement.AntiKnockback
 import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.TPAura
 import com.oxclient.module.visual.ESP
@@ -55,6 +56,7 @@ class OxClientApp : Application() {
             Criticals(),
             Jetpack(),
             TPAura(),
+            AntiKnockback(),
             FullBright(),
             ESP()
         )
