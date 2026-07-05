@@ -392,7 +392,13 @@ object EntityTracker : PacketEventBus.PacketListener {
         if (item == null) return true
         return try {
             item.count <= 0 || item.definition.identifier == "minecraft:air"
-        } catch (_: Exception) { true }
+        } catch (e: Exception) { 
+            OverlayLogger.w(TAG, "isEmptyItem exception: ${e.javaClass.simpleName} ${e.message} — item 'empty' sayıldı (güvensiz fallback)")
+            // ✅ FIX: Exception'ı log ettik ama yine de item empty sayıyoruz (modüle NPE riskini almamak için).
+            // Gerçek sebep çıktığında (mesela ItemData.definition field'ı expose edilmiyor, ya da
+            // API farklıysa) buraya proper access kodu yazabiliriz (örn: item.netId > 0 check).
+            true 
+        }
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {
