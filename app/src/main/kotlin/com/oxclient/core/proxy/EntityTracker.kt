@@ -1,4 +1,3 @@
-
 package com.oxclient.core.proxy
 
 import com.oxclient.ui.overlay.OverlayLogger
@@ -70,11 +69,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
     private val playerNames     = ConcurrentHashMap<Long, String>()
 
-    // ✅ FIX: Kendi envanterimizin sürekli/oturum-boyunca önbelleği. InventoryContentPacket
-    // sadece bağlantı başında/envanter açıldığında gelir; AutoTotem gibi modüller oyuna
-    // girdikten SONRA enable edilirse bu paketi bir daha hiç göremiyordu (BlockTracker'daki
-    // palet sorununun envanter karşılığı). EntityTracker zaten her zaman aktif olduğu için
-    // envanter durumu burada tutulup modüller enable anında buradan "yakalanabiliyor".
+    // ✅ FIX: Kendi envanterimizin sürekli/oturum-boyunca önbelleği
     private val selfInventory = ConcurrentHashMap<Int, ItemData>()
 
     @Volatile var selfRuntimeId  : Long    = 0L
@@ -104,7 +99,14 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val _entityUpdateFlow = MutableStateFlow(0L)
     val entityUpdateFlow: StateFlow<Long>  = _entityUpdateFlow.asStateFlow()
 
-    fun init()  { PacketEventBus.register(this);   OverlayLogger.i(TAG, "EntityTracker başlatıldı") }
+    // Envanter değişimleri için Flow
+    private val _inventoryUpdateFlow = MutableStateFlow(0L)
+    val inventoryUpdateFlow: StateFlow<Long> = _inventoryUpdateFlow.asStateFlow()
+
+    fun init()  { 
+        PacketEventBus.register(this)
+        OverlayLogger.i(TAG, "EntityTracker başlatıldı") 
+    }
 
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
@@ -116,6 +118,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfGameMode = 0; selfDimension = 0; selfSpeedXZ = 0f
         prevSelfX = 0f; prevSelfZ = 0f
         _entityCountFlow.value = 0; _selfHealthFlow.value = 20f
+        _inventoryUpdateFlow.value = System.currentTimeMillis()
         OverlayLogger.i(TAG, "EntityTracker sıfırlandı")
     }
 
@@ -140,6 +143,8 @@ object EntityTracker : PacketEventBus.PacketListener {
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
             is InventoryContentPacket   -> handleInventoryContent(p)
             is InventorySlotPacket      -> handleInventorySlot(p)
+            is MobEquipmentPacket       -> handleMobEquipment(p)
+            is PlayerEquipmentPacket    -> handlePlayerEquipment(p)
             else -> {}
         }
     }
@@ -300,8 +305,6 @@ object EntityTracker : PacketEventBus.PacketListener {
             playerNames[entry.entityId] = name
             if (rid != null) {
                 entities[rid]?.name = name
-                // FIX: latencyMs ve latency alanları yeni Cloudburst API'sinde kaldırıldı.
-                // Reflection ile güvenli okuma; yoksa 0 döner.
                 val ping = runCatching {
                     entry.javaClass.getDeclaredField("latencyMs")
                         .also { it.isAccessible = true }
@@ -357,36 +360,191 @@ object EntityTracker : PacketEventBus.PacketListener {
         } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
     }
 
-    /** ✅ FIX: Beta6-SNAPSHOT'ta gelen "boş" slotlar `ItemData.AIR` ile referans/structural
-     *  olarak eşleşmiyor (netId farkı nedeniyle) — bu yüzden `item != ItemData.AIR` kontrolü
-     *  boş slotları da "dolu item" sanıyordu (definition=null, netId sabit bir değer).
-     *  Artık anlamsal kontrol yapılıyor: definition null ise veya count <= 0 ise slot boştur. */
     private fun isEmptyItem(item: ItemData?): Boolean {
         if (item == null) return true
         return try { item.definition == null || item.count <= 0 } catch (_: Exception) { true }
     }
 
+    // ============= ENVANTER TAKİBİ (GÜNCELLENDİ) =============
+    
+    /**
+     * InventoryContentPacket işleme - Artık tüm container'ları dinliyor
+     * Container 0 = Ana envanter (slot 0-35)
+     * Container 119 = Offhand (slot 0)
+     * Container 120 = Armor (slot 0-3)
+     * Diğer container'lar debug için loglanıyor
+     */
     private fun handleInventoryContent(p: InventoryContentPacket) {
-        if (p.containerId != 0) return // sadece ana envanter (0) — envanter dışı container'ları takip etmiyoruz
-        selfInventory.clear()
-        p.contents.forEachIndexed { slot, item ->
-            if (!isEmptyItem(item)) selfInventory[slot] = item
+        val containerId = p.containerId
+        val contents = p.contents
+        
+        OverlayLogger.d(TAG, "=== InventoryContent ===")
+        OverlayLogger.d(TAG, "  containerId: $containerId")
+        OverlayLogger.d(TAG, "  contents size: ${contents.size}")
+        
+        when (containerId) {
+            0 -> {
+                // Ana envanter - slot 0-35
+                OverlayLogger.d(TAG, "  Ana envanter (container=0)")
+                // Önce eski envanteri temizle
+                for (i in 0..35) {
+                    selfInventory.remove(i)
+                }
+                
+                var itemCount = 0
+                contents.forEachIndexed { slot, item ->
+                    if (!isEmptyItem(item)) {
+                        selfInventory[slot] = item
+                        itemCount++
+                        val id = try { item.definition?.identifier } catch (_: Exception) { "null" }
+                        OverlayLogger.v(TAG, "    slot[$slot]: $id (netId=${item.netId}, count=${item.count})")
+                    }
+                }
+                OverlayLogger.d(TAG, "  Toplam ${itemCount} item yüklendi")
+            }
+            
+            119 -> {
+                // Offhand
+                OverlayLogger.d(TAG, "  Offhand (container=119)")
+                selfInventory.remove(119)
+                contents.firstOrNull()?.let { item ->
+                    if (!isEmptyItem(item)) {
+                        selfInventory[119] = item
+                        val id = try { item.definition?.identifier } catch (_: Exception) { "null" }
+                        OverlayLogger.d(TAG, "    Offhand: $id (netId=${item.netId})")
+                    } else {
+                        OverlayLogger.d(TAG, "    Offhand: BOŞ")
+                    }
+                }
+            }
+            
+            120 -> {
+                // Armor
+                OverlayLogger.d(TAG, "  Armor (container=120)")
+                // Armor'ı şimdilik takip etmiyoruz
+            }
+            
+            else -> {
+                // Bilinmeyen container
+                OverlayLogger.d(TAG, "  Bilinmeyen container: $containerId")
+                contents.forEachIndexed { slot, item ->
+                    if (!isEmptyItem(item)) {
+                        val id = try { item.definition?.identifier } catch (_: Exception) { "null" }
+                        OverlayLogger.v(TAG, "    slot[$slot]: $id (netId=${item.netId})")
+                    }
+                }
+            }
+        }
+        
+        _inventoryUpdateFlow.value = System.currentTimeMillis()
+        logInventoryState()
+    }
+
+    /**
+     * InventorySlotPacket işleme - Tek bir slot güncellemesi
+     */
+    private fun handleInventorySlot(p: InventorySlotPacket) {
+        val containerId = p.containerId
+        val slot = p.slot
+        val item = p.item
+        
+        OverlayLogger.v(TAG, "InventorySlot: container=$containerId slot=$slot item=${if (isEmptyItem(item)) "AIR" else try { item.definition?.identifier } catch (_: Exception) { "unknown" }}")
+        
+        when (containerId) {
+            0 -> {
+                // Ana envanter slotu
+                if (slot in 0..35) {
+                    if (isEmptyItem(item)) {
+                        selfInventory.remove(slot)
+                        OverlayLogger.v(TAG, "  Slot $slot temizlendi")
+                    } else {
+                        selfInventory[slot] = item
+                        val id = try { item.definition?.identifier } catch (_: Exception) { "null" }
+                        OverlayLogger.v(TAG, "  Slot $slot: $id")
+                    }
+                }
+            }
+            119 -> {
+                // Offhand
+                if (isEmptyItem(item)) {
+                    selfInventory.remove(119)
+                    OverlayLogger.d(TAG, "  Offhand temizlendi")
+                } else {
+                    selfInventory[119] = item
+                    val id = try { item.definition?.identifier } catch (_: Exception) { "null" }
+                    OverlayLogger.d(TAG, "  Offhand: $id")
+                }
+            }
+        }
+        _inventoryUpdateFlow.value = System.currentTimeMillis()
+    }
+
+    /**
+     * MobEquipmentPacket - Oyuncunun elindeki item değişiklikleri
+     */
+    private fun handleMobEquipment(p: MobEquipmentPacket) {
+        if (p.runtimeEntityId != selfRuntimeId) return
+        
+        val slot = p.inventorySlot
+        val item = p.item
+        
+        OverlayLogger.v(TAG, "MobEquipment: slot=$slot, hotbarSlot=${p.hotbarSlot}, container=${p.containerId}")
+        
+        // Ana envanter slotu güncellemesi
+        if (slot in 0..35) {
+            if (isEmptyItem(item)) {
+                selfInventory.remove(slot)
+            } else {
+                selfInventory[slot] = item
+            }
+            _inventoryUpdateFlow.value = System.currentTimeMillis()
         }
     }
 
-    private fun handleInventorySlot(p: InventorySlotPacket) {
-        if (p.containerId != 0) return
-        val item = p.item
-        if (isEmptyItem(item)) selfInventory.remove(p.slot)
-        else selfInventory[p.slot] = item
+    /**
+     * PlayerEquipmentPacket - Zırh ve offhand değişiklikleri
+     */
+    private fun handlePlayerEquipment(p: PlayerEquipmentPacket) {
+        if (p.runtimeEntityId != selfRuntimeId) return
+        
+        // Offhand güncellemesi
+        p.offhand?.let { item ->
+            if (isEmptyItem(item)) {
+                selfInventory.remove(119)
+                OverlayLogger.d(TAG, "PlayerEquipment: Offhand temizlendi")
+            } else {
+                selfInventory[119] = item
+                val id = try { item.definition?.identifier } catch (_: Exception) { "null" }
+                OverlayLogger.d(TAG, "PlayerEquipment: Offhand = $id")
+            }
+            _inventoryUpdateFlow.value = System.currentTimeMillis()
+        }
+        
+        // Armor güncellemeleri
+        // slot 0 = helmet, 1 = chestplate, 2 = leggings, 3 = boots
+        // Şimdilik takip etmiyoruz
     }
 
-    /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
-    fun getInventoryItem(slot: Int): ItemData? = selfInventory[slot]
-
-    /** Ana envanterin anlık kopyası — slot -> ItemData. Modüller geç enable olsa bile
-     *  buradan mevcut durumu okuyabilir (bkz. selfInventory üstteki not). */
-    fun getInventorySnapshot(): Map<Int, ItemData> = selfInventory.toMap()
+    private fun logInventoryState() {
+        if (selfInventory.isEmpty()) {
+            OverlayLogger.v(TAG, "Envanter boş")
+            return
+        }
+        
+        OverlayLogger.v(TAG, "--- Envanter Durumu ---")
+        selfInventory.forEach { (slot, item) ->
+            val id = try { item.definition?.identifier } catch (_: Exception) { "unknown" }
+            val isTotem = InventoryUtil.isTotem(item)
+            OverlayLogger.v(TAG, "  Slot $slot: $id ${if (isTotem) "★ TOTEM" else ""} (netId=${item.netId})")
+        }
+        
+        // Offhand kontrolü
+        selfInventory[119]?.let { item ->
+            val id = try { item.definition?.identifier } catch (_: Exception) { "unknown" }
+            val isTotem = InventoryUtil.isTotem(item)
+            OverlayLogger.v(TAG, "  OFFHAND: $id ${if (isTotem) "★ TOTEM" else ""}")
+        }
+    }
 
     private fun applyMetadata(entity: TrackedEntity, metadata: Map<*, *>?) {
         if (metadata == null) return
@@ -483,6 +641,12 @@ object EntityTracker : PacketEventBus.PacketListener {
         stale.forEach { (rid, e) -> entities.remove(rid); uniqueToRuntime.remove(e.uniqueId) }
         if (stale.isNotEmpty()) { OverlayLogger.d(TAG, "${stale.size} stale entity temizlendi"); notifyUpdate() }
     }
+
+    /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
+    fun getInventoryItem(slot: Int): ItemData? = selfInventory[slot]
+
+    /** Ana envanterin anlık kopyası — slot -> ItemData. */
+    fun getInventorySnapshot(): Map<Int, ItemData> = selfInventory.toMap()
 
     private fun notifyUpdate() {
         _entityCountFlow.value  = entities.size
