@@ -2,6 +2,7 @@ package com.oxclient.utils
 
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.OxRelaySession
+import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.MobEquipmentPacket
@@ -36,7 +37,7 @@ object InventoryUtil {
      * Offhand'e ekipman gönderir.
      * @param session Oturum
      * @param fromSlot Totemin bulunduğu envanter slotu
-     * @param itemData Tam ItemData nesnesi (netId, definition, count, damage vb.)
+     * @param itemData Tam ItemData nesnesi
      */
     fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, itemData: ItemData) {
         sendEquip(
@@ -44,24 +45,21 @@ object InventoryUtil {
             runtimeId   = EntityTracker.selfRuntimeId,
             containerId = ContainerId.INVENTORY,
             slot        = fromSlot,
-            hotbarSlot  = 40, // ✅ Offhand için doğru hotbar slot
+            hotbarSlot  = 40, // Offhand için doğru hotbar slot
             item        = itemData
         )
     }
 
     /**
-     * NetId'den ItemData oluşturup offhand'e gönderir.
-     * @param session Oturum
-     * @param fromSlot Totemin bulunduğu envanter slotu
-     * @param netId Totemin network stack ID'si
-     * @param identifier Totemin identifier'ı (örn: "minecraft:totem_of_undying")
+     * NetId ve ItemDefinition'dan ItemData oluşturup offhand'e gönderir.
      */
-    fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, netId: Int, identifier: String = "minecraft:totem_of_undying") {
+    fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, netId: Int, definition: ItemDefinition) {
         val item = ItemData.builder()
+            .definition(definition)
             .netId(netId)
-            .id(identifier)
             .count(1)
             .damage(0)
+            .usingNetId(true)
             .build()
         sendOffhandEquip(session, fromSlot, item)
     }
@@ -78,7 +76,6 @@ object InventoryUtil {
 
     /**
      * ItemData'nın totem olup olmadığını kontrol eder.
-     * Doğru kontrol: item.definition?.identifier == "minecraft:totem_of_undying"
      */
     fun isTotem(item: ItemData?): Boolean {
         if (item == null || item == ItemData.AIR) return false
