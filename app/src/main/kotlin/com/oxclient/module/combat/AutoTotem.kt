@@ -28,10 +28,11 @@ class AutoTotem : BaseModule(
 
     @Volatile private var currentHealth   = 20f
     @Volatile private var totemSlot       = -1
-    // ✅ FIX: sabit "702" yerine slottaki gerçek totem stack'inin netId'si saklanıyor.
-    // MobEquipmentPacket, server'ın doğru stack'i tanıyabilmesi için o stack'e ait
-    // gerçek netId'yi bekler — sabit bir sayı göndermek isteği başarısız kılıyordu.
-    @Volatile private var totemNetId      = 0
+    // ✅ FIX: netId yerine slottaki GERÇEK ItemData saklanıyor. MobEquipmentSerializer
+    // helper.writeItem() kullanıyor — bu legacy yazıcı netId kısayolu tanımıyor,
+    // item'ın gerçek definition/damage/tag alanlarını okuyor. Sadece netId göndermek
+    // definition=null olan sahte bir item'a yol açıp encode'da çöküyordu.
+    @Volatile private var totemItem: org.cloudburstmc.protocol.bedrock.data.inventory.ItemData? = null
     @Volatile private var offhandHasTotem = false
     @Volatile private var lastEquipMs     = 0L
     @Volatile private var lastDamageMs    = 0L
@@ -56,7 +57,7 @@ class AutoTotem : BaseModule(
         snapshot.forEach { (slot, item) ->
             if (InventoryUtil.isTotem(item)) when {
                 slot == InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = true
-                slot in 0..35 && totemSlot == -1 -> { totemSlot = slot; totemNetId = item.netId }
+                slot in 0..35 && totemSlot == -1 -> { totemSlot = slot; totemItem = item }
             }
         }
     }
@@ -85,7 +86,7 @@ class AutoTotem : BaseModule(
                 pkt.contents.forEachIndexed { slot, item ->
                     if (InventoryUtil.isTotem(item)) when {
                         slot == InventoryUtil.OFFHAND_SLOT && !offhandHasTotem -> offhandHasTotem = true
-                        totemSlot == -1 -> { totemSlot = slot; totemNetId = item.netId }
+                        totemSlot == -1 -> { totemSlot = slot; totemItem = item }
                     }
                 }
                 OverlayLogger.v(TAG, "InventoryContent tarandı: totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem")
@@ -95,8 +96,8 @@ class AutoTotem : BaseModule(
                 when (pkt.slot) {
                     InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = InventoryUtil.isTotem(pkt.item)
                     in 0..35 -> if (InventoryUtil.isTotem(pkt.item) && totemSlot == -1) {
-                        totemSlot = pkt.slot; totemNetId = pkt.item.netId
-                        OverlayLogger.v(TAG, "Yeni totem slotu bulundu: slot=$totemSlot netId=$totemNetId")
+                        totemSlot = pkt.slot; totemItem = pkt.item
+                        OverlayLogger.v(TAG, "Yeni totem slotu bulundu: slot=$totemSlot")
                     }
                 }
             }
@@ -130,13 +131,17 @@ class AutoTotem : BaseModule(
     }
 
     private fun equipTotem() {
-        val slot    = totemSlot; if (slot < 0) return
+        val slot = totemSlot; if (slot < 0) return
+        val item = totemItem ?: EntityTracker.getInventoryItem(slot) ?: run {
+            OverlayLogger.w(TAG, "equipTotem: slot=$slot için gerçek ItemData bulunamadı — vazgeçildi")
+            return
+        }
         val session = PacketEventBus.currentSession ?: run {
             OverlayLogger.w(TAG, "equipTotem: session null — relay bağlı değil")
             return
         }
-        OverlayLogger.d(TAG, "Totem takılıyor slot=$slot netId=$totemNetId")
-        InventoryUtil.sendOffhandEquip(session, slot, totemNetId)
+        OverlayLogger.d(TAG, "Totem takılıyor slot=$slot")
+        InventoryUtil.sendOffhandEquip(session, slot, item)
         offhandHasTotem = true
     }
 }

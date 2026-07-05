@@ -31,11 +31,12 @@ object InventoryUtil {
         })
     }
 
-    fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, itemNetworkId: Int) {
-        val item = ItemData.builder()
-            .netId(itemNetworkId)
-            .count(1)
-            .build()
+    // ✅ FIX: MobEquipmentSerializer, helper.writeItem() kullanıyor — bu "legacy" yazıcı
+    // netId kısayolu TANIMIYOR, ItemData'nın gerçek definition/damage/tag alanlarını
+    // okuyor. Sadece netId+count ile kurulan sahte item'da definition=null kalıyordu,
+    // bu da server'a giden paketin encode aşamasında çökmesine yol açıyordu.
+    // Artık slottaki GERÇEK ItemData'yı doğrudan kullanıyoruz.
+    fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, item: ItemData) {
         sendEquip(
             session     = session,
             runtimeId   = EntityTracker.selfRuntimeId,

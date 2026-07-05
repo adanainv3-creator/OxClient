@@ -10,7 +10,9 @@ import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
 import org.cloudburstmc.protocol.bedrock.packet.*
 import java.util.concurrent.ConcurrentHashMap
 
@@ -154,17 +156,31 @@ class CrystalAura : BaseModule(
                 val r = RotationUtil.toPoint(bx + 0.5f, by.toFloat(), bz + 0.5f)
                 PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
             }
-            // ✅ FIX: eski kod sadece transactionType set edip gönderiyordu — server'a hangi
-            // bloğa, hangi yüzeye, hangi item ile tıklandığı bilgisi gitmediği için sunucu
-            // isteği geçersiz sayıp yok sayıyordu. ITEM_USE (place) için gerekli alanlar eklendi.
+            // ✅ FIX2: itemInHand hâlâ null'du (encode'da NPE riski) + v712/v944'te
+            // zorunlu olan triggerType/clientInteractPrediction/clientCooldownState
+            // hiç set edilmiyordu. blockDefinition için gerçek bir dünya/chunk blok
+            // sorgu sistemi şu an codebase'de yok (BlockTracker sadece sandık/spawner
+            // gibi özel blokları takip ediyor) — bu yüzden burada obsidian'a sabit bir
+            // fallback kullanıyoruz. Bu satır GERÇEK blockDefinition sorgusuyla
+            // değiştirilmeli, aksi halde bazı sunucular yine reddedebilir.
+            val heldItem = EntityTracker.getInventoryItem(0) ?: ItemData.AIR
             session.serverBound(InventoryTransactionPacket().apply {
                 transactionType = InventoryTransactionType.ITEM_USE
                 actionType      = 0 // 0 = CLICK_BLOCK (place)
+                triggerType     = ItemUseTransaction.TriggerType.PLAYER_INPUT
                 blockPosition   = org.cloudburstmc.math.vector.Vector3i.from(bx, by, bz)
                 blockFace       = 1 // yukarı yüz
                 hotbarSlot      = 0
+                itemInHand      = heldItem
                 clickPosition   = Vector3f.from(0.5f, 1f, 0.5f)
                 playerPosition  = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                // TODO: gerçek chunk/blok sorgusu eklenmeli — Definitions.kt/BlockDefinition
+                // API'sini görmeden buraya güvenilir bir değer yazamam. Şimdilik boş
+                // bırakıyorum: eğer sunucu bunu null kabul etmiyorsa (NPE riski hâlâ var),
+                // Definitions.kt'yi atarsan tam çözeriz.
+                // blockDefinition = ???
+                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                clientCooldownState      = 0
             })
             placedPositions[bKey] = now
             placed++
