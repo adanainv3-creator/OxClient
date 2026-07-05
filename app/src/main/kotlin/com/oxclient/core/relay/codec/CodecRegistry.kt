@@ -92,9 +92,12 @@ object CodecRegistry {
 
         // ── OxClient'in eski candidate listesinde olan, wclient'te olmayan daha
         //    yeni sürümler — MC sürüm etiketleri yaklaşıktır, bkz. üstteki not.
+        // NOT: 935 ve 948 vendored kaynakta (relay/Protocol/bedrock-codec) hiç
+        // bulunmuyor — o yüzden buradan kaldırıldı (zaten sessizce atlanıyordu).
+        // 944 ise 2b2tpe.org'un istediği TAM protokol ve artık vendored kaynakta
+        // mevcut (Bedrock_v944.java doğrulandı) — bu satır kritik fix.
         registerCodec(924, "1.21.140~", "org.cloudburstmc.protocol.bedrock.codec.v924.Bedrock_v924")
-        registerCodec(935, "1.21.150~", "org.cloudburstmc.protocol.bedrock.codec.v935.Bedrock_v935")
-        registerCodec(948, "1.21.160~", "org.cloudburstmc.protocol.bedrock.codec.v948.Bedrock_v948")
+        registerCodec(944, "1.21.150~", "org.cloudburstmc.protocol.bedrock.codec.v944.Bedrock_v944")
         registerCodec(975, "26.23~", "org.cloudburstmc.protocol.bedrock.codec.v975.Bedrock_v975")
 
         sortedProtocolVersions.sortDescending()
