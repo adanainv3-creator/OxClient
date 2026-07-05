@@ -70,7 +70,7 @@ class KillAura : BaseModule(
         }
     }
 
-    private fun tick() {
+    private suspend fun tick() {
         val now = System.currentTimeMillis()
         val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
         
@@ -149,7 +149,7 @@ class KillAura : BaseModule(
         return result
     }
 
-    private fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
+    private suspend fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
         val session = PacketEventBus.currentSession ?: return
         
         OverlayLogger.v(TAG, "Attack #${attackCount}: dist=${"%.2f".format(EntityTracker.distanceTo(e))}")
@@ -175,7 +175,7 @@ class KillAura : BaseModule(
         PacketUtil.sendAttack(session, e.runtimeId)
         
         if (attackCount % 2 == 0L) {
-            delay(1)
+            kotlinx.coroutines.delay(1)
             PacketUtil.sendAttack(session, e.runtimeId)
         }
 
