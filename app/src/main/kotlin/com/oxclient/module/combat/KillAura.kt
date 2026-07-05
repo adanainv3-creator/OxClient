@@ -13,43 +13,47 @@ import kotlinx.coroutines.*
 class KillAura : BaseModule(
     name        = "KillAura",
     category    = ModuleCategory.COMBAT,
-    description = "Yakındaki düşmanlara otomatik saldırır"
+    description = "Otomatik saldırı"
 ) {
     enum class AttackMode   { Single, Multi, Switch, Closest }
     enum class RotationMode { Lock, Approximate, Silent, None }
     enum class SwingMode    { Client, Server, Both, None }
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
-    enum class RaycastMode  { None, Basic }
 
-    private val cpsMin          = int  ("CPS Min",          8,    1,  20)
-    private val cpsMax          = int  ("CPS Max",          12,   1,  20)
-    private val range           = float("Range",            3.7f, 1f,  8f)
-    private val fov             = int  ("FOV",              180,  30, 360)
-    private val switchDelay     = int  ("Switch Delay",     50,   0,  500)
-    private val maxTargets      = int  ("Max Targets",      1,    1,  10)
-    private val attackMode      = enum ("Attack Mode",      AttackMode.Single)
+    private val cpsMin          = int  ("CPS Min",          20,   1,  30)
+    private val cpsMax          = int  ("CPS Max",          25,   1,  30)
+    private val range           = float("Range",            6.0f, 1f,  10f)
+    private val fov             = int  ("FOV",              360,  30, 360)
+    private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
+    private val maxTargets      = int  ("Max Targets",      5,    1,  10)
+    private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
     private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
-    private val priorityMode    = enum ("Priority",         PriorityMode.Distance)
-    private val raycastMode     = enum ("Raycast",          RaycastMode.None)
+    private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
-    private val failRate        = float("Fail Rate",        0f,   0f, 0.5f)
-    private val autoBlock       = bool ("Auto Block",       false)
+    private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val shortcut        = bool ("Shortcut",         false)
 
-    private companion object { const val TAG = "KillAura" }
+    private companion object { 
+        const val TAG = "KillAura" 
+    }
 
-    private var currentTargetId   = 0L
-    private var lastSwitchMs      = 0L
-    private var lastAttackMs      = 0L
-    private var consecutiveMisses = 0
-    private var tickJob: Job?     = null
+    @Volatile private var currentTargetId   = 0L
+    @Volatile private var lastSwitchMs      = 0L
+    @Volatile private var lastAttackMs      = 0L
+    @Volatile private var lastCritMs        = 0L
+    @Volatile private var consecutiveMisses = 0
+    @Volatile private var attackCount       = 0L
+    
+    private var tickJob: Job? = null
 
     override fun onEnable() {
         super.onEnable()
-        currentTargetId   = 0L
+        currentTargetId = 0L
         consecutiveMisses = 0
-        OverlayLogger.d(TAG, "Enabled: mode=${attackMode.value} range=${range.value} fov=${fov.value} rotation=${rotationMode.value} swing=${swingMode.value}")
+        attackCount = 0L
+        
+        OverlayLogger.d(TAG, "Enabled: CPS=${cpsMin.value}-${cpsMax.value} Range=${range.value} FOV=${fov.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -62,89 +66,105 @@ class KillAura : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) tick()
-            delay(10L)
+            delay(1L)
         }
     }
 
     private fun tick() {
         val now = System.currentTimeMillis()
-        if (now - lastAttackMs < MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)) return
+        val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
+        
+        if (now - lastAttackMs < delayMs) return
 
-        val inRange = EntityTracker.getEntitiesInRange(range.value)
-        if (inRange.isEmpty() && consecutiveMisses % 40 == 0) {
-            // Range içinde hiç entity yoksa periyodik olarak logla (spam olmasın diye %40)
-            OverlayLogger.v(TAG, "tick: range=${range.value} içinde entity yok (EntityTracker boş dönüyor mu kontrol et)")
+        val targets = selectTargets()
+        
+        if (targets.isEmpty()) {
+            consecutiveMisses++
+            return
         }
+
+        consecutiveMisses = 0
+        attackCount++
 
         when (attackMode.value) {
-            AttackMode.Multi   -> attackMulti(now)
-            AttackMode.Closest -> attackClosest(now)
-            else               -> attackSingle(now)
+            AttackMode.Multi -> {
+                val maxTargetsVal = maxTargets.value.coerceAtMost(targets.size)
+                targets.take(maxTargetsVal).forEach { target ->
+                    if (!shouldFail()) {
+                        doAttack(target, now)
+                    }
+                }
+                lastAttackMs = now
+            }
+            AttackMode.Closest -> {
+                val target = targets.minByOrNull { EntityTracker.distanceTo(it) }
+                if (target != null && !shouldFail()) {
+                    doAttack(target, now)
+                    lastAttackMs = now
+                }
+            }
+            else -> {
+                val target = selectTarget(targets)
+                if (target != null && !shouldFail()) {
+                    doAttack(target, now)
+                    lastAttackMs = now
+                }
+            }
         }
     }
 
-    private fun attackSingle(now: Long) {
-        val target = selectTarget() ?: run {
-            consecutiveMisses++
-            if (consecutiveMisses == 1 || consecutiveMisses % 50 == 0) {
-                OverlayLogger.v(TAG, "selectTarget() null döndü (consecutiveMisses=$consecutiveMisses) — FOV=${fov.value} range=${range.value}")
-            }
-            return
-        }
-        consecutiveMisses = 0
-        if (shouldFail()) {
-            OverlayLogger.v(TAG, "shouldFail() true — saldırı bilerek atlandı (failRate=${failRate.value})")
-            return
-        }
-        lastAttackMs = now
-        doAttack(target)
+    private fun selectTargets(): List<EntityTracker.TrackedEntity> {
+        val candidates = EntityTracker.getEntitiesInRange(range.value)
+            .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
+            .toMutableList()
+        return candidates
     }
 
-    private fun attackClosest(now: Long) {
-        val candidates = EntityTracker.getEntitiesInRange(range.value).filter { inFov(it) }
-        val target = candidates.minByOrNull { EntityTracker.distanceTo(it) }
-        if (target == null) {
-            OverlayLogger.v(TAG, "attackClosest: uygun hedef yok (candidates=${candidates.size})")
-            return
+    private fun selectTarget(candidates: List<EntityTracker.TrackedEntity>): EntityTracker.TrackedEntity? {
+        if (candidates.isEmpty()) return null
+
+        if (attackMode.value == AttackMode.Switch) {
+            val now = System.currentTimeMillis()
+            if (now - lastSwitchMs >= switchDelay.value) {
+                currentTargetId = 0L
+                lastSwitchMs = now
+            }
+            val cur = candidates.find { it.runtimeId == currentTargetId }
+            if (cur != null) return cur
         }
-        if (shouldFail()) return
-        lastAttackMs = now
-        doAttack(target)
+
+        val sorted = when (priorityMode.value) {
+            PriorityMode.Distance -> candidates.sortedBy { EntityTracker.distanceTo(it) }
+            PriorityMode.Health -> candidates.sortedBy { it.health }
+            PriorityMode.LowestHealth -> candidates.sortedBy { it.health }
+            PriorityMode.Direction -> candidates.sortedBy { EntityTracker.angleToEntity(it) }
+        }
+
+        val result = if (reversePriority.value) sorted.lastOrNull() else sorted.firstOrNull()
+        
+        if (attackMode.value == AttackMode.Switch && result != null) {
+            currentTargetId = result.runtimeId
+        }
+        
+        return result
     }
 
-    private fun attackMulti(now: Long) {
-        val targets = EntityTracker.getEntitiesInRange(range.value)
-            .filter { inFov(it) }
-            .take(maxTargets.value)
-        if (targets.isEmpty()) {
-            OverlayLogger.v(TAG, "attackMulti: hedef listesi boş")
-            return
-        }
-        lastAttackMs = now
-        targets.forEach { e -> if (!shouldFail()) doAttack(e) }
-    }
+    private fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
+        val session = PacketEventBus.currentSession ?: return
+        
+        OverlayLogger.v(TAG, "Attack #${attackCount}: dist=${"%.2f".format(EntityTracker.distanceTo(e))}")
 
-    private fun doAttack(e: EntityTracker.TrackedEntity) {
-        val session = PacketEventBus.currentSession ?: run {
-            OverlayLogger.w(TAG, "doAttack: PacketEventBus.currentSession null — relay bağlı değil mi?")
-            return
-        }
-        OverlayLogger.v(TAG, "doAttack: target=${e.runtimeId} dist=${"%.2f".format(EntityTracker.distanceTo(e))} rotation=${rotationMode.value} swing=${swingMode.value}")
-
-        when (rotationMode.value) {
-            RotationMode.Lock -> {
-                val r = RotationUtil.toEntity(e)
-                PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
+        if (rotationMode.value != RotationMode.None) {
+            val r = RotationUtil.toEntity(e)
+            when (rotationMode.value) {
+                RotationMode.Lock -> PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
+                RotationMode.Approximate -> {
+                    val approx = RotationUtil.approximate(r)
+                    PacketUtil.sendMoveAtSelf(session, approx.yaw, approx.pitch)
+                }
+                RotationMode.Silent -> PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch, teleport = false)
+                RotationMode.None -> {}
             }
-            RotationMode.Approximate -> {
-                val r = RotationUtil.approximate(RotationUtil.toEntity(e))
-                PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
-            }
-            RotationMode.Silent -> {
-                val r = RotationUtil.toEntity(e)
-                PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch, teleport = false)
-            }
-            RotationMode.None -> {}
         }
 
         when (swingMode.value) {
@@ -153,37 +173,27 @@ class KillAura : BaseModule(
         }
 
         PacketUtil.sendAttack(session, e.runtimeId)
-    }
-
-    private fun selectTarget(): EntityTracker.TrackedEntity? {
-        val candidates = EntityTracker.getEntitiesInRange(range.value).filter { inFov(it) }
-        if (candidates.isEmpty()) return null
-
-        if (attackMode.value == AttackMode.Switch) {
-            val now = System.currentTimeMillis()
-            if (now - lastSwitchMs >= switchDelay.value) { currentTargetId = 0L; lastSwitchMs = now }
-            val cur = candidates.find { it.runtimeId == currentTargetId }
-            if (cur != null) return cur
+        
+        if (attackCount % 2 == 0L) {
+            delay(1)
+            PacketUtil.sendAttack(session, e.runtimeId)
         }
 
-        val sorted = when (priorityMode.value) {
-            PriorityMode.Distance     -> candidates.sortedBy { EntityTracker.distanceTo(it) }
-            PriorityMode.Health       -> candidates.sortedBy { it.health }
-            PriorityMode.LowestHealth -> candidates.sortedBy { it.health }
-            // FIX: use EntityTracker.angleToEntity (was unresolved in old version)
-            PriorityMode.Direction    -> candidates.sortedBy { entity: EntityTracker.TrackedEntity ->
-                EntityTracker.angleToEntity(entity)
-            }
-        }
+        injectCrit(session)
 
-        val result = if (reversePriority.value) sorted.lastOrNull() else sorted.firstOrNull()
-        if (attackMode.value == AttackMode.Switch && result != null) currentTargetId = result.runtimeId
-        return result
+        lastAttackMs = now
     }
 
-    private fun inFov(e: EntityTracker.TrackedEntity): Boolean =
-        fov.value >= 360 || EntityTracker.angleToEntity(e) <= fov.value / 2f
+    private fun injectCrit(session: com.oxclient.core.relay.OxRelaySession) {
+        val now = System.currentTimeMillis()
+        if (now - lastCritMs < 5) return
+        lastCritMs = now
+        
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0f, onGround = true)
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.042f, onGround = false)
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0f, onGround = true)
+    }
 
-    private fun shouldFail(): Boolean =
-        failRate.value > 0f && Math.random() < failRate.value
+    private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value
 }

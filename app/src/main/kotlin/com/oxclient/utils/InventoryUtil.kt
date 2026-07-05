@@ -75,11 +75,22 @@ object InventoryUtil {
     }
 
     /**
+     * Bir ItemData'nın boş/hava slotu olup olmadığını kontrol eder.
+     * ✅ FIX: `item == ItemData.AIR` referans/structural kontrolü Beta6-SNAPSHOT'ta
+     * gelen boş slotlarla eşleşmiyordu (netId farkı). Artık definition/count bazlı
+     * anlamsal kontrol kullanılıyor.
+     */
+    fun isEmpty(item: ItemData?): Boolean {
+        if (item == null) return true
+        return try { item.definition == null || item.count <= 0 } catch (_: Exception) { true }
+    }
+
+    /**
      * ItemData'nın totem olup olmadığını kontrol eder.
      */
     fun isTotem(item: ItemData?): Boolean {
-        if (item == null || item == ItemData.AIR) return false
-        val identifier = try { item.definition?.identifier } catch (_: Exception) { null }
+        if (isEmpty(item)) return false
+        val identifier = try { item?.definition?.identifier } catch (_: Exception) { null }
         return identifier == "minecraft:totem_of_undying"
     }
 

@@ -357,18 +357,27 @@ object EntityTracker : PacketEventBus.PacketListener {
         } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
     }
 
+    /** ✅ FIX: Beta6-SNAPSHOT'ta gelen "boş" slotlar `ItemData.AIR` ile referans/structural
+     *  olarak eşleşmiyor (netId farkı nedeniyle) — bu yüzden `item != ItemData.AIR` kontrolü
+     *  boş slotları da "dolu item" sanıyordu (definition=null, netId sabit bir değer).
+     *  Artık anlamsal kontrol yapılıyor: definition null ise veya count <= 0 ise slot boştur. */
+    private fun isEmptyItem(item: ItemData?): Boolean {
+        if (item == null) return true
+        return try { item.definition == null || item.count <= 0 } catch (_: Exception) { true }
+    }
+
     private fun handleInventoryContent(p: InventoryContentPacket) {
         if (p.containerId != 0) return // sadece ana envanter (0) — envanter dışı container'ları takip etmiyoruz
         selfInventory.clear()
         p.contents.forEachIndexed { slot, item ->
-            if (item != null && item != ItemData.AIR) selfInventory[slot] = item
+            if (!isEmptyItem(item)) selfInventory[slot] = item
         }
     }
 
     private fun handleInventorySlot(p: InventorySlotPacket) {
         if (p.containerId != 0) return
         val item = p.item
-        if (item == null || item == ItemData.AIR) selfInventory.remove(p.slot)
+        if (isEmptyItem(item)) selfInventory.remove(p.slot)
         else selfInventory[p.slot] = item
     }
 
