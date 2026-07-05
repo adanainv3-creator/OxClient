@@ -3,6 +3,7 @@ package com.oxclient.utils
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.OxRelaySession
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.AnimatePacket
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
@@ -18,11 +19,30 @@ object PacketUtil {
     }
 
     fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = 0) {
+        // ── FIX: InventoryTransactionSerializer.writeItemUseOnEntity() bu üç alanı
+        // KOŞULSUZ okuyor (bkz. CloudburstMC/Protocol v291→v1001, hiç değişmemiş).
+        // null bırakılırsa helper.writeVector3f(null)/writeItem(null) encode
+        // aşamasında NPE atıyor — paket ağa hiç çıkmadan sessizce kayboluyor.
+        // Bu yüzden KillAura/CrystalAura/AutoTotem'in saldırıları hiç işlemiyordu.
+        val heldItem = EntityTracker.getInventoryItem(hotbarSlot) ?: ItemData.AIR
+        val target   = EntityTracker.getById(targetRid)
+
+        val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+        val clickPos  = if (target != null) {
+            // Hedefin yaklaşık gövde-orta yüksekliğine tıklamış gibi davran.
+            Vector3f.from(target.x, target.y + 1.0f, target.z)
+        } else {
+            playerPos
+        }
+
         session.serverBound(InventoryTransactionPacket().apply {
             transactionType = InventoryTransactionType.ITEM_USE_ON_ENTITY
             runtimeEntityId = targetRid
-            actionType      = 1   // 1 = ATTACK (no ItemUseOnEntityData class in 3.0)
+            actionType      = 1   // 1 = ATTACK
             this.hotbarSlot = hotbarSlot
+            itemInHand      = heldItem
+            playerPosition  = playerPos
+            clickPosition   = clickPos
         })
     }
 
