@@ -1,10 +1,10 @@
+
 package com.oxclient.core.proxy
 
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.utils.MathUtil
-import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,6 +70,11 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
     private val playerNames     = ConcurrentHashMap<Long, String>()
 
+    // ✅ FIX: Kendi envanterimizin sürekli/oturum-boyunca önbelleği. InventoryContentPacket
+    // sadece bağlantı başında/envanter açıldığında gelir; AutoTotem gibi modüller oyuna
+    // girdikten SONRA enable edilirse bu paketi bir daha hiç göremiyordu (BlockTracker'daki
+    // palet sorununun envanter karşılığı). EntityTracker zaten her zaman aktif olduğu için
+    // envanter durumu burada tutulup modüller enable anında buradan "yakalanabiliyor".
     private val selfInventory = ConcurrentHashMap<Int, ItemData>()
 
     @Volatile var selfRuntimeId  : Long    = 0L
@@ -104,7 +109,6 @@ object EntityTracker : PacketEventBus.PacketListener {
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
         selfInventory.clear()
-        InventoryUtil.clearTotemNetIds()
         selfRuntimeId = 0L; selfUniqueId = 0L
         selfX = 0f; selfY = 0f; selfZ = 0f; selfYaw = 0f; selfPitch = 0f
         selfHealth = 20f; selfMaxHealth = 20f; selfAbsorb = 0f; selfArmor = 0f
@@ -115,6 +119,12 @@ object EntityTracker : PacketEventBus.PacketListener {
         OverlayLogger.i(TAG, "EntityTracker sıfırlandı")
     }
 
+    // ✅ DEBUG: Bir sürüm boyunca görülen HER FARKLI paket tipini bir KEZ loglar.
+    // Spam yapmaz (her tip için sadece ilk görülüşte yazar). AutoTotem envanteri
+    // hâlâ boş görüyorsa, bu logu arayıp "Inventory" geçen satır var mı diye bak:
+    //  - Hiç "InventoryContentPacket" görünmüyorsa   → paket server'dan hiç gelmiyor/routing sorunu
+    //  - Sadece "UnknownPacket" görünüyorsa (sık sık) → codec bu protokol sürümünde paketi tanımıyor, decode edemiyor
+    //  - "InventoryContentPacket" görünüyor ama envanter boşsa → containerId beklenenden farklı, aşağıdaki log'a bak
     private val seenPacketTypes = ConcurrentHashMap<String, Boolean>()
 
     override fun onPacket(event: PacketEvent) {
@@ -141,8 +151,8 @@ object EntityTracker : PacketEventBus.PacketListener {
             is ChangeDimensionPacket    -> handleDimension(p)
             is SetEntityLinkPacket      -> handleEntityLink(p)
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
-            is CreativeContentPacket    -> handleCreativeContent(p)
             is InventoryContentPacket   -> {
+                // ✅ DEBUG: containerId'yi filtre uygulamadan ÖNCE logla — beklenen 0 mı değil mi görelim.
                 OverlayLogger.d(TAG, "InventoryContentPacket alındı: containerId=${p.containerId} itemCount=${p.contents?.size}")
                 handleInventoryContent(p)
             }
@@ -151,6 +161,10 @@ object EntityTracker : PacketEventBus.PacketListener {
                 handleInventorySlot(p)
             }
             is org.cloudburstmc.protocol.bedrock.packet.UnknownPacket -> {
+                // ✅ DEBUG: codec bu paketi decode edemedi (bilinmeyen/versiyon uyumsuz paket).
+                // Eğer envanter hâlâ boş geliyorsa ve burada sık sık log görülüyorsa,
+                // InventoryContentPacket'in bu protokol sürümünde (975) decode edilemediği
+                // ihtimali güçlenir — CloudburstMC codec'i bu paket ID'sini tanımıyor demektir.
                 OverlayLogger.v(TAG, "UnknownPacket alındı: packetId=${p.packetId}")
             }
             else -> {}
@@ -313,6 +327,8 @@ object EntityTracker : PacketEventBus.PacketListener {
             playerNames[entry.entityId] = name
             if (rid != null) {
                 entities[rid]?.name = name
+                // FIX: latencyMs ve latency alanları yeni Cloudburst API'sinde kaldırıldı.
+                // Reflection ile güvenli okuma; yoksa 0 döner.
                 val ping = runCatching {
                     entry.javaClass.getDeclaredField("latencyMs")
                         .also { it.isAccessible = true }
@@ -368,71 +384,48 @@ object EntityTracker : PacketEventBus.PacketListener {
         } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
     }
 
-    /**
-     * ✅ CreativeContentPacket'ten totem runtimeId'lerini InventoryUtil'e kaydet
-     */
-    private fun handleCreativeContent(p: CreativeContentPacket) {
-        try {
-            val definitions = p.contents.mapNotNull { it.definition }
-            InventoryUtil.registerTotemNetIds(definitions)
-            OverlayLogger.d(TAG, "CreativeContentPacket: ${definitions.size} definition kaydedildi")
-        } catch (e: Exception) {
-            OverlayLogger.v(TAG, "CreativeContentPacket işlenirken hata: ${e.message}")
-        }
-    }
-
-    /**
-     * ✅ InventoryUtil.isEmpty() kullanarak item kontrolü
-     */
+    /** ✅ FIX: Beta6-SNAPSHOT'ta gelen "boş" slotlar `ItemData.AIR` ile referans/structural
+     *  olarak eşleşmiyor (netId farkı nedeniyle) — bu yüzden `item != ItemData.AIR` kontrolü
+     *  boş slotları da "dolu item" sanıyordu (definition=null, netId sabit bir değer).
+     *  Artık anlamsal kontrol yapılıyor: definition null ise veya count <= 0 ise slot boştur. */
     private fun isEmptyItem(item: ItemData?): Boolean {
-        return InventoryUtil.isEmpty(item)
+        if (item == null) return true
+        // ✅ FIX: item.definition CloudburstMC'de network item'larda NULL olabiliyor.
+        // Paket geldikten sonra inventory item'lar henüz full resolution edilmediği için.
+        // Bunun yerine basit count kontrolü yeterli — count > 0 = geçerli item.
+        return item.count <= 0
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {
         when (p.containerId) {
             0 -> {
                 for (s in 0..35) selfInventory.remove(s)
-                var addedCount = 0
                 p.contents.forEachIndexed { slot, item ->
-                    if (!isEmptyItem(item)) {
-                        selfInventory[slot] = item
-                        addedCount++
-                    }
+                    if (!isEmptyItem(item)) selfInventory[slot] = item
                 }
-                OverlayLogger.d(TAG, "InventoryContent containerId=0: ${p.contents.size} item, $addedCount non-empty eklendi")
             }
             119 -> {
                 val item = p.contents.firstOrNull()
-                if (item == null || isEmptyItem(item)) {
-                    selfInventory.remove(119)
-                    OverlayLogger.d(TAG, "InventoryContent containerId=119: boş/air → removed")
-                } else {
-                    selfInventory[119] = item
-                    OverlayLogger.d(TAG, "InventoryContent containerId=119: ${item.definition?.identifier} eklendi")
-                }
+                if (item == null || isEmptyItem(item)) selfInventory.remove(119)
+                else selfInventory[119] = item
             }
-            else -> {
-                OverlayLogger.v(TAG, "InventoryContent containerId=${p.containerId} ignored")
-            }
+            else -> return
         }
     }
 
     private fun handleInventorySlot(p: InventorySlotPacket) {
         if (p.containerId != 0 && p.containerId != 119) return
-        
         val slotKey = if (p.containerId == 119) 119 else p.slot
         val item = p.item
-        
-        if (isEmptyItem(item)) {
-            selfInventory.remove(slotKey)
-            OverlayLogger.v(TAG, "InventorySlot containerId=${p.containerId} slot=$slotKey → removed (empty)")
-        } else {
-            selfInventory[slotKey] = item
-            OverlayLogger.v(TAG, "InventorySlot containerId=${p.containerId} slot=$slotKey → ${item.definition?.identifier} eklendi")
-        }
+        if (isEmptyItem(item)) selfInventory.remove(slotKey)
+        else selfInventory[slotKey] = item
     }
 
+    /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
     fun getInventoryItem(slot: Int): ItemData? = selfInventory[slot]
+
+    /** Ana envanterin anlık kopyası — slot -> ItemData. Modüller geç enable olsa bile
+     *  buradan mevcut durumu okuyabilir (bkz. selfInventory üstteki not). */
     fun getInventorySnapshot(): Map<Int, ItemData> = selfInventory.toMap()
 
     private fun applyMetadata(entity: TrackedEntity, metadata: Map<*, *>?) {

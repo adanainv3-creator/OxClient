@@ -6,6 +6,7 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
+import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.packet.*
 
 class AutoTotem : BaseModule(
@@ -19,11 +20,12 @@ class AutoTotem : BaseModule(
 
     @Volatile private var totemSlot       = -1
     @Volatile private var totemNetId      = 0
-    @Volatile private var totemDefinition = null as org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition?
+    @Volatile private var totemDefinition : ItemDefinition? = null
     @Volatile private var offhandHasTotem = false
-    @Volatile private var creativeContentReceived = false
 
     private var watchJob: kotlinx.coroutines.Job? = null
+
+    // 🔍 DEBUG: tam envanter dump'ı spam yapmasın diye en fazla 2 saniyede bir yazılır
     @Volatile private var lastDumpMs = 0L
 
     override fun onEnable() {
@@ -32,7 +34,6 @@ class AutoTotem : BaseModule(
         totemNetId = 0
         totemDefinition = null
         offhandHasTotem = false
-        creativeContentReceived = false
 
         scanCachedInventory()
         OverlayLogger.d(TAG, "Enabled: totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem")
@@ -45,6 +46,13 @@ class AutoTotem : BaseModule(
         OverlayLogger.d(TAG, "Disabled")
     }
 
+    /**
+     * 🔍 DEBUG (GEÇİCİ): Totem "görünürde envanterde var ama bulunamıyor" sorununu
+     * teşhis etmek için, tarama sırasında envanterdeki HER item'ın gerçek
+     * identifier/netId değerini bir kere dump ediyoruz. Bir sonraki enable
+     * denemesinde logda "── Envanter taraması ──" bloğunu ara; totemin
+     * gerçekte hangi identifier ile geldiğini orada göreceğiz.
+     */
     private fun scanCachedInventory() {
         val snapshot = EntityTracker.getInventorySnapshot()
         totemSlot = -1; totemNetId = 0; totemDefinition = null
@@ -56,13 +64,11 @@ class AutoTotem : BaseModule(
             OverlayLogger.d(TAG, "── Envanter taraması (${snapshot.size} item, offhand dahil) ──")
             if (snapshot.isEmpty()) {
                 OverlayLogger.d(TAG, "  (snapshot BOŞ — EntityTracker henüz hiç InventoryContentPacket görmemiş olabilir)")
-            } else {
-                snapshot.toSortedMap().forEach { (slot, item) ->
-                    val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
-                    val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
-                    val isTotem = InventoryUtil.isTotem(item)
-                    OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count} isTotem=$isTotem")
-                }
+            }
+            snapshot.toSortedMap().forEach { (slot, item) ->
+                val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
+                val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
+                OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count}")
             }
         }
 
@@ -71,7 +77,6 @@ class AutoTotem : BaseModule(
                 totemSlot = slot
                 totemNetId = item.netId
                 totemDefinition = item.definition
-                OverlayLogger.d(TAG, "✅ Totem bulundu: slot=$slot netId=${item.netId}")
             }
         }
     }
@@ -80,21 +85,6 @@ class AutoTotem : BaseModule(
         if (!isEnabled) return
 
         when (val pkt = event.packet) {
-            is CreativeContentPacket -> {
-                try {
-                    val definitions = pkt.contents.mapNotNull { it.definition }
-                    InventoryUtil.registerTotemNetIds(definitions)
-                    creativeContentReceived = true
-                    // CreativeContentPacket geldikten sonra envanteri tara
-                    scanCachedInventory()
-                    if (totemSlot >= 0 && !offhandHasTotem) {
-                        equipTotem()
-                    }
-                } catch (e: Exception) {
-                    OverlayLogger.v(TAG, "CreativeContentPacket işlenirken hata: ${e.message}")
-                }
-            }
-
             is InventoryContentPacket -> {
                 when (pkt.containerId) {
                     0 -> {
@@ -133,10 +123,6 @@ class AutoTotem : BaseModule(
                 val type = try { pkt.type?.toString()?.uppercase() ?: "" } catch (_: Exception) { "" }
                 if (type.contains("CONSUME") || type.contains("TOTEM")) {
                     offhandHasTotem = false
-                    scanCachedInventory()
-                    if (totemSlot >= 0) {
-                        equipTotem()
-                    }
                 }
             }
 
@@ -167,6 +153,6 @@ class AutoTotem : BaseModule(
 
         InventoryUtil.sendOffhandEquip(session, slot, itemData)
         offhandHasTotem = true
-        OverlayLogger.i(TAG, "✅ Totem takıldı: slot=$slot netId=${itemData.netId}")
+        OverlayLogger.v(TAG, "Totem takıldı: slot=$slot netId=${itemData.netId}")
     }
 }
