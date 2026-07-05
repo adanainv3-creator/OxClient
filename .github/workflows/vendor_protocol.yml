@@ -1,0 +1,48 @@
+name: Vendor CloudburstMC Protocol (tek seferlik / gerektiğinde çalıştır)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Protocol repo branch/tag (örn. 3.0)"
+        required: false
+        default: "3.0"
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Protocol kaynağını klonla ve gömme
+        run: |
+          rm -rf relay/Protocol
+          mkdir -p relay
+          git clone --depth 1 -b "${{ inputs.branch }}" https://github.com/CloudburstMC/Protocol.git relay/Protocol
+          echo "Klonlanan commit:"
+          git -C relay/Protocol log -1 --oneline
+
+          # nested .git'i sil — yoksa ana repoya normal dosya olarak eklenemez
+          rm -rf relay/Protocol/.git
+
+      - name: Commit ve push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add relay/Protocol
+          if git diff --cached --quiet; then
+            echo "Değişiklik yok, commit atlanıyor."
+          else
+            git commit -m "vendor: CloudburstMC/Protocol (${{ inputs.branch }}) kaynağını göm"
+            git push
+          fi
+
+      - name: Özet
+        run: |
+          echo "── relay/Protocol içinde bulunan modüller ──"
+          find relay/Protocol -maxdepth 1 -type d
+          echo ""
+          echo "── bedrock-codec içindeki Bedrock_vXXX sınıfları ──"
+          find relay/Protocol/bedrock-codec -iname "Bedrock_v*.java" -o -iname "Bedrock_v*.kt" | sort

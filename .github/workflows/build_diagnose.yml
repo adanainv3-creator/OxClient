@@ -14,98 +14,54 @@ jobs:
         with: { java-version: '17', distribution: 'temurin', cache: gradle }
       - run: chmod +x gradlew
 
-      # ── Maven snapshot v800'de takılı kaldığı için kaynağı doğrudan
-      # çekiyoruz (wclient'teki relay/Protocol klasörüyle aynı isim/yapı —
-      # onlar kalıcı commit'liyor, biz her CI run'ında taze çekiyoruz,
-      # işlevsel olarak aynı sonuç). ──────────────────────────────────
-      - name: Clone CloudburstMC/Protocol kaynağı (Maven snapshot bypass)
+      # ── relay/Protocol artık repoya gömülü (vendor_protocol.yml ile
+      # bir kere commit'lendi) — her build'de tekrar clone YOK.
+      # Sadece varlığını doğruluyoruz. ─────────────────────────────────
+      - name: relay/Protocol varlığını doğrula
         run: |
-          rm -rf relay/Protocol
-          mkdir -p relay
-          git clone --depth 1 -b 3.0 https://github.com/CloudburstMC/Protocol.git relay/Protocol
-          echo "Klonlanan commit:"
-          git -C relay/Protocol log -1 --oneline
-
-      # ── LoginPacket'in gerçek (v818+) alan yapısını görelim ──────────
-      # LoginPacketListener.kt'deki packet.chain / packet.extra artık
-      # derlenmiyor — kör tahmin yerine gerçek kaynağı basıyoruz.
-      - name: Diagnose LoginPacket.java gerçek alanları
-        run: |
-          FILE=$(find relay/Protocol -iname "LoginPacket.java" | head -1)
-          echo "Bulunan dosya: $FILE"
-          if [ -n "$FILE" ]; then
-            cat "$FILE"
-          else
-            echo "LoginPacket.java bulunamadı — find ile genel arama:"
-            find relay/Protocol -iname "*Login*"
+          if [ ! -f "relay/Protocol/settings.gradle.kts" ]; then
+            echo "!! relay/Protocol bulunamadı — vendor_protocol.yml workflow'unu çalıştırdın mı?"
+            exit 1
           fi
-
-      - name: Diagnose AuthPayload ve ilgili sınıflar
-        run: |
-          for name in "AuthPayload.java" "CertificateChainPayload.java" "TokenPayload.java" "AuthType.java"; do
-            echo "════════════════════════════════════════"
-            FILE=$(find relay/Protocol -iname "$name" | head -1)
-            echo "── $name → $FILE ──"
-            if [ -n "$FILE" ]; then cat "$FILE"; else echo "(bulunamadı)"; fi
-          done
-          echo "════════════════════════════════════════"
-          echo "── data/auth klasörünün tüm içeriği ──"
-          find relay/Protocol -path "*data/auth*" -name "*.java"
+          echo "relay/Protocol mevcut ✓"
+          find relay/Protocol -maxdepth 1 -type d
 
       - uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/wrapper
-            ~/.m2/repository
+            ~/.gradle/caches
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
 
-      - name: Diagnose DisconnectPacket.java gerçek yapısı
-        run: |
-          FILE=$(find relay/Protocol -iname "DisconnectPacket.java" | head -1)
-          echo "Bulunan dosya: $FILE"
-          if [ -n "$FILE" ]; then cat "$FILE"; else echo "(bulunamadı)"; fi
-
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace --refresh-dependencies
+        run: ./gradlew assembleDebug --stacktrace
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false -Xmx4g"
 
-      # ── TEŞHİS ADIMI (assembleDebug'dan SONRA — jar ancak derleme
-      # gerçekten o sınıfları kullanınca local cache'e iniyor; bir önceki
-      # denemede ":app:dependencies" sadece metadata/pom çözüyordu, jar'ı
-      # indirmiyordu, o yüzden find boş döndü) ──────────────────────────
-      - name: Diagnose bedrock-codec dependency
+      # ── TEŞHİS ADIMI — composite build (includeBuild) kullanıldığı için
+      # jar artık ~/.gradle/caches'e değil, relay/Protocol/bedrock-codec/
+      # build/libs/ altına düşüyor. ──────────────────────────────────────
+      - name: Diagnose bedrock-codec (composite build çıktısı)
         if: always()
         run: |
-          echo "── Resolved jar dosyaları (tüm ~/.gradle/caches içinde) ──"
-          find ~/.gradle/caches -iname "bedrock-codec*.jar" -exec ls -la {} \;
+          echo "── relay/Protocol/bedrock-codec build çıktıları ──"
+          find relay/Protocol/bedrock-codec -path "*/build/libs/*.jar" -exec ls -la {} \;
 
           echo ""
-          echo "── Her jar içindeki TÜM versiyon paketleri ──"
-          for jar in $(find ~/.gradle/caches -iname "bedrock-codec*.jar"); do
-            echo "=== $jar ==="
-            unzip -l "$jar" | grep -oE "v[0-9]+/Bedrock_v[0-9]+\.class" | sed 's#/Bedrock_v[0-9]*\.class##' | sort -t v -k2 -n -u
-          done
+          echo "── Kaynak ağacında hangi Bedrock_vXXX sınıfları var (derlemeden bağımsız gerçek liste) ──"
+          find relay/Protocol/bedrock-codec -iname "Bedrock_v*.java" -o -iname "Bedrock_v*.kt" | sed -E 's#.*Bedrock_v([0-9]+)\.(java|kt)#\1#' | sort -n -u
 
           echo ""
           echo "════════════════════════════════════════════════════════"
           echo "── KRİTİK KONTROL: 2b2tpe.org protocol=944 istiyor.     ──"
-          echo "── CodecRegistry.kt fallback zincirindeki 924/935/944/  ──"
-          echo "── 948/975 sürümleri jar içinde GERÇEKTEN var mı?      ──"
           echo "════════════════════════════════════════════════════════"
-          JAR=$(find ~/.gradle/caches -iname "bedrock-codec*.jar" | head -1)
-          if [ -z "$JAR" ]; then
-            echo "!! bedrock-codec jar hiç bulunamadı — dependency çözülememiş olabilir"
-          else
-            echo "Kontrol edilen jar: $JAR"
-            for v in 898 924 935 944 948 975; do
-              if unzip -l "$JAR" | grep -q "v${v}/Bedrock_v${v}\.class"; then
-                echo "  [VAR]  v${v}  → org.cloudburstmc.protocol.bedrock.codec.v${v}.Bedrock_v${v}"
-              else
-                echo "  [YOK]  v${v}"
-              fi
-            done
-          fi
+          for v in 898 924 935 944 948 975; do
+            if find relay/Protocol/bedrock-codec -iname "Bedrock_v${v}.*" | grep -q .; then
+              echo "  [VAR]  v${v}"
+            else
+              echo "  [YOK]  v${v}"
+            fi
+          done
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -115,7 +71,7 @@ jobs:
           retention-days: 30
       - name: Build Release APK
         if: github.ref == 'refs/heads/main'
-        run: ./gradlew assembleRelease --refresh-dependencies
+        run: ./gradlew assembleRelease
         env:
           KEYSTORE_PATH: ${{ secrets.KEYSTORE_PATH }}
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
