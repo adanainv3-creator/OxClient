@@ -7,6 +7,7 @@ import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
 import kotlinx.coroutines.*
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
 
 class AutoTotem : BaseModule(
@@ -28,36 +29,65 @@ class AutoTotem : BaseModule(
 
     @Volatile private var currentHealth   = 20f
     @Volatile private var totemSlot       = -1
-    // ✅ FIX: netId yerine slottaki GERÇEK ItemData saklanıyor. MobEquipmentSerializer
-    // helper.writeItem() kullanıyor — bu legacy yazıcı netId kısayolu tanımıyor,
-    // item'ın gerçek definition/damage/tag alanlarını okuyor. Sadece netId göndermek
-    // definition=null olan sahte bir item'a yol açıp encode'da çöküyordu.
-    @Volatile private var totemItem: org.cloudburstmc.protocol.bedrock.data.inventory.ItemData? = null
+    @Volatile private var totemNetId      = 0
+    @Volatile private var totemIdentifier = ""
     @Volatile private var offhandHasTotem = false
     @Volatile private var lastEquipMs     = 0L
     @Volatile private var lastDamageMs    = 0L
+    @Volatile private var lastVerifyMs    = 0L
 
     private var watchJob: Job? = null
 
     override fun onEnable() {
         super.onEnable()
-        currentHealth = 20f; totemSlot = -1; offhandHasTotem = false
-        // ✅ FIX: InventoryContentPacket sadece bağlantı başında/envanter açıldığında
-        // gelir. Oyuna girdikten SONRA AutoTotem enable edilirse bu paket bir daha hiç
-        // gelmeyebilir ve totemSlot hep -1 kalırdı. EntityTracker'ın her zaman güncel
-        // tuttuğu envanter önbelleğinden burada anında tarama yapıyoruz.
+        currentHealth = 20f
+        totemSlot = -1
+        totemNetId = 0
+        totemIdentifier = ""
+        offhandHasTotem = false
+        
+        // ✅ Cache'ten anında tarama
         scanCachedInventory()
-        OverlayLogger.d(TAG, "Enabled: triggerMode=${triggerMode.value} threshold=${healthThreshold.value} delay=${delay.value} (cache'ten totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem)")
+        
+        // ✅ Debug: Envanter durumunu logla
+        logInventoryState()
+        
+        OverlayLogger.d(TAG, "Enabled: triggerMode=${triggerMode.value} threshold=${healthThreshold.value} delay=${delay.value}")
         watchJob = launchTickLoop(20L) { watchTick() }
+    }
+
+    private fun logInventoryState() {
+        val snapshot = EntityTracker.getInventorySnapshot()
+        if (snapshot.isEmpty()) {
+            OverlayLogger.d(TAG, "Envanter snapshot boş")
+            return
+        }
+        OverlayLogger.d(TAG, "=== ENVANTER DURUMU ===")
+        snapshot.forEach { (slot, item) ->
+            val id = try { item.definition?.identifier } catch (_: Exception) { "unknown" }
+            OverlayLogger.d(TAG, "  Slot $slot: $id (netId=${item.netId})")
+        }
+        OverlayLogger.d(TAG, "Totem slot: $totemSlot, Offhand: $offhandHasTotem")
     }
 
     private fun scanCachedInventory() {
         val snapshot = EntityTracker.getInventorySnapshot()
         if (snapshot.isEmpty()) return
+        
         snapshot.forEach { (slot, item) ->
-            if (InventoryUtil.isTotem(item)) when {
-                slot == InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = true
-                slot in 0..35 && totemSlot == -1 -> { totemSlot = slot; totemItem = item }
+            if (InventoryUtil.isTotem(item)) {
+                when {
+                    slot == InventoryUtil.OFFHAND_SLOT -> {
+                        offhandHasTotem = true
+                        OverlayLogger.v(TAG, "Offhand'de totem var: netId=${item.netId}")
+                    }
+                    slot in 0..35 && totemSlot == -1 -> {
+                        totemSlot = slot
+                        totemNetId = item.netId
+                        totemIdentifier = try { item.definition?.identifier ?: "" } catch (_: Exception) { "" }
+                        OverlayLogger.v(TAG, "Totem bulundu: slot=$slot, netId=$totemNetId, id=$totemIdentifier")
+                    }
+                }
             }
         }
     }
@@ -70,6 +100,7 @@ class AutoTotem : BaseModule(
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
+        
         when (val pkt = event.packet) {
             is UpdateAttributesPacket -> {
                 if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
@@ -80,68 +111,162 @@ class AutoTotem : BaseModule(
                     OverlayLogger.v(TAG, "Health güncellendi: $prev -> ${it.value}")
                 }
             }
+            
             is InventoryContentPacket -> {
                 if (pkt.containerId != 0) return
-                totemSlot = -1; offhandHasTotem = false
+                
+                // ✅ InventoryContent geldiğinde tüm envanteri tara
+                totemSlot = -1
+                totemNetId = 0
+                totemIdentifier = ""
+                offhandHasTotem = false
+                
                 pkt.contents.forEachIndexed { slot, item ->
-                    if (InventoryUtil.isTotem(item)) when {
-                        slot == InventoryUtil.OFFHAND_SLOT && !offhandHasTotem -> offhandHasTotem = true
-                        totemSlot == -1 -> { totemSlot = slot; totemItem = item }
+                    if (InventoryUtil.isTotem(item)) {
+                        when {
+                            slot == InventoryUtil.OFFHAND_SLOT -> {
+                                offhandHasTotem = true
+                                OverlayLogger.v(TAG, "Offhand'de totem var (InventoryContent): netId=${item.netId}")
+                            }
+                            totemSlot == -1 -> {
+                                totemSlot = slot
+                                totemNetId = item.netId
+                                totemIdentifier = try { item.definition?.identifier ?: "" } catch (_: Exception) { "" }
+                                OverlayLogger.v(TAG, "Totem bulundu (InventoryContent): slot=$slot, netId=$totemNetId, id=$totemIdentifier")
+                            }
+                        }
                     }
                 }
                 OverlayLogger.v(TAG, "InventoryContent tarandı: totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem")
             }
+            
             is InventorySlotPacket -> {
                 if (pkt.containerId != 0) return
-                when (pkt.slot) {
-                    InventoryUtil.OFFHAND_SLOT -> offhandHasTotem = InventoryUtil.isTotem(pkt.item)
-                    in 0..35 -> if (InventoryUtil.isTotem(pkt.item) && totemSlot == -1) {
-                        totemSlot = pkt.slot; totemItem = pkt.item
-                        OverlayLogger.v(TAG, "Yeni totem slotu bulundu: slot=$totemSlot")
+                
+                if (pkt.slot == InventoryUtil.OFFHAND_SLOT) {
+                    offhandHasTotem = InventoryUtil.isTotem(pkt.item)
+                    OverlayLogger.v(TAG, "Offhand güncellendi: $offhandHasTotem (netId=${pkt.item?.netId})")
+                } else if (pkt.slot in 0..35) {
+                    if (InventoryUtil.isTotem(pkt.item)) {
+                        // ✅ Yeni totem bulundu, netId'yi güncelle
+                        totemSlot = pkt.slot
+                        totemNetId = pkt.item.netId
+                        totemIdentifier = try { pkt.item.definition?.identifier ?: "" } catch (_: Exception) { "" }
+                        OverlayLogger.v(TAG, "Yeni totem: slot=$totemSlot, netId=$totemNetId, id=$totemIdentifier")
+                    } else if (totemSlot == pkt.slot) {
+                        // Totem kaldırıldı veya değiştirildi
+                        totemSlot = -1
+                        totemNetId = 0
+                        totemIdentifier = ""
+                        OverlayLogger.v(TAG, "Totem slot $pkt.slot boşaldı")
                     }
                 }
             }
+            
             is EntityEventPacket -> {
                 if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
-                val t = try { pkt.type?.toString()?.uppercase() ?: "" } catch (_: Exception) { "" }
-                if (t.contains("CONSUME") || t.contains("TOTEM")) {
+                val type = try { pkt.type?.toString()?.uppercase() ?: "" } catch (_: Exception) { "" }
+                
+                // ✅ Totem tüketimi tespiti
+                if (type.contains("CONSUME") || type.contains("TOTEM") || type == "CONSUME_TOTEM") {
                     offhandHasTotem = false
-                    OverlayLogger.v(TAG, "Totem tüketildi (EntityEvent=$t), offhandHasTotem=false")
+                    OverlayLogger.d(TAG, "Totem tüketildi (EntityEvent=$type)")
                 }
             }
+            
             else -> {}
         }
     }
 
     private fun watchTick() {
+        val now = System.currentTimeMillis()
+        
+        // ✅ Periyodik offhand doğrulama (her 500ms)
+        if (now - lastVerifyMs > 500) {
+            lastVerifyMs = now
+            verifyOffhandState()
+        }
+        
         val shouldEquip = when (triggerMode.value) {
             TriggerMode.HealthBased -> currentHealth <= healthThreshold.value && !offhandHasTotem
             TriggerMode.Always      -> !offhandHasTotem || reEquipAlways.value
-            TriggerMode.OnDamage    -> !offhandHasTotem && (System.currentTimeMillis() - lastDamageMs < 2000L)
+            TriggerMode.OnDamage    -> !offhandHasTotem && (now - lastDamageMs < 2000L)
         }
+        
         if (shouldEquip && totemSlot < 0) {
-            OverlayLogger.v(TAG, "shouldEquip=true ama totemSlot=-1 (envanterde totem yok / InventoryContentPacket henüz gelmedi)")
+            // ✅ Totem yoksa yeniden tara
+            scanCachedInventory()
+            if (totemSlot < 0) {
+                OverlayLogger.v(TAG, "Envanterde totem yok")
+                return
+            }
         }
+        
         if (shouldEquip && totemSlot >= 0) {
-            val now = System.currentTimeMillis()
             if (now - lastEquipMs >= delay.value) {
-                lastEquipMs = now; equipTotem()
+                lastEquipMs = now
+                equipTotem()
+            }
+        }
+    }
+
+    /**
+     * Offhand slot'unun gerçek durumunu kontrol eder
+     */
+    private fun verifyOffhandState() {
+        val offhandItem = EntityTracker.getInventoryItem(InventoryUtil.OFFHAND_SLOT)
+        val hasTotem = InventoryUtil.isTotem(offhandItem)
+        
+        if (hasTotem != offhandHasTotem) {
+            OverlayLogger.d(TAG, "Offhand state değişti: $offhandHasTotem -> $hasTotem")
+            offhandHasTotem = hasTotem
+        }
+        
+        // Offhand'de totem yoksa ama totemSlot hala geçerliyse, 
+        // totemin hala envanterde olduğunu doğrula
+        if (!offhandHasTotem && totemSlot >= 0) {
+            val item = EntityTracker.getInventoryItem(totemSlot)
+            if (!InventoryUtil.isTotem(item)) {
+                OverlayLogger.d(TAG, "Totem slot $totemSlot artık geçerli değil, resetleniyor")
+                totemSlot = -1
+                totemNetId = 0
+                totemIdentifier = ""
+                // Yeniden tara
+                scanCachedInventory()
             }
         }
     }
 
     private fun equipTotem() {
-        val slot = totemSlot; if (slot < 0) return
-        val item = totemItem ?: EntityTracker.getInventoryItem(slot) ?: run {
-            OverlayLogger.w(TAG, "equipTotem: slot=$slot için gerçek ItemData bulunamadı — vazgeçildi")
+        val slot = totemSlot
+        if (slot < 0) {
+            OverlayLogger.w(TAG, "equipTotem: totemSlot < 0")
             return
         }
+        
         val session = PacketEventBus.currentSession ?: run {
-            OverlayLogger.w(TAG, "equipTotem: session null — relay bağlı değil")
+            OverlayLogger.w(TAG, "equipTotem: session null")
             return
         }
-        OverlayLogger.d(TAG, "Totem takılıyor slot=$slot")
-        InventoryUtil.sendOffhandEquip(session, slot, item)
+        
+        // ✅ Envanter snapshot'tan tam ItemData al
+        val snapshot = EntityTracker.getInventorySnapshot()
+        val itemData = snapshot[slot]
+        
+        if (itemData == null || !InventoryUtil.isTotem(itemData)) {
+            OverlayLogger.w(TAG, "Totem item bulunamadı veya geçersiz: slot=$slot")
+            scanCachedInventory()
+            return
+        }
+        
+        OverlayLogger.d(TAG, "Totem takılıyor: slot=$slot, netId=${itemData.netId}, id=${itemData.definition?.identifier}")
+        
+        // ✅ Tam ItemData ile gönder
+        InventoryUtil.sendOffhandEquip(session, slot, itemData)
+        
         offhandHasTotem = true
+        lastEquipMs = System.currentTimeMillis()
+        
+        OverlayLogger.d(TAG, "Totem başarıyla takıldı!")
     }
 }

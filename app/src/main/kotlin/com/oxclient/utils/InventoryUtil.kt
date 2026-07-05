@@ -22,29 +22,48 @@ object InventoryUtil {
         hotbarSlot : Int,
         item       : ItemData
     ) {
-        session.serverBound(MobEquipmentPacket().apply {
+        val packet = MobEquipmentPacket().apply {
             this.runtimeEntityId = runtimeId
-            this.containerId     = containerId
-            this.inventorySlot   = slot
-            this.hotbarSlot      = hotbarSlot
-            this.item            = item
-        })
+            this.containerId = containerId
+            this.inventorySlot = slot
+            this.hotbarSlot = hotbarSlot
+            this.item = item
+        }
+        session.serverBound(packet)
     }
 
-    // ✅ FIX: MobEquipmentSerializer, helper.writeItem() kullanıyor — bu "legacy" yazıcı
-    // netId kısayolu TANIMIYOR, ItemData'nın gerçek definition/damage/tag alanlarını
-    // okuyor. Sadece netId+count ile kurulan sahte item'da definition=null kalıyordu,
-    // bu da server'a giden paketin encode aşamasında çökmesine yol açıyordu.
-    // Artık slottaki GERÇEK ItemData'yı doğrudan kullanıyoruz.
-    fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, item: ItemData) {
+    /**
+     * Offhand'e ekipman gönderir.
+     * @param session Oturum
+     * @param fromSlot Totemin bulunduğu envanter slotu
+     * @param itemData Tam ItemData nesnesi (netId, definition, count, damage vb.)
+     */
+    fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, itemData: ItemData) {
         sendEquip(
             session     = session,
             runtimeId   = EntityTracker.selfRuntimeId,
             containerId = ContainerId.INVENTORY,
             slot        = fromSlot,
-            hotbarSlot  = OFFHAND_SLOT,
-            item        = item
+            hotbarSlot  = 40, // ✅ Offhand için doğru hotbar slot
+            item        = itemData
         )
+    }
+
+    /**
+     * NetId'den ItemData oluşturup offhand'e gönderir.
+     * @param session Oturum
+     * @param fromSlot Totemin bulunduğu envanter slotu
+     * @param netId Totemin network stack ID'si
+     * @param identifier Totemin identifier'ı (örn: "minecraft:totem_of_undying")
+     */
+    fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, netId: Int, identifier: String = "minecraft:totem_of_undying") {
+        val item = ItemData.builder()
+            .netId(netId)
+            .id(identifier)
+            .count(1)
+            .damage(0)
+            .build()
+        sendOffhandEquip(session, fromSlot, item)
     }
 
     fun sendHotbarSelect(session: OxRelaySession, slot: Int) {
@@ -57,11 +76,11 @@ object InventoryUtil {
         })
     }
 
-    // ✅ FIX: ItemData.netId, item TİPİNİN id'si değil — her stack'e özel, dinamik olarak
-    // atanan "network stack id"dir (item stack request sisteminde kullanılır). Sabit bir
-    // "totem = 702" karşılaştırması bu yüzden pratikte hiç eşleşmiyordu. Doğru kontrol,
-    // item'ın definition/identifier alanı üzerinden isim karşılaştırmasıdır.
-    fun isTotem(item: org.cloudburstmc.protocol.bedrock.data.inventory.ItemData?): Boolean {
+    /**
+     * ItemData'nın totem olup olmadığını kontrol eder.
+     * Doğru kontrol: item.definition?.identifier == "minecraft:totem_of_undying"
+     */
+    fun isTotem(item: ItemData?): Boolean {
         if (item == null || item == ItemData.AIR) return false
         val identifier = try { item.definition?.identifier } catch (_: Exception) { null }
         return identifier == "minecraft:totem_of_undying"
