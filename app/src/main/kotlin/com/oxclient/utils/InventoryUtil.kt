@@ -2,12 +2,15 @@ package com.oxclient.utils
 
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.OxRelaySession
+import com.oxclient.ui.overlay.OverlayLogger
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.MobEquipmentPacket
 
 object InventoryUtil {
+
+    private const val TAG = "InventoryUtil"
 
     const val OFFHAND_SLOT = 119
     const val HOTBAR_START = 0
@@ -89,11 +92,41 @@ object InventoryUtil {
 
     /**
      * ItemData'nın totem olup olmadığını kontrol eder.
+     *
+     * 🔍 DEBUG (GEÇİCİ): AutoTotem, envanterde totem GÖRÜNÜRDE var olmasına
+     * rağmen bulamıyor. Bunun sebebi ya (a) item.definition.identifier
+     * beklenmedik bir string dönüyor (StartGame.itemDefinitions boş geldiği
+     * için stale/varsayılan codec paleti kullanılıyor olabilir), ya da
+     * (b) definition erişiminde exception atılıp sessizce yutuluyor.
+     * Eşleşme olmayan HER durumda artık ne geldiğini logluyoruz — bir sonraki
+     * AutoTotem denemesinde bu logu paylaş, kalıcı düzeltmeyi netId/identifier
+     * gerçek değerine göre yapalım. Sorun bulunup düzeltilince bu logu
+     * kaldırabiliriz (spam yapmaması için sadece "totem olabilecek" adaylarda
+     * değil, HER non-empty item'da bir kere loglanıyor — istersen sonra
+     * sadeleştiririz).
      */
     fun isTotem(item: ItemData?): Boolean {
         if (isEmpty(item)) return false
-        val identifier = try { item?.definition?.identifier } catch (_: Exception) { null }
-        return identifier == "minecraft:totem_of_undying"
+
+        val identifier = try {
+            item?.definition?.identifier
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "isTotem: identifier okunamadı — ${e.message}", e)
+            null
+        }
+
+        val result = identifier == "minecraft:totem_of_undying"
+
+        if (!result && item != null) {
+            val runtimeId = try { item.definition?.runtimeId } catch (_: Exception) { null }
+            OverlayLogger.d(
+                TAG,
+                "isTotem=false → identifier='$identifier' definitionRuntimeId=$runtimeId " +
+                    "stackNetId=${item.netId} count=${item.count} usingNetId=${item.isUsingNetId}"
+            )
+        }
+
+        return result
     }
 
     @Deprecated("netId item tipini değil stack'i temsil eder, isTotem() kullan", ReplaceWith("isTotem(item)"))

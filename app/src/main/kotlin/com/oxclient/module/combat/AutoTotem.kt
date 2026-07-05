@@ -43,10 +43,28 @@ class AutoTotem : BaseModule(
         OverlayLogger.d(TAG, "Disabled")
     }
 
+    /**
+     * 🔍 DEBUG (GEÇİCİ): Totem "görünürde envanterde var ama bulunamıyor" sorununu
+     * teşhis etmek için, tarama sırasında envanterdeki HER item'ın gerçek
+     * identifier/netId değerini bir kere dump ediyoruz. Bir sonraki enable
+     * denemesinde logda "── Envanter taraması ──" bloğunu ara; totemin
+     * gerçekte hangi identifier ile geldiğini orada göreceğiz.
+     */
     private fun scanCachedInventory() {
         val snapshot = EntityTracker.getInventorySnapshot()
         totemSlot = -1; totemNetId = 0; totemDefinition = null
         offhandHasTotem = InventoryUtil.isTotem(snapshot[119])
+
+        OverlayLogger.d(TAG, "── Envanter taraması (${snapshot.size} item, offhand dahil) ──")
+        if (snapshot.isEmpty()) {
+            OverlayLogger.d(TAG, "  (snapshot BOŞ — EntityTracker henüz hiç InventoryContentPacket görmemiş olabilir)")
+        }
+        snapshot.toSortedMap().forEach { (slot, item) ->
+            val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
+            val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
+            OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count}")
+        }
+
         snapshot.forEach { (slot, item) ->
             if (slot in 0..35 && totemSlot == -1 && InventoryUtil.isTotem(item)) {
                 totemSlot = slot
