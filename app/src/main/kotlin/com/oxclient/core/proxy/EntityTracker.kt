@@ -119,7 +119,20 @@ object EntityTracker : PacketEventBus.PacketListener {
         OverlayLogger.i(TAG, "EntityTracker sıfırlandı")
     }
 
+    // ✅ DEBUG: Bir sürüm boyunca görülen HER FARKLI paket tipini bir KEZ loglar.
+    // Spam yapmaz (her tip için sadece ilk görülüşte yazar). AutoTotem envanteri
+    // hâlâ boş görüyorsa, bu logu arayıp "Inventory" geçen satır var mı diye bak:
+    //  - Hiç "InventoryContentPacket" görünmüyorsa   → paket server'dan hiç gelmiyor/routing sorunu
+    //  - Sadece "UnknownPacket" görünüyorsa (sık sık) → codec bu protokol sürümünde paketi tanımıyor, decode edemiyor
+    //  - "InventoryContentPacket" görünüyor ama envanter boşsa → containerId beklenenden farklı, aşağıdaki log'a bak
+    private val seenPacketTypes = ConcurrentHashMap<String, Boolean>()
+
     override fun onPacket(event: PacketEvent) {
+        val typeName = event.packetName
+        if (seenPacketTypes.putIfAbsent(typeName, true) == null) {
+            OverlayLogger.d(TAG, "İlk kez görülen paket tipi: $typeName (dir=${event.direction})")
+        }
+
         when (val p = event.packet) {
             is StartGamePacket          -> handleStartGame(p)
             is AddEntityPacket          -> handleAddEntity(p)
@@ -138,8 +151,15 @@ object EntityTracker : PacketEventBus.PacketListener {
             is ChangeDimensionPacket    -> handleDimension(p)
             is SetEntityLinkPacket      -> handleEntityLink(p)
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
-            is InventoryContentPacket   -> handleInventoryContent(p)
-            is InventorySlotPacket      -> handleInventorySlot(p)
+            is InventoryContentPacket   -> {
+                // ✅ DEBUG: containerId'yi filtre uygulamadan ÖNCE logla — beklenen 0 mı değil mi görelim.
+                OverlayLogger.d(TAG, "InventoryContentPacket alındı: containerId=${p.containerId} itemCount=${p.contents?.size}")
+                handleInventoryContent(p)
+            }
+            is InventorySlotPacket      -> {
+                OverlayLogger.d(TAG, "InventorySlotPacket alındı: containerId=${p.containerId} slot=${p.slot}")
+                handleInventorySlot(p)
+            }
             is org.cloudburstmc.protocol.bedrock.packet.UnknownPacket -> {
                 // ✅ DEBUG: codec bu paketi decode edemedi (bilinmeyen/versiyon uyumsuz paket).
                 // Eğer envanter hâlâ boş geliyorsa ve burada sık sık log görülüyorsa,
