@@ -390,7 +390,9 @@ object EntityTracker : PacketEventBus.PacketListener {
      *  Artık anlamsal kontrol yapılıyor: definition null ise veya count <= 0 ise slot boştur. */
     private fun isEmptyItem(item: ItemData?): Boolean {
         if (item == null) return true
-        return try { item.definition == null || item.count <= 0 } catch (_: Exception) { true }
+        return try {
+            item.count <= 0 || item.definition.identifier == "minecraft:air"
+        } catch (_: Exception) { true }
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {

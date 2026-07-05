@@ -199,13 +199,17 @@ class GamingPacketListener : OxPacketListener {
     private fun applyStartGameDefinitions(packet: StartGamePacket, session: OxRelaySession) {
         // Item definitions
         try {
-            val itemRegistry = SimpleDefinitionRegistry.builder<ItemDefinition>()
-                .addAll(packet.itemDefinitions)
-                .build()
+            if (packet.itemDefinitions.isNotEmpty()) {
+                val itemRegistry = SimpleDefinitionRegistry.builder<ItemDefinition>()
+                    .addAll(packet.itemDefinitions)
+                    .build()
 
-            session.clientSession.peer.codecHelper.itemDefinitions = itemRegistry
-            session.serverSession?.peer?.codecHelper?.itemDefinitions = itemRegistry
-            OverlayLogger.d(TAG, "ItemDefinitions set: ${packet.itemDefinitions.size} item")
+                session.clientSession.peer.codecHelper.itemDefinitions = itemRegistry
+                session.serverSession?.peer?.codecHelper?.itemDefinitions = itemRegistry
+                OverlayLogger.d(TAG, "ItemDefinitions set: ${packet.itemDefinitions.size} item")
+            } else {
+                OverlayLogger.w(TAG, "StartGame.itemDefinitions boş — mevcut codec item paleti korunuyor (üzerine yazılmadı)")
+            }
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "ItemDefinitions hatası: ${e.message}", e)
         }
