@@ -116,12 +116,13 @@ class CrystalAura : BaseModule(
                     val nearest = EntityTracker.getEntitiesInRange(Float.MAX_VALUE).minByOrNull { EntityTracker.distanceTo(it) }
                     OverlayLogger.v(TAG, "self=(${EntityTracker.selfX},${EntityTracker.selfY},${EntityTracker.selfZ}) enYakın=${nearest?.identifier} dist=${nearest?.let { EntityTracker.distanceTo(it) }} activeCrystals=${activeCrystals.size}")
                 }
+                if (autoBreak.value) doBreak()
+
                 val target = selectTarget()
                 if (target != null) {
-                    if (autoBreak.value) doBreak(target)
                     if (autoPlace.value) doPlace(target)
                 } else if (System.currentTimeMillis() % 3000L < 10L) {
-                    OverlayLogger.v(TAG, "tickLoop: hedef bulunamadı")
+                    OverlayLogger.v(TAG, "tickLoop: place hedefi bulunamadı")
                 }
             }
             delay(10L)
@@ -338,7 +339,7 @@ class CrystalAura : BaseModule(
 
     // ──── DO BREAK ──────────────────────────────────────────────────────────
 
-    private fun doBreak(target: EntityTracker.TrackedEntity) {
+    private fun doBreak() {
         val now = System.currentTimeMillis()
         if (now - lastBreakMs < breakDelay.value) return
         lastBreakMs = now
@@ -354,13 +355,10 @@ class CrystalAura : BaseModule(
                     EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= breakRange.value
             }
             .sortedBy { (_, p) ->
-                MathUtil.dist3(p.x, p.y, p.z, target.x, target.y, target.z)
+                MathUtil.dist3(p.x, p.y, p.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
             }
 
-        if (sorted.isEmpty()) {
-            OverlayLogger.v(TAG, "doBreak: range içinde crystal yok (breakRange=${breakRange.value})")
-            return
-        }
+        if (sorted.isEmpty()) return
 
         when (breakMode.value) {
             BreakMode.Instant -> {
