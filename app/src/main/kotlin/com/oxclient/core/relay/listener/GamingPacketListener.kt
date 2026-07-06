@@ -294,7 +294,7 @@ class GamingPacketListener : OxPacketListener {
             // bulunamadığını (def==null vs identifier boş vs hepsi air) ayırt edemiyoruz.
             contents.take(5).forEachIndexed { i, creativeItem ->
                 val itemData = creativeItem.item
-                val def = itemData.definition
+                val def = runCatching { itemData.definition }.getOrNull()
                 OverlayLogger.d(TAG, "  [creative-debug $i] netId=${itemData.netId} count=${itemData.count} " +
                     "def=${if (def == null) "NULL" else "OK"} identifier=${def?.identifier ?: "N/A"} runtimeId=${def?.runtimeId ?: "N/A"} " +
                     "itemDataClass=${itemData::class.simpleName}")
@@ -306,7 +306,12 @@ class GamingPacketListener : OxPacketListener {
             val byRuntimeId = LinkedHashMap<Int, ItemDefinition>()
             for (creativeItem in contents) {
                 val itemData = creativeItem.item
-                val def = itemData.definition
+                // ✅ FIX: itemData.definition Java tarafında @NotNull işaretli ama pratikte
+                // null dönebiliyor (CreativeContent'teki bu sunucu/codec'te). Doğrudan
+                // atama Kotlin'in platform-type null-assertion'ını tetikleyip crash atıyordu
+                // (ilk null'da IllegalStateException, döngü hiç tamamlanamıyordu).
+                // runCatching bunu güvenli şekilde null'a çeviriyor, döngü tüm 1455'i tarayabiliyor.
+                val def = runCatching { itemData.definition }.getOrNull()
                 if (def == null) { nullDefCount++; continue }
                 val identifier = def.identifier
                 if (identifier.isNullOrBlank()) { blankIdCount++; continue }
@@ -351,3 +356,4 @@ class GamingPacketListener : OxPacketListener {
         }
     }
 }
+
