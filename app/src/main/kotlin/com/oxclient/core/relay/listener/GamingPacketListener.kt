@@ -216,6 +216,18 @@ class GamingPacketListener : OxPacketListener {
     private fun applyStartGameDefinitions(packet: StartGamePacket, session: OxRelaySession) {
         // Item definitions
         try {
+            // ✅ DEBUG: StartGame'den ÖNCE codec'e hangi itemDefinitions registry'si
+            // set edilmiş durumda (AutoCodecListener/varsayılan codec paleti) — bunu
+            // baseline olarak logluyoruz, çünkü boşsa CreativeContent de zaten
+            // bu bozuk baseline üstünden decode ediliyor demektir.
+            val preExistingClient = runCatching { session.clientSession.peer.codecHelper.itemDefinitions }.getOrNull()
+            val preExistingServer = runCatching { session.serverSession?.peer?.codecHelper?.itemDefinitions }.getOrNull()
+            OverlayLogger.i(TAG, "StartGame ÖNCESİ itemDefinitions: client=${preExistingClient?.values?.size ?: "null"} server=${preExistingServer?.values?.size ?: "null"}")
+            if (preExistingClient != null && preExistingClient.values.isNotEmpty()) {
+                val sample = preExistingClient.values.take(5).joinToString { "${it.identifier}(rid=${it.runtimeId})" }
+                OverlayLogger.d(TAG, "  client baseline örnek(5): $sample")
+            }
+
             if (packet.itemDefinitions.isNotEmpty()) {
                 val itemRegistry = SimpleDefinitionRegistry.builder<ItemDefinition>()
                     .addAll(packet.itemDefinitions)
@@ -224,8 +236,13 @@ class GamingPacketListener : OxPacketListener {
                 session.clientSession.peer.codecHelper.itemDefinitions = itemRegistry
                 session.serverSession?.peer?.codecHelper?.itemDefinitions = itemRegistry
                 OverlayLogger.d(TAG, "ItemDefinitions set: ${packet.itemDefinitions.size} item")
+
+                // ✅ DEBUG: totem burada var mı diye direkt kontrol et
+                val totemDef = packet.itemDefinitions.firstOrNull { it.identifier == "minecraft:totem_of_undying" }
+                OverlayLogger.i(TAG, "  StartGame.itemDefinitions içinde totem_of_undying: ${if (totemDef != null) "BULUNDU rid=${totemDef.runtimeId}" else "YOK"}")
             } else {
                 OverlayLogger.w(TAG, "StartGame.itemDefinitions boş — mevcut codec item paleti korunuyor (üzerine yazılmadı)")
+                OverlayLogger.w(TAG, "  → Baseline'da ${preExistingClient?.values?.size ?: 0} item var; bu palet doğruysa sorun yok, değilse totem hiç çözülemeyecek")
             }
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "ItemDefinitions hatası: ${e.message}", e)
@@ -275,14 +292,32 @@ class GamingPacketListener : OxPacketListener {
                 return
             }
 
+            // ✅ DEBUG: İlk 5 girişi HAM haliyle logla — definition null mu,
+            // identifier blank mı, yoksa gerçekten air mi eleniyor tam olarak görelim.
+            // Bu satır olmadan "kullanılabilir definition bulunamadı" derken NEDEN
+            // bulunamadığını (def==null vs identifier boş vs hepsi air) ayırt edemiyoruz.
+            contents.take(5).forEachIndexed { i, creativeItem ->
+                val itemData = creativeItem.item
+                val def = itemData.definition
+                OverlayLogger.d(TAG, "  [creative-debug $i] netId=${itemData.netId} count=${itemData.count} " +
+                    "def=${if (def == null) "NULL" else "OK"} identifier=${def?.identifier ?: "N/A"} runtimeId=${def?.runtimeId ?: "N/A"} " +
+                    "itemDataClass=${itemData::class.simpleName}")
+            }
+
+            var nullDefCount = 0
+            var blankIdCount = 0
+            var airCount = 0
             val byRuntimeId = LinkedHashMap<Int, ItemDefinition>()
             for (creativeItem in contents) {
                 val itemData = creativeItem.item
-                val def = itemData.definition ?: continue
+                val def = itemData.definition
+                if (def == null) { nullDefCount++; continue }
                 val identifier = def.identifier
-                if (identifier.isNullOrBlank() || identifier == "minecraft:air") continue
+                if (identifier.isNullOrBlank()) { blankIdCount++; continue }
+                if (identifier == "minecraft:air") { airCount++; continue }
                 byRuntimeId.putIfAbsent(def.runtimeId, def)
             }
+            OverlayLogger.i(TAG, "CreativeContent tarama sonucu: toplam=${contents.size} nullDef=$nullDefCount blankId=$blankIdCount air=$airCount kullanılabilir=${byRuntimeId.size}")
 
             if (byRuntimeId.isEmpty()) {
                 OverlayLogger.w(TAG, "CreativeContent: kullanılabilir ItemDefinition bulunamadı (${contents.size} giriş tarandı) — atlanıyor")
