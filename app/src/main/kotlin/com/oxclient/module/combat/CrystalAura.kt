@@ -86,14 +86,14 @@ class CrystalAura : BaseModule(
                 if (pkt.identifier.contains("crystal", ignoreCase = true)) {
                     activeCrystals[pkt.runtimeEntityId] = pkt.position
                     uniqueToRuntime[pkt.uniqueEntityId] = pkt.runtimeEntityId
-                    OverlayLogger.v(TAG, "Crystal AddEntity: runtimeId=${pkt.runtimeEntityId} pos=${pkt.position} (toplam=${activeCrystals.size})")
+                    OverlayLogger.d(TAG, "Crystal AddEntity: runtimeId=${pkt.runtimeEntityId} pos=${pkt.position} (toplam=${activeCrystals.size})")
                 }
             }
             is RemoveEntityPacket -> {
                 val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
                 if (rid != null) {
                     activeCrystals.remove(rid)
-                    OverlayLogger.v(TAG, "Crystal RemoveEntity: runtimeId=$rid (kalan=${activeCrystals.size})")
+                    OverlayLogger.d(TAG, "Crystal RemoveEntity: runtimeId=$rid (kalan=${activeCrystals.size})")
                 }
             }
             is LevelEventPacket -> {
@@ -114,7 +114,7 @@ class CrystalAura : BaseModule(
             if (isEnabled) {
                 if (System.currentTimeMillis() % 2000L < 10L) {
                     val nearest = EntityTracker.getEntitiesInRange(Float.MAX_VALUE).minByOrNull { EntityTracker.distanceTo(it) }
-                    OverlayLogger.v(TAG, "self=(${EntityTracker.selfX},${EntityTracker.selfY},${EntityTracker.selfZ}) enYakın=${nearest?.identifier} dist=${nearest?.let { EntityTracker.distanceTo(it) }} activeCrystals=${activeCrystals.size}")
+                    OverlayLogger.d(TAG, "self=(${EntityTracker.selfX},${EntityTracker.selfY},${EntityTracker.selfZ}) enYakın=${nearest?.identifier} dist=${nearest?.let { EntityTracker.distanceTo(it) }} activeCrystals=${activeCrystals.size}")
                 }
                 if (autoBreak.value) doBreak()
 
@@ -122,7 +122,7 @@ class CrystalAura : BaseModule(
                 if (target != null) {
                     if (autoPlace.value) doPlace(target)
                 } else if (System.currentTimeMillis() % 3000L < 10L) {
-                    OverlayLogger.v(TAG, "tickLoop: place hedefi bulunamadı")
+                    OverlayLogger.d(TAG, "tickLoop: place hedefi bulunamadı")
                 }
             }
             delay(10L)
@@ -327,7 +327,7 @@ class CrystalAura : BaseModule(
 
             session.serverBound(packet)
             placedPositions[bKey] = System.currentTimeMillis()
-            OverlayLogger.v(TAG, "Crystal yerleştirildi: ($bx,$by,$bz)")
+            OverlayLogger.d(TAG, "Crystal yerleştirildi: ($bx,$by,$bz)")
 
         } catch (e: Exception) {
             OverlayLogger.w(TAG, "Crystal yerleştirme hatası: ${e.message}")
@@ -345,7 +345,7 @@ class CrystalAura : BaseModule(
         lastBreakMs = now
 
         val session = PacketEventBus.currentSession ?: run {
-            OverlayLogger.w(TAG, "doBreak: session null")
+            if (System.currentTimeMillis() % 5000L < 10L) OverlayLogger.w(TAG, "doBreak: session null")
             return
         }
 
@@ -368,7 +368,7 @@ class CrystalAura : BaseModule(
                     attackCrystal(rid, session)
                     activeCrystals.remove(rid)
                 }
-                OverlayLogger.v(TAG, "doBreak: ${b} crystal kırıldı (Instant)")
+                OverlayLogger.d(TAG, "doBreak: ${b} crystal kırıldı (Instant)")
             }
             BreakMode.Sequential -> {
                 seqIndex %= sorted.size
@@ -376,13 +376,13 @@ class CrystalAura : BaseModule(
                 attackCrystal(rid, session)
                 activeCrystals.remove(rid)
                 seqIndex++
-                OverlayLogger.v(TAG, "doBreak: 1 crystal kırıldı (Sequential #$seqIndex)")
+                OverlayLogger.d(TAG, "doBreak: 1 crystal kırıldı (Sequential #$seqIndex)")
             }
             BreakMode.Closest -> {
                 sorted.firstOrNull()?.let { (rid, _) ->
                     attackCrystal(rid, session)
                     activeCrystals.remove(rid)
-                    OverlayLogger.v(TAG, "doBreak: 1 crystal kırıldı (Closest)")
+                    OverlayLogger.d(TAG, "doBreak: 1 crystal kırıldı (Closest)")
                 }
             }
         }
