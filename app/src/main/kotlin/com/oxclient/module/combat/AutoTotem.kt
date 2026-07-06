@@ -44,21 +44,6 @@ class AutoTotem : BaseModule(
         OverlayLogger.i(TAG, "=== AutoTotem DISABLE === (son durum: totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem)")
     }
 
-    override fun onTick() {
-        if (!isEnabled) return
-        if (offhandHasTotem) return
-        if (totemSlot < 0) {
-            OverlayLogger.v(TAG, "onTick: offhand boş ama totemSlot=-1, envanter taranıyor")
-            scanCachedInventory()
-            if (totemSlot < 0) {
-                OverlayLogger.v(TAG, "onTick: scan sonrası da totem yok, bekleniyor")
-                return
-            }
-        }
-        OverlayLogger.d(TAG, "onTick: offhand boş, totemSlot=$totemSlot → equipTotem()")
-        equipTotem()
-    }
-
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
 
