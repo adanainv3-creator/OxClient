@@ -1,6 +1,8 @@
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.core.relay.Definitions
+import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
@@ -56,7 +58,6 @@ class CrystalAura : BaseModule(
     private var seqIndex = 0
     private var tickJob: Job? = null
 
-    // Obsidian block definition cache
     private var cachedObsidianDef: BlockDefinition? = null
 
     private companion object { const val TAG = "CrystalAura" }
@@ -95,7 +96,6 @@ class CrystalAura : BaseModule(
                 }
             }
             is LevelEventPacket -> {
-                // Explosion/particle event'leri iptal et (FPS artışı için)
                 val type = pkt.type
                 if (type != null) {
                     val typeName = type.toString().uppercase()
@@ -135,54 +135,39 @@ class CrystalAura : BaseModule(
 
     // ──── GET OBSIDIAN DEFINITION ──────────────────────────────────────────
 
+    private fun identifierOf(def: BlockDefinition): String? = when (def) {
+        is SimpleBlockDefinition -> def.identifier
+        is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
+        else -> null
+    }
+
     private fun getObsidianDefinition(session: OxRelaySession): BlockDefinition? {
         cachedObsidianDef?.let { return it }
+        val possibleIds = listOf(49, 158, 48, 160, 247, 43, 45)
 
         try {
-            // 1. Codec'ten al
             val defs = session.clientSession.peer.codecHelper.blockDefinitions
             if (defs != null) {
-                // Obsidian runtime ID'leri dene (1.21+)
-                val possibleIds = listOf(49, 158, 48, 160, 247, 43, 45)
                 for (id in possibleIds) {
                     val def = defs.getDefinition(id)
-                    if (def != null && def.identifier == "minecraft:obsidian") {
+                    if (def != null && identifierOf(def) == "minecraft:obsidian") {
                         cachedObsidianDef = def
                         OverlayLogger.d(TAG, "Obsidian definition bulundu: runtimeId=$id")
                         return def
                     }
                 }
-
-                // Tüm definitions'ları tara
-                try {
-                    val allDefs = defs.values
-                    for (def in allDefs) {
-                        if (def.identifier == "minecraft:obsidian") {
-                            cachedObsidianDef = def
-                            OverlayLogger.d(TAG, "Obsidian definition tarama ile bulundu: runtimeId=${def.runtimeId}")
-                            return def
-                        }
-                    }
-                } catch (e: Exception) {
-                    OverlayLogger.v(TAG, "Definitions tarama hatası: ${e.message}")
-                }
             }
 
-            // 2. Definitions.kt'den dene
             val blockDefs = Definitions.blockDefinitions
-            if (blockDefs != null) {
-                val possibleIds = listOf(49, 158, 48, 160, 247, 43, 45)
-                for (id in possibleIds) {
-                    val def = blockDefs.getDefinition(id)
-                    if (def != null && def.identifier == "minecraft:obsidian") {
-                        cachedObsidianDef = def
-                        OverlayLogger.d(TAG, "Obsidian definition Definitions.blockDefinitions'den: runtimeId=$id")
-                        return def
-                    }
+            for (id in possibleIds) {
+                val def = blockDefs.getDefinition(id)
+                if (def != null && identifierOf(def) == "minecraft:obsidian") {
+                    cachedObsidianDef = def
+                    OverlayLogger.d(TAG, "Obsidian definition Definitions.blockDefinitions'den: runtimeId=$id")
+                    return def
                 }
             }
 
-            // 3. Fallback: SimpleBlockDefinition oluştur
             OverlayLogger.w(TAG, "Obsidian definition bulunamadı, fallback oluşturuluyor")
             val fallback = SimpleBlockDefinition(
                 "minecraft:obsidian",
@@ -207,7 +192,7 @@ class CrystalAura : BaseModule(
         val now = System.currentTimeMillis()
         if (now - lastPlaceMs < placeDelay.value) return
         lastPlaceMs = now
-        
+
         val session = PacketEventBus.currentSession ?: run {
             OverlayLogger.w(TAG, "doPlace: session null")
             return
@@ -231,12 +216,10 @@ class CrystalAura : BaseModule(
         var placed = 0
         val range = if (throughWalls.value) wallsRange.value else placeRange.value
 
-        // Sadece hedefin etrafındaki 1 blok mesafeye yerleştir
         val positions = mutableListOf<Triple<Int, Int, Int>>()
         for (dx in -1..1) for (dz in -1..1) for (dy in 0..1) {
             positions.add(Triple(tx + dx, ty + dy, tz + dz))
         }
-        // Önce yükseklikteki pozisyonları dene
         positions.sortByDescending { (_, y, _) -> y }
 
         for ((bx, by, bz) in positions) {
@@ -251,11 +234,8 @@ class CrystalAura : BaseModule(
         var placed = 0
         val range = if (throughWalls.value) wallsRange.value else placeRange.value
 
-        // 3x3x3 alana yerleştir - önce hedefin üstüne
         val positions = mutableListOf<Triple<Int, Int, Int>>()
-        // Önce hedefin üstü
         positions.add(Triple(tx, ty + 1, tz))
-        // Sonra çevresi
         for (dx in -2..2) for (dz in -2..2) for (dy in -1..1) {
             if (dx == 0 && dy == 0 && dz == 0) continue
             positions.add(Triple(tx + dx, ty + dy, tz + dz))
@@ -273,16 +253,12 @@ class CrystalAura : BaseModule(
         var placed = 0
         val range = if (throughWalls.value) wallsRange.value else placeRange.value
 
-        // Önce hedefin üzerine, sonra çevresine
         val positions = mutableListOf<Triple<Int, Int, Int>>()
-        // Hedefin üstü (y+1)
         positions.add(Triple(tx, ty + 1, tz))
-        // Hedefin 1 blok çevresi (yükseklikte)
         for (dx in -1..1) for (dz in -1..1) {
             if (dx == 0 && dz == 0) continue
             positions.add(Triple(tx + dx, ty + 1, tz + dz))
         }
-        // Hedefin 2 blok çevresi
         for (dx in -2..2) for (dz in -2..2) {
             if (kotlin.math.abs(dx) <= 1 && kotlin.math.abs(dz) <= 1) continue
             positions.add(Triple(tx + dx, ty + 1, tz + dz))
@@ -304,7 +280,6 @@ class CrystalAura : BaseModule(
         val bKey = packKey(bx, by, bz)
         if (placedPositions.containsKey(bKey)) return false
 
-        // Zaten orada crystal var mı?
         val alreadyPlaced = activeCrystals.values.any { c ->
             Math.abs(c.x - bx - 0.5f) < 0.5f &&
             Math.abs(c.y - by - 1f)   < 0.5f &&
@@ -312,32 +287,28 @@ class CrystalAura : BaseModule(
         }
         if (alreadyPlaced) return false
 
-        // Range kontrolü
         if (MathUtil.dist3(bx.toFloat(), by.toFloat(), bz.toFloat(),
                 EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) > range) return false
 
-        // Anti-suicide
         if (antiSuicide.value) {
             val selfDist = MathUtil.dist3(bx + 0.5f, by + 1f, bz + 0.5f,
                 EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ)
             if (selfDist < selfDmgLimit.value) return false
         }
 
-        // Rotate
         if (rotate.value) {
             val r = RotationUtil.toPoint(bx + 0.5f, by.toFloat(), bz + 0.5f)
             PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
         }
 
-        // ✅ FIXED: InventoryTransactionPacket doğrudan alanlarına set ediliyor
         val heldItem = EntityTracker.getInventoryItem(0) ?: ItemData.AIR
 
         try {
             val packet = InventoryTransactionPacket().apply {
                 transactionType = InventoryTransactionType.ITEM_USE
-                actionType = 0 // CLICK_BLOCK
+                actionType = 0
                 blockPosition = Vector3i.from(bx, by, bz)
-                blockFace = 1 // Yukarı yüz
+                blockFace = 1
                 hotbarSlot = 0
                 itemInHand = heldItem
                 playerPosition = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
@@ -366,7 +337,7 @@ class CrystalAura : BaseModule(
         val now = System.currentTimeMillis()
         if (now - lastBreakMs < breakDelay.value) return
         lastBreakMs = now
-        
+
         val session = PacketEventBus.currentSession ?: run {
             OverlayLogger.w(TAG, "doBreak: session null")
             return
@@ -428,3 +399,4 @@ class CrystalAura : BaseModule(
         ((y.toLong() and 0xFFFL)     shl 26) or
         (z.toLong() and 0x3FFFFFFL)
 }
+
