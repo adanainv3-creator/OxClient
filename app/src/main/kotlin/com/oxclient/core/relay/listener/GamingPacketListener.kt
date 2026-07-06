@@ -8,6 +8,7 @@ import com.oxclient.utils.BlockTracker
 import com.oxclient.utils.ChunkParser
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleNamedDefinition
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
 import org.cloudburstmc.protocol.common.NamedDefinition
 import org.cloudburstmc.protocol.common.SimpleDefinitionRegistry
@@ -99,6 +100,22 @@ class GamingPacketListener : OxPacketListener {
             // MC 1.21.20+ sürümlerde CameraPreset definitions yoksa crash.
             is CameraPresetsPacket -> {
                 applyCameraDefinitions(packet, session)
+            }
+
+            // ── CreativeContentPacket ──────────────────────────────────────
+            // 2b2tpe.org gibi bazı sunucular StartGamePacket.itemDefinitions
+            // alanını BOŞ gönderiyor. Bu durumda codec'in fallback registry'si
+            // devreye giriyor ama definition → identifier çözümlemesi
+            // (isTotem(), inventory karşılaştırmaları vb.) çalışmıyor.
+            //
+            // CreativeContentPacket, yaratıcı moddaki TÜM item'ların
+            // ItemData'sını (ve dolayısıyla ItemDefinition'ını) içerir —
+            // StartGame'in aksine bu paket sunucudan HER ZAMAN dolu gelir
+            // (aksi halde client'ın yaratıcı envanteri boş kalırdı).
+            // Bu yüzden ItemComponentPacket'i parse etmek yerine bu paketi
+            // yakalayıp gerçek bir ItemDefinition registry'si kuruyoruz.
+            is CreativeContentPacket -> {
+                applyCreativeItemDefinitions(packet, session)
             }
 
             // Entity tracking PacketEventBus üzerinden EntityTracker tarafından
@@ -237,6 +254,50 @@ class GamingPacketListener : OxPacketListener {
             }
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "BlockDefinitions hatası: ${e.message}", e)
+        }
+    }
+
+    /**
+     * CreativeContentPacket içindeki her ItemData zaten kendi ItemDefinition'ını
+     * taşır (netId decode edilirken codec bunu dolduruyor). StartGamePacket'in
+     * aksine bu paket sunucudan asla boş gelmez, bu yüzden burdan çıkardığımız
+     * definition seti StartGame'in boş bıraktığı durumda güvenilir bir fallback.
+     *
+     * air / null identifier'lı girişler (boş slot placeholder'ları) elenir,
+     * runtimeId'ye göre dedupe edilir ve hem client hem server codecHelper'ına
+     * aynı registry set edilir (WRelay'deki GamingPacketHandler mantığıyla aynı).
+     */
+    private fun applyCreativeItemDefinitions(packet: CreativeContentPacket, session: OxRelaySession) {
+        try {
+            val contents: List<ItemData> = packet.contents
+            if (contents.isEmpty()) {
+                OverlayLogger.w(TAG, "CreativeContent: contents boş — atlanıyor")
+                return
+            }
+
+            val byRuntimeId = LinkedHashMap<Int, ItemDefinition>()
+            for (itemData in contents) {
+                val def = itemData.definition ?: continue
+                val identifier = def.identifier
+                if (identifier.isNullOrBlank() || identifier == "minecraft:air") continue
+                byRuntimeId.putIfAbsent(def.runtimeId, def)
+            }
+
+            if (byRuntimeId.isEmpty()) {
+                OverlayLogger.w(TAG, "CreativeContent: kullanılabilir ItemDefinition bulunamadı (${contents.size} giriş tarandı) — atlanıyor")
+                return
+            }
+
+            val itemRegistry = SimpleDefinitionRegistry.builder<ItemDefinition>()
+                .addAll(byRuntimeId.values)
+                .build()
+
+            session.clientSession.peer.codecHelper.itemDefinitions = itemRegistry
+            session.serverSession?.peer?.codecHelper?.itemDefinitions = itemRegistry
+
+            OverlayLogger.i(TAG, "ItemDefinitions CreativeContent'ten set edildi ✓ (${byRuntimeId.size} benzersiz / ${contents.size} toplam item)")
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "CreativeContent ItemDefinitions hatası: ${e.message}", e)
         }
     }
 
