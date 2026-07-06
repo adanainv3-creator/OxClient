@@ -112,11 +112,12 @@ class CrystalAura : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) {
+                if (System.currentTimeMillis() % 2000L < 10L) {
+                    val nearest = EntityTracker.getEntitiesInRange(Float.MAX_VALUE).minByOrNull { EntityTracker.distanceTo(it) }
+                    OverlayLogger.v(TAG, "self=(${EntityTracker.selfX},${EntityTracker.selfY},${EntityTracker.selfZ}) enYakın=${nearest?.identifier} dist=${nearest?.let { EntityTracker.distanceTo(it) }} activeCrystals=${activeCrystals.size}")
+                }
                 val target = selectTarget()
                 if (target != null) {
-                    if (System.currentTimeMillis() % 2000L < 10L) {
-                        OverlayLogger.v(TAG, "tickLoop: hedef=${target.identifier} dist=${EntityTracker.distanceTo(target)} activeCrystals=${activeCrystals.size}")
-                    }
                     if (autoBreak.value) doBreak(target)
                     if (autoPlace.value) doPlace(target)
                 } else if (System.currentTimeMillis() % 3000L < 10L) {
