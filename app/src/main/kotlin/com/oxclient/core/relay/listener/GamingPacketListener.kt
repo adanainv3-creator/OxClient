@@ -222,11 +222,7 @@ class GamingPacketListener : OxPacketListener {
             // bu bozuk baseline üstünden decode ediliyor demektir.
             val preExistingClient = runCatching { session.clientSession.peer.codecHelper.itemDefinitions }.getOrNull()
             val preExistingServer = runCatching { session.serverSession?.peer?.codecHelper?.itemDefinitions }.getOrNull()
-            OverlayLogger.i(TAG, "StartGame ÖNCESİ itemDefinitions: client=${preExistingClient?.values?.size ?: "null"} server=${preExistingServer?.values?.size ?: "null"}")
-            if (preExistingClient != null && preExistingClient.values.isNotEmpty()) {
-                val sample = preExistingClient.values.take(5).joinToString { "${it.identifier}(rid=${it.runtimeId})" }
-                OverlayLogger.d(TAG, "  client baseline örnek(5): $sample")
-            }
+            OverlayLogger.i(TAG, "StartGame ÖNCESİ itemDefinitions: client=${if (preExistingClient != null) "set (${preExistingClient})" else "null"} server=${if (preExistingServer != null) "set" else "null"}")
 
             if (packet.itemDefinitions.isNotEmpty()) {
                 val itemRegistry = SimpleDefinitionRegistry.builder<ItemDefinition>()
@@ -242,7 +238,7 @@ class GamingPacketListener : OxPacketListener {
                 OverlayLogger.i(TAG, "  StartGame.itemDefinitions içinde totem_of_undying: ${if (totemDef != null) "BULUNDU rid=${totemDef.runtimeId}" else "YOK"}")
             } else {
                 OverlayLogger.w(TAG, "StartGame.itemDefinitions boş — mevcut codec item paleti korunuyor (üzerine yazılmadı)")
-                OverlayLogger.w(TAG, "  → Baseline'da ${preExistingClient?.values?.size ?: 0} item var; bu palet doğruysa sorun yok, değilse totem hiç çözülemeyecek")
+                OverlayLogger.w(TAG, "  → Baseline registry=${preExistingClient ?: "null"}; bu palet doğruysa sorun yok, değilse totem hiç çözülemeyecek")
             }
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "ItemDefinitions hatası: ${e.message}", e)
