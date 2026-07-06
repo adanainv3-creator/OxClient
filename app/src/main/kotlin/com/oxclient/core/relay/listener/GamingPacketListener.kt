@@ -269,14 +269,15 @@ class GamingPacketListener : OxPacketListener {
      */
     private fun applyCreativeItemDefinitions(packet: CreativeContentPacket, session: OxRelaySession) {
         try {
-            val contents: List<ItemData> = packet.contents
+            val contents = packet.contents
             if (contents.isEmpty()) {
                 OverlayLogger.w(TAG, "CreativeContent: contents boş — atlanıyor")
                 return
             }
 
             val byRuntimeId = LinkedHashMap<Int, ItemDefinition>()
-            for (itemData in contents) {
+            for (creativeItem in contents) {
+                val itemData = creativeItem.item
                 val def = itemData.definition ?: continue
                 val identifier = def.identifier
                 if (identifier.isNullOrBlank() || identifier == "minecraft:air") continue
