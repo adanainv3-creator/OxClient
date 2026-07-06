@@ -38,14 +38,25 @@ object InventoryUtil {
         OverlayLogger.d(TAG, "sendEquip: MobEquipmentPacket gönderildi")
     }
 
+    /**
+     * Offhand'e item takmak için MobEquipmentPacket gönderir.
+     *
+     * Protokol notu:
+     *   MobEquipmentPacket ile offhand equip için containerId = ContainerId.OFFHAND kullanlmal.
+     *   containerId = ContainerId.INVENTORY + hotbarSlot=40 kombinasyonu sunucu tarafndan
+     *   hotbar seçimi olarak yorumlanr, offhand equip olarak deil.
+     *
+     *   inventorySlot = fromSlot (totemin ana envanterdeki slotu, kaynak konum)
+     *   hotbarSlot    = 0        (offhand container içindeki slot indisi)
+     */
     fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, itemData: ItemData) {
-        OverlayLogger.d(TAG, "sendOffhandEquip: fromSlot=$fromSlot netId=${itemData.netId} count=${itemData.count} defId=${runCatching { itemData.definition?.identifier }.getOrElse { "ERR" }}")
+        OverlayLogger.d(TAG, "sendOffhandEquip: fromSlot=$fromSlot containerId=OFFHAND(${ContainerId.OFFHAND}) netId=${itemData.netId} count=${itemData.count} defId=${runCatching { itemData.definition?.identifier }.getOrElse { "ERR" }}")
         sendEquip(
             session     = session,
             runtimeId   = EntityTracker.selfRuntimeId,
-            containerId = ContainerId.INVENTORY,
+            containerId = ContainerId.OFFHAND,
             slot        = fromSlot,
-            hotbarSlot  = 40,
+            hotbarSlot  = 0,
             item        = itemData
         )
     }
