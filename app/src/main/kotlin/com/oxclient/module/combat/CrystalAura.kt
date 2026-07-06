@@ -19,6 +19,7 @@ import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
 import org.cloudburstmc.protocol.bedrock.packet.*
+import org.cloudburstmc.protocol.common.DefinitionRegistry
 import java.util.concurrent.ConcurrentHashMap
 
 class CrystalAura : BaseModule(
@@ -60,7 +61,7 @@ class CrystalAura : BaseModule(
 
     private var cachedObsidianDef: BlockDefinition? = null
 
-    private companion object { const val TAG = "CrystalAura" }
+    private companion object { const val TAG = "CrystalAura"; const val MAX_SCAN_RUNTIME_ID = 2000 }
 
     override fun onEnable() {
         super.onEnable()
@@ -147,34 +148,66 @@ class CrystalAura : BaseModule(
         else -> null
     }
 
+    // ✅ FIX: Modern Bedrock'ta blok runtimeId'leri SABİT/legacy numaralar değil —
+    // her sunucu kendi block_palette'ini StartGamePacket ile gönderir ve runtimeId
+    // o paletteki SIRAYA göre atanır (bkz. BlockTracker.kt'deki aynı tespit).
+    // Eski "obsidian=49" gibi tahminler modern per-session dinamik palette'te
+    // hemen hemen HİÇBİR ZAMAN tutmaz — bu yüzden fallback hep devreye giriyor
+    // ve gerçek yerleştirme sunucu tarafından reddediliyordu.
+    //
+    // Çözüm: tahmin etmek yerine, registry'yi identifier'a göre TARIYORUZ.
+    // Önce (varsa) registry'nin kendi map'ini reflection ile doğrudan okumayı
+    // deniyoruz (hızlı); olmazsa 0..MAX_SCAN_RUNTIME_ID aralığında brute-force
+    // getDefinition() çağrısıyla arıyoruz (yavaş ama bir kere çalışıp cache'leniyor).
+    private fun findByIdentifier(
+        registry: DefinitionRegistry<BlockDefinition>,
+        identifier: String
+    ): BlockDefinition? {
+        // Hızlı yol: bizim kendi NbtBlockDefinitionRegistry'mizse (Definitions.kt'den
+        // gelen fallback ise) internal map'e reflection ile eriş, tüm girişleri tara.
+        try {
+            val mapField = registry.javaClass.getDeclaredField("map")
+            mapField.isAccessible = true
+            val map = mapField.get(registry)
+            if (map is Map<*, *>) {
+                for (value in map.values) {
+                    val def = value as? BlockDefinition ?: continue
+                    if (identifierOf(def) == identifier) return def
+                }
+                return null // map bulundu ama içinde yok — brute-force'a gerek yok
+            }
+        } catch (_: Exception) { /* reflection tutmadı, brute-force'a düş */ }
+
+        // Yavaş yol: server'ın kendi (CloudburstMC) registry implementasyonu için
+        // internal yapısını bilmiyoruz — runtimeId aralığında doğrudan sorgula.
+        for (id in 0 until MAX_SCAN_RUNTIME_ID) {
+            val def = registry.getDefinition(id) ?: continue
+            if (identifierOf(def) == identifier) return def
+        }
+        return null
+    }
+
     private fun getObsidianDefinition(session: OxRelaySession): BlockDefinition? {
         cachedObsidianDef?.let { return it }
-        val possibleIds = listOf(49, 158, 48, 160, 247, 43, 45)
 
         try {
-            val defs = session.clientSession.peer.codecHelper.blockDefinitions
-            if (defs != null) {
-                for (id in possibleIds) {
-                    val def = defs.getDefinition(id)
-                    if (def != null && identifierOf(def) == "minecraft:obsidian") {
-                        cachedObsidianDef = def
-                        OverlayLogger.d(TAG, "Obsidian definition bulundu: runtimeId=$id")
-                        return def
-                    }
+            val clientDefs = session.clientSession.peer.codecHelper.blockDefinitions
+            if (clientDefs != null) {
+                findByIdentifier(clientDefs, "minecraft:obsidian")?.let {
+                    cachedObsidianDef = it
+                    OverlayLogger.d(TAG, "Obsidian definition bulundu (client registry): runtimeId=${it.runtimeId}")
+                    return it
                 }
             }
 
-            val blockDefs = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions
-            for (id in possibleIds) {
-                val def = blockDefs.getDefinition(id)
-                if (def != null && identifierOf(def) == "minecraft:obsidian") {
-                    cachedObsidianDef = def
-                    OverlayLogger.d(TAG, "Obsidian definition Definitions.getClosestDefinitions()'den: runtimeId=$id")
-                    return def
-                }
+            val localDefs = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions
+            findByIdentifier(localDefs, "minecraft:obsidian")?.let {
+                cachedObsidianDef = it
+                OverlayLogger.d(TAG, "Obsidian definition bulundu (local fallback registry): runtimeId=${it.runtimeId}")
+                return it
             }
 
-            OverlayLogger.w(TAG, "Obsidian definition bulunamadı, fallback oluşturuluyor")
+            OverlayLogger.w(TAG, "Obsidian definition HİÇBİR registry'de bulunamadı (client ve local ikisi de tarandı) — fallback oluşturuluyor, PLACEMENT ÇALIŞMAYABİLİR")
             val fallback = SimpleBlockDefinition(
                 "minecraft:obsidian",
                 49,

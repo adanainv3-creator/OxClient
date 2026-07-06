@@ -149,11 +149,26 @@ object Definitions {
         val array = org.json.JSONArray(json)
 
         val map = Int2ObjectOpenHashMap<NbtItemDefinition>()
+        var totemIndex = -1
+        var totemRawId = -1
         for (i in 0 until array.length()) {
             val obj = array.getJSONObject(i)
             val name = obj.getString("name")
             map.put(i, NbtItemDefinition(i, name)) // sıra = runtimeId, block_palette ile aynı mantık
+
+            // ✅ TANI: totem_of_undying'in dosyada gerçekten nerede olduğunu logla.
+            // Oyun içinde offhand/inventory log'larındaki runtimeId bununla eşleşmiyorsa,
+            // bu dosya bu sunucunun (protokol=$filename) gerçek paletiyle uyuşmuyor demektir.
+            if (name == "minecraft:totem_of_undying") {
+                totemIndex = i
+                totemRawId = obj.optInt("id", -1)
+            }
         }
+        OverlayLogger.i(
+            TAG,
+            "$filename: ${array.length()} item yüklendi | totem_of_undying → index(runtimeId)=$totemIndex rawId=$totemRawId " +
+                if (totemIndex == -1) "(DOSYADA YOK — dosya eksik/yanlış!)" else ""
+        )
         return NbtItemDefinitionRegistry(map)
     }
 
