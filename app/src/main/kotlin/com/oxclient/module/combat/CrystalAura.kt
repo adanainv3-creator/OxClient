@@ -82,6 +82,7 @@ class CrystalAura : BaseModule(
         if (!isEnabled) return
         when (val pkt = event.packet) {
             is AddEntityPacket -> {
+                OverlayLogger.d(TAG, "AddEntity geldi: identifier=${pkt.identifier} runtimeId=${pkt.runtimeEntityId}")
                 if (pkt.identifier.contains("crystal", ignoreCase = true)) {
                     activeCrystals[pkt.runtimeEntityId] = pkt.position
                     uniqueToRuntime[pkt.uniqueEntityId] = pkt.runtimeEntityId
@@ -113,6 +114,9 @@ class CrystalAura : BaseModule(
             if (isEnabled) {
                 val target = selectTarget()
                 if (target != null) {
+                    if (System.currentTimeMillis() % 2000L < 10L) {
+                        OverlayLogger.v(TAG, "tickLoop: hedef=${target.identifier} dist=${EntityTracker.distanceTo(target)} activeCrystals=${activeCrystals.size}")
+                    }
                     if (autoBreak.value) doBreak(target)
                     if (autoPlace.value) doPlace(target)
                 } else if (System.currentTimeMillis() % 3000L < 10L) {
