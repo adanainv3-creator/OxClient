@@ -78,13 +78,17 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
             // 2. Definitions — WRelay AutoCodecPacketListener ile birebir aynı
             //    Block/item/camera definitions RequestNetworkSettings'te hemen set edilir.
             //    StartGame'i beklersek paket decode edilemez → timeout.
+            //    Negotiate edilen protocolVersion'a göre EN YAKIN eşleşen palet seçilir
+            //    (CodecRegistry.getClosestCodec ile aynı mantık) — yanlış versiyon
+            //    kullanılırsa runtimeId'ler kayar ve item'lar hiç çözülemez.
+            val defs = Definitions.getClosestDefinitions(codec.protocolVersion)
             session.clientSession.peer.codecHelper.apply {
-                itemDefinitions         = Definitions.itemDefinitions
-                blockDefinitions        = Definitions.blockDefinitions
+                itemDefinitions         = defs.itemDefinitions
+                blockDefinitions        = defs.blockDefinitions
                 cameraPresetDefinitions = Definitions.cameraPresetDefinitions
                 encodingSettings        = UNLIMITED
             }
-            OverlayLogger.i(TAG, "Definitions set edildi ✓")
+            OverlayLogger.i(TAG, "Definitions set edildi ✓ (definitions protocol=${defs.protocolVersion})")
 
             // 3. Client'a NetworkSettingsPacket gönder
             session.sendToClient(NetworkSettingsPacket().apply {
