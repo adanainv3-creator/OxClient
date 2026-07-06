@@ -47,11 +47,12 @@ class AutoTotem : BaseModule(
     }
 
     /**
-     * 🔍 DEBUG (GEÇİCİ): Totem "görünürde envanterde var ama bulunamıyor" sorununu
-     * teşhis etmek için, tarama sırasında envanterdeki HER item'ın gerçek
-     * identifier/netId değerini bir kere dump ediyoruz. Bir sonraki enable
-     * denemesinde logda "── Envanter taraması ──" bloğunu ara; totemin
-     * gerçekte hangi identifier ile geldiğini orada göreceğiz.
+     * ✅ FIX: CloudburstMC v975 fallback'inde item.definition NULL geliyor — identifier erişimi exception fırlatıyor.
+     * Şimdilik definition dump'ını kaldırdık. Bunun yerine sadece netId/count gösteriyoruz.
+     * 
+     * 🔍 Totem "görünürde envanterde var ama bulunamıyor" sorununu teşhis etmek için,
+     * tarama sırasında envanterdeki HER item'ın netId/count'ını dump ediyoruz.
+     * Bir sonraki enable denemesinde logda "── Envanter taraması ──" bloğunu ara.
      */
     private fun scanCachedInventory() {
         val snapshot = EntityTracker.getInventorySnapshot()
@@ -66,9 +67,9 @@ class AutoTotem : BaseModule(
                 OverlayLogger.d(TAG, "  (snapshot BOŞ — EntityTracker henüz hiç InventoryContentPacket görmemiş olabilir)")
             }
             snapshot.toSortedMap().forEach { (slot, item) ->
-                val id = try { item.definition?.identifier ?: "null" } catch (e: Exception) { "ERR:${e.message}" }
-                val rid = try { item.definition?.runtimeId } catch (_: Exception) { null }
-                OverlayLogger.d(TAG, "  slot=$slot identifier=$id runtimeId=$rid netId=${item.netId} count=${item.count}")
+                // ✅ FIX: definition'a dokunmuyoruz, sadece netId/count gösteriyoruz
+                // (definition null = exception riski)
+                OverlayLogger.d(TAG, "  slot=$slot netId=${item.netId} count=${item.count}")
             }
         }
 

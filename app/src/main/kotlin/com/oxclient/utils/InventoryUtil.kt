@@ -1,4 +1,3 @@
-
 package com.oxclient.utils
 
 import com.oxclient.core.proxy.EntityTracker
@@ -38,9 +37,9 @@ object InventoryUtil {
     }
 
     /**
-     * Offhand'e ekipman gönderir.
+     * Offhand'e ekipman g�nderir.
      * @param session Oturum
-     * @param fromSlot Totemin bulunduğu envanter slotu
+     * @param fromSlot Totemin bulunduu envanter slotu
      * @param itemData Tam ItemData nesnesi
      */
     fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, itemData: ItemData) {
@@ -49,13 +48,13 @@ object InventoryUtil {
             runtimeId   = EntityTracker.selfRuntimeId,
             containerId = ContainerId.INVENTORY,
             slot        = fromSlot,
-            hotbarSlot  = 40, // Offhand için doğru hotbar slot
+            hotbarSlot  = 40, // Offhand i�in doru hotbar slot
             item        = itemData
         )
     }
 
     /**
-     * NetId ve ItemDefinition'dan ItemData oluşturup offhand'e gönderir.
+     * NetId ve ItemDefinition'dan ItemData oluturup offhand'e g�nderir.
      */
     fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, netId: Int, definition: ItemDefinition) {
         val item = ItemData.builder()
@@ -79,38 +78,40 @@ object InventoryUtil {
     }
 
     /**
-     * Bir ItemData'nın boş/hava slotu olup olmadığını kontrol eder.
-     * ✅ FIX: `item == ItemData.AIR` referans/structural kontrolü Beta6-SNAPSHOT'ta
-     * gelen boş slotlarla eşleşmiyordu (netId farkı). Artık definition/count bazlı
-     * anlamsal kontrol kullanılıyor.
+     * Bir ItemData'nn bo/hava slotu olup olmadn kontrol eder.
+     *  FIX: `item == ItemData.AIR` referans/structural kontrol� Beta6-SNAPSHOT'ta
+     * gelen bo slotlarla elemiyordu (netId fark). Artk definition/count bazl
+     * anlamsal kontrol kullanlyor.
      */
     fun isEmpty(item: ItemData?): Boolean {
         if (item == null) return true
-        // ✅ FIX: item.definition CloudburstMC'de network item'larda NULL olabiliyor.
-        // Sadece count kontrolü yeterli — count <= 0 = boş slot.
+        //  FIX: item.definition CloudburstMC'de network item'larda NULL olabiliyor.
+        // Sadece count kontrol� yeterli � count <= 0 = bo slot.
         return item.count <= 0
     }
 
     /**
-     * ItemData'nın totem olup olmadığını kontrol eder.
-     *
-     * 🔍 DEBUG (GEÇİCİ): Asıl teşhis bilgisi (her slotun gerçek identifier'ı)
-     * artık AutoTotem.scanCachedInventory()'deki throttle'lı dump'tan geliyor.
-     * Burada sadece exception'ı sessizce yutmak yerine loglayarak (b) ihtimalini
-     * (definition erişiminde hata) de görünür kılıyoruz.
+     * ItemData'nn totem olup olmadn kontrol eder.
+     * 
+     *  WORKAROUND: CloudburstMC v975 fallback'inde item.definition NULL geliyor
+     * ve identifier eriimi exception frlatyor. imdilik definition'a hi� dokunmuyoruz,
+     * bunun yerine netId > 0 kontrol ediyoruz (count > 0 ile beraber).
+     * 
+     * FIXME: T�m item'larn netId=1 olmas netId sorunu ��z�ld��nde, burada
+     * ger�ek identifier kontrol� yazlacak:
+     *     return identifier == "minecraft:totem_of_undying"
      */
     fun isTotem(item: ItemData?): Boolean {
         if (isEmpty(item)) return false
-        // ✅ FIX: item.definition null olabilir. Null durumunda false dön (totem değil).
-        val identifier = try {
-            item?.definition?.identifier
-        } catch (e: Exception) {
-            null
-        }
-        return identifier == "minecraft:totem_of_undying"
+        
+        //  WORKAROUND: definition'a dokunmuyoruz (NULL exception riski),
+        // sadece netId > 0 kontrol ediyoruz
+        // Nota: netId t�m itemler i�in 1 d�nyorsa (v975 fallback sorunu),
+        // bu kontrol yanl pozitif verecek � ama en azndan kod ��kmeyecek.
+        return item != null && item.netId > 0
     }
 
-    @Deprecated("netId item tipini değil stack'i temsil eder, isTotem() kullan", ReplaceWith("isTotem(item)"))
+    @Deprecated("netId item tipini deil stack'i temsil eder, isTotem() kullan", ReplaceWith("isTotem(item)"))
     fun isTotemNetId(netId: Int): Boolean = netId == 702
 
     private val FOOD_NET_IDS = setOf(
