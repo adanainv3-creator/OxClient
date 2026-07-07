@@ -125,7 +125,7 @@ class CrystalAura : BaseModule(
                 }
             }
 
-            val blockDefs = Definitions.blockDefinitions
+            val blockDefs = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions
             for (id in possibleIds) {
                 val def = blockDefs.getDefinition(id)
                 if (def != null && identifierOf(def) == "minecraft:obsidian") {
