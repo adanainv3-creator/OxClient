@@ -167,6 +167,15 @@ class KillAura : BaseModule(
             }
         }
 
+        // ✅ ASIL FİX: Kritik vuruş simülasyonu artık saldırı paketinden ÖNCE gönderiliyor.
+        // Sunucu "critical hit" kararını attack/interact paketi geldiği ANDAKİ oyuncu
+        // hareket durumuna (havada + düşüyor mu) bakarak veriyor. Eskiden bu simülasyon
+        // saldırıdan SONRA (injectCrit çağrısı en altta) gönderiliyordu — yani sunucu
+        // saldırıyı zaten normal (kritiksiz) olarak işlemiş oluyordu, simülasyonun hiçbir
+        // etkisi olmuyordu. Bu, "her vuruş kritik olmalı ama olmuyor / hasar zayıf"
+        // şikayetinin doğrudan sebebiydi.
+        injectCrit(session)
+
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
             else -> {}
@@ -179,8 +188,6 @@ class KillAura : BaseModule(
             PacketUtil.sendAttack(session, e.runtimeId)
         }
 
-        injectCrit(session)
-
         lastAttackMs = now
     }
 
@@ -189,10 +196,10 @@ class KillAura : BaseModule(
         if (now - lastCritMs < 5) return
         lastCritMs = now
         
+        // Küçük bir zıplama + düşüş hareketi: yukarı (havada) → attack paketi bu
+        // "düşüyor" durumdayken sunucuya ulaşacak şekilde SIRALAMA korunuyor.
         PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0f, onGround = true)
         PacketUtil.sendMoveAtSelf(session, dyOffset = 0.042f, onGround = false)
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0f, onGround = true)
     }
 
     private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value

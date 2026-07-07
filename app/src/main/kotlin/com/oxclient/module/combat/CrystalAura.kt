@@ -47,7 +47,13 @@ class CrystalAura : BaseModule(
     private val maxBreak       = int  ("Max Break",     25,  1,  50)
     private val selfDmgLimit   = float("Self Dmg Limit",6f,  0f, 20f)
     private val minDmg         = float("Min Dmg",       4f,  0f, 20f)
-    private val antiSuicide    = bool ("Anti Suicide",  true)
+    // ✅ FIX: Varsayılan artık KAPALI. AutoTotem ile birlikte kullanıldığında (klasik
+    // combo) öz-hasar zaten totemle tank ediliyor. Açıkken (6 blok limit) yakın dövüşte
+    // (rakibe 1-3 blok mesafede) hedefin etrafındaki HER pozisyon senin kendine de
+    // 6 blok içinde kalıyor — yani antiSuicide sessizce HER yerleştirmeyi iptal
+    // ediyordu (log'da hedef+obsidian bulunuyor ama hiç "yerleştirildi" satırı yoktu).
+    // Totemin yoksa bu ayarı elle açabilirsin.
+    private val antiSuicide    = bool ("Anti Suicide",  false)
     private val rotate         = bool ("Rotate",        true)
     private val shortcut       = bool ("Shortcut",      true)
     // ✅ YENİ: elde obsidian olması zorunluluğu artık AÇIK/KAPALI seçilebilir bir config.

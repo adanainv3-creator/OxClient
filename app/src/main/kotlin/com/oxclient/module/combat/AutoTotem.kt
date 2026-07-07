@@ -43,6 +43,16 @@ class AutoTotem : BaseModule(
     @Volatile private var totemSlot       = -1
     @Volatile private var offhandHasTotem = false
 
+    // ✅ FIX: offhand'ın GERÇEK anlık stackNetworkId'sini takip ediyoruz. Eskiden
+    // ItemStackRequest'in "destination" netId'i için EntityTracker.getInventoryItem(119)
+    // taze okunuyordu — ama TOTEM TÜKETİLDİĞİ ANDA (CONSUME_TOTEM event) EntityTracker'ın
+    // cache'i henüz güncellenmemiş oluyordu (server'ın "offhand artık boş" paketi birkaç
+    // ms sonra geliyor). Bu yüzden swap isteğinde stale (eski totem'in) netId'i
+    // "destination" olarak gönderiliyordu — sunucu "bu ID orada değil" deyip isteği
+    // sessizce reddediyordu (bkz. ItemStackRequestSlotData dokümantasyonu). Artık
+    // consumption anında bunu elle 0'a (boş) çekiyoruz, çünkü tüketim = kesin boşalma.
+    @Volatile private var offhandNetId = 0
+
     // Bedrock istemcisi stackRequestId'leri NEGATİF ve azalan üretir (sunucunun
     // kendi ürettiği pozitif id'lerle çakışmaması için).
     @Volatile private var stackRequestIdCounter = 0
@@ -99,6 +109,7 @@ class AutoTotem : BaseModule(
                         val item = pkt.contents.firstOrNull()
                         val prev = offhandHasTotem
                         offhandHasTotem = InventoryUtil.isTotem(item)
+                        offhandNetId = item?.netId ?: 0
                         OverlayLogger.d(TAG, "InventoryContent(119/offhand): isTotem=$offhandHasTotem (önceki=$prev) netId=${item?.netId} count=${item?.count} defId=${runCatching { item?.definition?.identifier }.getOrElse { "ERR" }}")
                         if (!offhandHasTotem && totemSlot >= 0) {
                             OverlayLogger.d(TAG, "Offhand boşaldı (content), equipTotem() tetikleniyor")
@@ -114,6 +125,7 @@ class AutoTotem : BaseModule(
                 if (pkt.containerId == 119) {
                     val prev = offhandHasTotem
                     offhandHasTotem = InventoryUtil.isTotem(pkt.item)
+                    offhandNetId = pkt.item?.netId ?: 0
                     OverlayLogger.d(TAG, "InventorySlot(119/offhand): isTotem=$offhandHasTotem (önceki=$prev)")
                     if (!offhandHasTotem && totemSlot >= 0) {
                         OverlayLogger.d(TAG, "Offhand boşaldı (slot), equipTotem() tetikleniyor")
@@ -145,6 +157,12 @@ class AutoTotem : BaseModule(
                     if (type.contains("CONSUME") || type.contains("TOTEM")) {
                         OverlayLogger.i(TAG, "TOTEM TÜKETİLDİ (event=$type), yeniden taranıyor")
                         offhandHasTotem = false
+                        // ✅ ASIL FİX: EntityTracker'ın cache'i henüz güncellenmemiş olsa bile
+                        // tüketim kesin olarak offhand'ı boşaltır — bunu ELLE 0'a çekiyoruz.
+                        // Bu satır olmadan equipTotem() bir sonraki swap isteğinde stale
+                        // (tüketilen totem'in) netId'ini "destination" olarak gönderiyordu,
+                        // sunucu ID uyuşmazlığı yüzünden swap'ı sessizce reddediyordu.
+                        offhandNetId = 0
                         totemSlot = -1
                         scanCachedInventory()
                         OverlayLogger.d(TAG, "Tüketim sonrası: totemSlot=$totemSlot")
@@ -250,8 +268,12 @@ class AutoTotem : BaseModule(
      */
     private fun sendViaItemStackRequest(session: OxRelaySession, slot: Int, itemData: ItemData) {
         try {
-            val offhandSnapshot = EntityTracker.getInventoryItem(119)
-            val offhandNetId = offhandSnapshot?.netId ?: 0
+            // ✅ ASIL FİX: Artık EntityTracker'dan TAZE (ve tüketim anında stale olabilen)
+            // bir okuma yapmıyoruz — bunun yerine sınıfın kendi takip ettiği offhandNetId
+            // alanını kullanıyoruz. Bu alan sadece gerçek InventoryContent/InventorySlot
+            // paketleriyle VE tüketim event'inde (kesin boşalma anında) elle güncelleniyor
+            // — böylece "destination" ID'si sunucunun gerçek anlık state'iyle eşleşiyor.
+            val destNetId = offhandNetId
 
             // ✅ GERÇEK İMZA DOĞRULANDI (kaynak dosyalardan): ItemStackRequestSlotData
             // Lombok @Value ile 4 alanlı: (container: ContainerSlotType [deprecated ama
@@ -266,7 +288,7 @@ class AutoTotem : BaseModule(
             val destination = ItemStackRequestSlotData(
                 ContainerSlotType.OFFHAND,
                 0,
-                offhandNetId,
+                destNetId,
                 FullContainerName(ContainerSlotType.OFFHAND, null)
             )
 
