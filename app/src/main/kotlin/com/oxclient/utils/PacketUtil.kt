@@ -18,7 +18,11 @@ object PacketUtil {
         })
     }
 
-    fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = 0) {
+    // ✅ FIX: eskiden hotbarSlot varsayılanı sabit 0'dı — kılıç başka bir hotbar
+    // slotundaysa server itemInHand'i slot 0'dan okuyup "elde silah yok" sanıyor
+    // ve yumruk hasarı uyguluyordu. Artık EntityTracker'ın gerçekten takip ettiği
+    // seçili slotu kullanıyoruz (bkz. EntityTracker.selfHotbarSlot / handleMobEquipment).
+    fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = EntityTracker.selfHotbarSlot) {
         // ── FIX: InventoryTransactionSerializer.writeItemUseOnEntity() bu üç alanı
         // KOŞULSUZ okuyor (bkz. CloudburstMC/Protocol v291→v1001, hiç değişmemiş).
         // null bırakılırsa helper.writeVector3f(null)/writeItem(null) encode
@@ -46,7 +50,7 @@ object PacketUtil {
         })
     }
 
-    fun sendSwingAndAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = 0) {
+    fun sendSwingAndAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = EntityTracker.selfHotbarSlot) {
         sendSwing(session)
         sendAttack(session, targetRid, hotbarSlot)
     }

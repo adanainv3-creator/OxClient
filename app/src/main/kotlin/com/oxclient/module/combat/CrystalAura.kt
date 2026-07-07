@@ -35,6 +35,7 @@ class CrystalAura : BaseModule(
     private val removeParticles = bool ("RemoveParticles", true)
     private val placeMode       = enum ("Place Mode", Mode.Single)
     private val breakMode       = enum ("Break Mode", Mode.Single)
+    private val shortcut        = bool ("Shortcut", false)
 
     private val activeCrystals  = ConcurrentHashMap<Long, Vector3f>()
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
@@ -203,7 +204,12 @@ class CrystalAura : BaseModule(
             if (selfDist < 3f) return
         }
 
-        val heldItem = EntityTracker.getInventoryItem(0) ?: ItemData.AIR
+        // ✅ FIX: sabit slot=0 yerine gerçekten seçili hotbar slotu kullanılıyor —
+        // aksi halde end crystal başka bir slottaysa server "elinde crystal yok"
+        // deyip yerleştirmeyi reddedebiliyordu (KillAura'daki yumruk hasarı bugu
+        // ile aynı kök sebep).
+        val heldSlot = EntityTracker.selfHotbarSlot
+        val heldItem = EntityTracker.getHeldItem() ?: ItemData.AIR
 
         try {
             val packet = InventoryTransactionPacket().apply {
@@ -211,7 +217,7 @@ class CrystalAura : BaseModule(
                 actionType = 0
                 blockPosition = Vector3i.from(bx, by, bz)
                 blockFace = 1
-                hotbarSlot = 0
+                hotbarSlot = heldSlot
                 itemInHand = heldItem
                 playerPosition = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
                 clickPosition = Vector3f.from(0.5f, 1f, 0.5f)

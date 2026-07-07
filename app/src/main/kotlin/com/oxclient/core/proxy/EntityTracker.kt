@@ -95,6 +95,12 @@ object EntityTracker : PacketEventBus.PacketListener {
     @Volatile var selfGameMode   : Int     = 0
     @Volatile var selfDimension  : Int     = 0
     @Volatile var selfSpeedXZ    : Float   = 0f
+    // ✅ FIX: gerçek seçili hotbar slotu. Eskiden hiçbir yerde tutulmuyordu,
+    // bu yüzden sendAttack/CrystalAura place hep sabit "slot 0"u itemInHand
+    // olarak yolluyordu — kılıç başka slottaysa server yumruk hasarı uyguluyordu.
+    // Client hotbar değiştirdiğinde MobEquipmentPacket(containerId=INVENTORY,
+    // hotbarSlot=X) gönderir; burada onu yakalayıp gerçek slotu tutuyoruz.
+    @Volatile var selfHotbarSlot : Int     = 0
 
     private var prevSelfX = 0f; private var prevSelfZ = 0f
 
@@ -152,6 +158,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             is ChangeDimensionPacket    -> handleDimension(p)
             is SetEntityLinkPacket      -> handleEntityLink(p)
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
+            is MobEquipmentPacket       -> handleMobEquipment(p, event.direction)
             is InventoryContentPacket   -> {
                 // ✅ DEBUG: containerId'yi filtre uygulamadan ÖNCE logla — beklenen 0 mı değil mi görelim.
                 OverlayLogger.d(TAG, "InventoryContentPacket alındı: containerId=${p.containerId} itemCount=${p.contents?.size}")
@@ -286,6 +293,17 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfX = p.position.x; selfY = p.position.y; selfZ = p.position.z
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
         selfSpeedXZ = MathUtil.dist2(selfX, selfZ, prevSelfX, prevSelfZ)
+    }
+
+    // ✅ FIX: hem gerçek oyuncunun scroll/1-9 tuşuyla slot değiştirmesi hem de
+    // bizim modüllerimizin InventoryUtil.sendHotbarSelect() ile gönderdiği paket
+    // buradan yakalanır — ikisi de containerId=INVENTORY ile client->server gider.
+    private fun handleMobEquipment(p: MobEquipmentPacket, dir: PacketEvent.Direction) {
+        if (dir != PacketEvent.Direction.CLIENT_TO_SERVER) return
+        if (p.runtimeEntityId != selfRuntimeId && p.runtimeEntityId != 0L) return
+        if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
+            selfHotbarSlot = p.hotbarSlot
+        }
     }
 
     private fun handleEntityMotion(p: SetEntityMotionPacket) {
@@ -424,6 +442,10 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
     fun getInventoryItem(slot: Int): ItemData? = selfInventory[slot]
+
+    /** Şu an elde (seçili hotbar slotunda) tutulan item. Attack/place paketlerinde
+     *  hep bunu kullan, sabit slot=0 kullanma — aksi halde server yanlış item görür. */
+    fun getHeldItem(): ItemData? = selfInventory[selfHotbarSlot]
 
     /** Ana envanterin anlık kopyası — slot -> ItemData. Modüller geç enable olsa bile
      *  buradan mevcut durumu okuyabilir (bkz. selfInventory üstteki not). */
