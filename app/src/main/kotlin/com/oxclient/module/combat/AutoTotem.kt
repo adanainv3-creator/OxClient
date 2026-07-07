@@ -13,6 +13,7 @@ import org.cloudburstmc.protocol.bedrock.data.inventory.FullContainerName
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequest
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequestSlotData
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.ItemStackRequestAction
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.SwapAction
 import org.cloudburstmc.protocol.bedrock.packet.*
 
@@ -243,39 +244,36 @@ class AutoTotem : BaseModule(
      * ✅ ASIL FİX: ItemStackRequestPacket ile ana envanterdeki totemi offhand ile
      * SWAP eder — gerçek bir oyuncunun elle yaptığı swap ile birebir aynı paket.
      *
-     * ⚠️ DİKKAT: ItemStackRequestSlotData / FullContainerName / SwapAction sınıflarının
-     * constructor imzası kullandığın CloudburstMC protocol kütüphanesi versiyonuna göre
-     * FARKLILIK gösterebilir (alan sırası, isimlendirme, ekstra parametreler gibi).
-     * Derleme hatası alırsan IDE'de ctrl+click ile gerçek sınıf tanımına bakıp parametre
-     * sırasını/isimlerini buna göre düzelt — mantık (container tipi + slot + netId ile
-     * swap action oluşturmak) aynı kalacak. Özellikle FullContainerName'in ikinci
-     * parametresi (dynamicId) bazı versiyonlarda yok/farklı isimde olabilir — o durumda
-     * sadece FullContainerName(ContainerSlotType.X) tek parametreli haliyle dene.
+     * Sınıf imzaları (ItemStackRequestSlotData, FullContainerName, SwapAction,
+     * ItemStackRequest) CloudburstMC protocol kaynak dosyalarından doğrulandı,
+     * tahmin değil.
      */
     private fun sendViaItemStackRequest(session: OxRelaySession, slot: Int, itemData: ItemData) {
         try {
             val offhandSnapshot = EntityTracker.getInventoryItem(119)
             val offhandNetId = offhandSnapshot?.netId ?: 0
 
-            // ✅ FIX (derleme hatası): ItemStackRequestSlotData artık ContainerSlotType'ı
-            // DOĞRUDAN almıyor — bunun yerine "containerName: FullContainerName" bekliyor
-            // (nested container'lar için — ör. çift sandık, bundle — dynamicId taşıyabilen
-            // bir sarmalayıcı). Basit hotbar/inventory/offhand slotları için dynamicId null.
+            // ✅ GERÇEK İMZA DOĞRULANDI (kaynak dosyalardan): ItemStackRequestSlotData
+            // Lombok @Value ile 4 alanlı: (container: ContainerSlotType [deprecated ama
+            // hâlâ zorunlu], slot: Int, stackNetworkId: Int, containerName: FullContainerName).
+            // FullContainerName de @Value: (container: ContainerSlotType, dynamicId: Integer?).
             val source = ItemStackRequestSlotData(
-                FullContainerName(ContainerSlotType.HOTBAR_AND_INVENTORY, null),
+                ContainerSlotType.HOTBAR_AND_INVENTORY,
                 slot,
-                itemData.netId
+                itemData.netId,
+                FullContainerName(ContainerSlotType.HOTBAR_AND_INVENTORY, null)
             )
             val destination = ItemStackRequestSlotData(
-                FullContainerName(ContainerSlotType.OFFHAND, null),
+                ContainerSlotType.OFFHAND,
                 0,
-                offhandNetId
+                offhandNetId,
+                FullContainerName(ContainerSlotType.OFFHAND, null)
             )
 
             val request = ItemStackRequest(
                 nextStackRequestId(),
-                arrayOf(SwapAction(source, destination)),
-                arrayOf()
+                arrayOf<ItemStackRequestAction>(SwapAction(source, destination)),
+                arrayOf<String>()
             )
 
             session.serverBound(ItemStackRequestPacket().apply {
