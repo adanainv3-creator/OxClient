@@ -9,6 +9,7 @@ import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
+import org.cloudburstmc.protocol.bedrock.data.inventory.FullContainerName
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequest
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequestSlotData
@@ -242,25 +243,31 @@ class AutoTotem : BaseModule(
      * ✅ ASIL FİX: ItemStackRequestPacket ile ana envanterdeki totemi offhand ile
      * SWAP eder — gerçek bir oyuncunun elle yaptığı swap ile birebir aynı paket.
      *
-     * ⚠️ DİKKAT: ItemStackRequestSlotData / SwapAction sınıflarının constructor imzası
-     * kullandığın CloudburstMC protocol kütüphanesi versiyonuna göre FARKLILIK
-     * gösterebilir (alan sırası, isimlendirme, ekstra parametreler gibi). Derleme
-     * hatası alırsan IDE'de ctrl+click ile gerçek sınıf tanımına bakıp parametre
-     * sırasını/isimlerini buna göre düzelt — mantık (container tipi + slot + netId
-     * ile swap action oluşturmak) aynı kalacak.
+     * ⚠️ DİKKAT: ItemStackRequestSlotData / FullContainerName / SwapAction sınıflarının
+     * constructor imzası kullandığın CloudburstMC protocol kütüphanesi versiyonuna göre
+     * FARKLILIK gösterebilir (alan sırası, isimlendirme, ekstra parametreler gibi).
+     * Derleme hatası alırsan IDE'de ctrl+click ile gerçek sınıf tanımına bakıp parametre
+     * sırasını/isimlerini buna göre düzelt — mantık (container tipi + slot + netId ile
+     * swap action oluşturmak) aynı kalacak. Özellikle FullContainerName'in ikinci
+     * parametresi (dynamicId) bazı versiyonlarda yok/farklı isimde olabilir — o durumda
+     * sadece FullContainerName(ContainerSlotType.X) tek parametreli haliyle dene.
      */
     private fun sendViaItemStackRequest(session: OxRelaySession, slot: Int, itemData: ItemData) {
         try {
             val offhandSnapshot = EntityTracker.getInventoryItem(119)
             val offhandNetId = offhandSnapshot?.netId ?: 0
 
+            // ✅ FIX (derleme hatası): ItemStackRequestSlotData artık ContainerSlotType'ı
+            // DOĞRUDAN almıyor — bunun yerine "containerName: FullContainerName" bekliyor
+            // (nested container'lar için — ör. çift sandık, bundle — dynamicId taşıyabilen
+            // bir sarmalayıcı). Basit hotbar/inventory/offhand slotları için dynamicId null.
             val source = ItemStackRequestSlotData(
-                ContainerSlotType.HOTBAR_AND_INVENTORY,
+                FullContainerName(ContainerSlotType.HOTBAR_AND_INVENTORY, null),
                 slot,
                 itemData.netId
             )
             val destination = ItemStackRequestSlotData(
-                ContainerSlotType.OFFHAND,
+                FullContainerName(ContainerSlotType.OFFHAND, null),
                 0,
                 offhandNetId
             )
