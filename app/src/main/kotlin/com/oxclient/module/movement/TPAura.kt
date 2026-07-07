@@ -42,6 +42,7 @@ class TPAura : BaseModule(
     private var strafeAngle = 0.0
     private var tickJob: Job? = null
     private var moveAttempts = 0L
+    private var tickCounter = 0L
 
     private companion object { const val TAG = "TPAura" }
 
@@ -63,19 +64,11 @@ class TPAura : BaseModule(
 
     private suspend fun movementLoop() {
         while (currentCoroutineContext().isActive) {
-            if (isEnabled && !isMoving) {
+            if (isEnabled) {
                 val target = findTarget()
                 if (target != null) {
-                    isMoving = true
-                    try {
-                        moveAttempts++
-                        OverlayLogger.v(TAG, "Hedef bulundu (#$moveAttempts): ${target.name} (${target.runtimeId})")
-                        moveAroundTarget(target)
-                    } catch (e: Exception) {
-                        OverlayLogger.e(TAG, "moveAroundTarget hatası: ${e.message}", e)
-                    } finally {
-                        isMoving = false
-                    }
+                    moveAttempts++
+                    moveAroundTarget(target)
                 }
             }
             delay(50L)
@@ -85,65 +78,34 @@ class TPAura : BaseModule(
     private fun findTarget(): EntityTracker.TrackedEntity? {
         val candidates = EntityTracker.getEntitiesInRange(range.value + 1f)
             .filter { it.runtimeId != EntityTracker.selfRuntimeId }
-        
-        return candidates.minByOrNull { EntityTracker.distanceTo(it) }.also { target ->
-            if (target == null && candidates.isNotEmpty()) {
-                OverlayLogger.v(TAG, "Hedef arayışında: ${candidates.size} aday bulundu ama range filtresi tümünü eledi")
-            }
-        }
+        return candidates.minByOrNull { EntityTracker.distanceTo(it) }
     }
 
-    private suspend fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
-        val session = PacketEventBus.currentSession ?: run {
-            OverlayLogger.w(TAG, "moveAroundTarget: session null — relay bağlı değil")
-            return
-        }
+    // ✅ FIX: OpFightBot referansındaki gibi HER TICK'te doğrudan hesaplanan orbit
+    // pozisyonuna set ediyoruz — eskisi gibi "motion" vektörünü elle ölçekleyip
+    // PlayerAuthInputPacket.motion alanına yazmaya çalışmıyoruz. motion sadece
+    // sunucunun tahmin/animasyon amacıyla kullandığı bir rapor alanıdır, hareketin
+    // kendisini SAĞLAMAZ; asıl hareketi belirleyen `position` alanıdır. Eskiden
+    // motion'ı manuel ölçekleyip position'ı da aynı anda göndermek (ikisi tutarsız)
+    // sunucunun paketi reddetmesine ya da hareketi yok saymasına yol açıyordu.
+    private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
+        val session = PacketEventBus.currentSession ?: return
 
-        val selfPos   = getCurrentPosition()
         val targetPos = Vector3f.from(target.x, target.y + yOffset.value, target.z)
         val newPos    = calculatePosition(targetPos)
 
-        val distance  = selfPos.distance(newPos)
-        OverlayLogger.v(TAG, "Hareket planı: self=(${selfPos.x}|${selfPos.y}|${selfPos.z}) target=(${targetPos.x}|${targetPos.y}|${targetPos.z}) newPos=(${newPos.x}|${newPos.y}|${newPos.z}) distance=$distance")
-
-        // ✅ DÜZELTME: Hareket vektörü hesabı (motion=yeni_pozisyon - eski_pozisyon, hız faktörü ile ölçeklenir)
-        val motionX = (newPos.x - selfPos.x) * horizontalSpeed.value * 0.1f
-        val motionY = (newPos.y - selfPos.y) * verticalSpeed.value * 0.1f
-        val motionZ = (newPos.z - selfPos.z) * horizontalSpeed.value * 0.1f
-
-        // ✅ FIX: PlayerAuthInputPacket'a geç (MovePlayerPacket yerine)
-        // - PlayerAuthInputPacket: sunucu tarafından güvenilir sayılır, anti-cheat ignore etmez
-        // - position, rotation, motion (Vector2f!), inputData (JUMPING flag), tick, etc.
         val packet = PlayerAuthInputPacket().apply {
-            // Konum ve rotasyon
             position = newPos
             rotation = Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, 0f)
-            
-            // Motion: Vector2f (sadece X/Z), Y hareket bilgisi inputData flag'leriyle gönderiliyor
-            motion = Vector2f.from(motionX, motionZ)
-            
-            // Input flags: JUMPING ekle (hareketin sunucu tarafından kabul edilmesi için önemli)
-            inputData.add(PlayerAuthInputData.JUMPING)
-            
-            // Tick: teoride server tick'i ile senkronize edilmesi lazım, ama 0 bırakmak
-            // çoğu sunucuda çalışıyor (sunucu kendi tick'ini atıyor). Eğer server reject
-            // ederse, EntityTracker'a ServerTickPacket listener eklenmesi gerekir.
-            tick = 0L
+            motion = Vector2f.ZERO
+            tick = tickCounter++
         }
 
-        OverlayLogger.v(TAG, "PlayerAuthInputPacket gönderiliyor: pos=$newPos motion=(${motionX}|${motionZ}) inputData=${packet.inputData}")
-        
         try {
             session.serverBound(packet)
-            OverlayLogger.v(TAG, "Paket başarıyla gönderildi ✓")
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "Paket gönderme hatası: ${e.message}", e)
-            return
         }
-
-        val avgSpeed = (horizontalSpeed.value + verticalSpeed.value) / 2f
-        val delayMs  = (100f / avgSpeed.coerceAtLeast(0.5f)).toLong()
-        delay(delayMs)
     }
 
     private fun calculatePosition(targetPos: Vector3f): Vector3f {
