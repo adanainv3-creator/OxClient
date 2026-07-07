@@ -68,7 +68,16 @@ class CrystalAura : BaseModule(
         activeCrystals.clear(); uniqueToRuntime.clear(); placedPositions.clear()
         seqIndex = 0
         cachedObsidianDef = null
-        OverlayLogger.d(TAG, "Enabled: autoPlace=${autoPlace.value} autoBreak=${autoBreak.value} placeMode=${placeMode.value} breakMode=${breakMode.value}")
+
+        // ✅ FIX: Modül kapalıyken zaten var olan (sunucudan önceden gelmiş)
+        // kristaller de senkronize ediliyor. Eskiden sadece AddEntityPacket ile
+        // dolan activeCrystals, enable ÖNCESİ var olan kristalleri hiç görmüyordu.
+        EntityTracker.getAll().filter { it.isCrystal }.forEach { c ->
+            activeCrystals[c.runtimeId] = Vector3f.from(c.x, c.y, c.z)
+            uniqueToRuntime[c.uniqueId] = c.runtimeId
+        }
+
+        OverlayLogger.d(TAG, "Enabled: autoPlace=${autoPlace.value} autoBreak=${autoBreak.value} placeMode=${placeMode.value} breakMode=${breakMode.value} (mevcut kristal=${activeCrystals.size})")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -132,7 +141,12 @@ class CrystalAura : BaseModule(
 
     private fun selectTarget(): EntityTracker.TrackedEntity? {
         val r = if (throughWalls.value) wallsRange.value else placeRange.value
+        // ✅ FIX: Eskiden EntityTracker.getEntitiesInRange(r) TÜM entity'leri
+        // (zombi, item drop, kristalin kendisi dahil) hedef sayıyordu — rakip
+        // yokken de kristal yerleştirmesine sebep oluyordu. Artık sadece gerçek
+        // combat hedefleri (oyuncu/hostile mob) hedef olarak seçiliyor.
         val candidates = EntityTracker.getEntitiesInRange(r)
+            .filter { (it.isPlayer || it.isHostile) && it.runtimeId != EntityTracker.selfRuntimeId }
         return when (targetPriority.value) {
             TargetPriority.Distance    -> candidates.minByOrNull { EntityTracker.distanceTo(it) }
             TargetPriority.Health      -> candidates.minByOrNull { it.health }
@@ -243,6 +257,15 @@ class CrystalAura : BaseModule(
             return
         }
 
+        // ✅ FIX: Eskiden itemInHand = hotbar 0'da GERÇEKTE ne varsa oydu — obsidian
+        // olup olmadığı hiç kontrol edilmiyordu. Sunucu elindeki item ile yerleştirilen
+        // blok eşleşmezse (özellikle anti-cheat'li survival sunucularında) paketi
+        // sessizce reddediyor: log "yerleştirildi" der ama oyunda hiçbir şey olmaz.
+        if (!isHoldingObsidian()) {
+            OverlayLogger.w(TAG, "Hotbar 0'da obsidian yok — place atlanıyor (gerçek elde tutulan item obsidian değil)")
+            return
+        }
+
         when (placeMode.value) {
             PlaceMode.Safe -> doPlaceSafe(target, session, obsidianDef)
             PlaceMode.Aggressive -> doPlaceAggressive(target, session, obsidianDef)
@@ -310,6 +333,13 @@ class CrystalAura : BaseModule(
         }
     }
 
+    /** Hotbar 0'da GERÇEKTEN obsidian tutulup tutulmadığını item registry üzerinden doğrular. */
+    private fun isHoldingObsidian(): Boolean {
+        val held = EntityTracker.getInventoryItem(0) ?: return false
+        val identifier = runCatching { held.definition?.identifier }.getOrNull()
+        return identifier == "minecraft:obsidian"
+    }
+
     private fun tryPlaceCrystal(
         bx: Int, by: Int, bz: Int,
         session: OxRelaySession,
@@ -319,7 +349,11 @@ class CrystalAura : BaseModule(
         val bKey = packKey(bx, by, bz)
         if (placedPositions.containsKey(bKey)) return false
 
-        val alreadyPlaced = activeCrystals.values.any { c ->
+        // ✅ FIX: activeCrystals yerine doğrudan EntityTracker'a bakılıyor — bu sayede
+        // modül enable edilmeden önce zaten var olan kristaller de "zaten dolu" olarak
+        // doğru tespit ediliyor (activeCrystals'ın kapsamadığı durum).
+        val alreadyPlaced = EntityTracker.getAll().any { c ->
+            c.isCrystal &&
             Math.abs(c.x - bx - 0.5f) < 0.5f &&
             Math.abs(c.y - by - 1f)   < 0.5f &&
             Math.abs(c.z - bz - 0.5f) < 0.5f
@@ -382,52 +416,49 @@ class CrystalAura : BaseModule(
             return
         }
 
-        val sorted = activeCrystals.entries
-            .filter { (_, p) ->
-                MathUtil.dist3(p.x, p.y, p.z,
-                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= breakRange.value
-            }
-            .sortedBy { (_, p) ->
-                MathUtil.dist3(p.x, p.y, p.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-            }
+        // ✅ FIX (asıl istenen davranış): activeCrystals yerine doğrudan EntityTracker
+        // kullanılıyor. EntityTracker, CrystalAura'nın enable/disable durumundan bağımsız
+        // olarak TÜM ender_crystal entity'lerini (ne zaman spawn olursa olsun — modül
+        // açılmadan önce yerleştirilmiş, başkası tarafından konulmuş, vs.) takip ediyor.
+        // Eski kod sadece kendi activeCrystals map'ine bakıyordu ve bu map SADECE modül
+        // açıkken gelen AddEntityPacket ile doluyordu — önceden var olan kristaller hiç
+        // görünmüyordu (log'daki "activeCrystals=0" tekrarlarının sebebi buydu).
+        val sorted = EntityTracker.getCrystals(breakRange.value)
+            .sortedBy { EntityTracker.distanceTo(it) }
 
         if (sorted.isEmpty()) return
 
         when (breakMode.value) {
             BreakMode.Instant -> {
                 var b = 0
-                for ((rid, pos) in sorted) {
+                for (entity in sorted) {
                     if (b++ >= maxBreak.value) break
-                    attackCrystal(rid, session)
-                    activeCrystals.remove(rid)
+                    attackCrystalEntity(entity, session)
                 }
                 OverlayLogger.d(TAG, "doBreak: ${b} crystal kırıldı (Instant)")
             }
             BreakMode.Sequential -> {
                 seqIndex %= sorted.size
-                val (rid, _) = sorted[seqIndex]
-                attackCrystal(rid, session)
-                activeCrystals.remove(rid)
+                val entity = sorted[seqIndex]
+                attackCrystalEntity(entity, session)
                 seqIndex++
                 OverlayLogger.d(TAG, "doBreak: 1 crystal kırıldı (Sequential #$seqIndex)")
             }
             BreakMode.Closest -> {
-                sorted.firstOrNull()?.let { (rid, _) ->
-                    attackCrystal(rid, session)
-                    activeCrystals.remove(rid)
+                sorted.firstOrNull()?.let { entity ->
+                    attackCrystalEntity(entity, session)
                     OverlayLogger.d(TAG, "doBreak: 1 crystal kırıldı (Closest)")
                 }
             }
         }
     }
 
-    private fun attackCrystal(rid: Long, session: OxRelaySession) {
+    private fun attackCrystalEntity(entity: EntityTracker.TrackedEntity, session: OxRelaySession) {
         if (rotate.value) {
-            val pos = activeCrystals[rid] ?: return
-            val r = RotationUtil.toPoint(pos.x, pos.y, pos.z)
+            val r = RotationUtil.toPoint(entity.x, entity.y, entity.z)
             PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
         }
-        PacketUtil.sendSwingAndAttack(session, rid)
+        PacketUtil.sendSwingAndAttack(session, entity.runtimeId)
     }
 
     private fun packKey(x: Int, y: Int, z: Int): Long =

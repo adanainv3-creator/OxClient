@@ -34,10 +34,17 @@ class GamingPacketListener : OxPacketListener {
 
     @Volatile private var active = false
 
+    // ✅ FIX: ItemComponentPacket'ten doğru registry kurulduysa CreativeContentPacket
+    // fallback'i devre dışı bırakılıyor — CreativeContentPacket decode edilirken zaten
+    // aktif olan registry kullanıldığı için, ItemComponent'ten SONRA gelirse artık doğru
+    // registry ile decode edilir ve onu tekrar üzerine yazmaya gerek kalmaz.
+    @Volatile private var itemComponentsApplied = false
+
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     override fun onSessionStart(session: OxRelaySession) {
         active = true
+        itemComponentsApplied = false
         OverlayLogger.i(TAG, "Gaming listener aktif: ${session.clientAddress}")
     }
 
@@ -102,20 +109,38 @@ class GamingPacketListener : OxPacketListener {
                 applyCameraDefinitions(packet, session)
             }
 
+            // ── ItemComponentPacket ─────────────────────────────────────────
+            // ✅ FIX (AutoTotem/CrystalAura'nın "item hiç tanınmıyor" sorununun
+            // kök nedeni buradaydı): StartGame.itemDefinitions boş gelmesi modern
+            // protokolde (712+) NORMAL — item tanımları artık bu pakette taşınıyor.
+            //
+            // Önceki fallback (CreativeContentPacket) YANLIŞTI çünkü:
+            // CreativeContentPacket'in içindeki ItemData'lar decode edilirken
+            // ZATEN AKTİF olan (o an hâlâ kurulmamış/yanlış) itemDefinitions
+            // registry'si kullanılıyor. Yani paket kendi kendini yanlış registry
+            // ile çözüyor, sonra bu yanlış identifier'lar yeni "doğru" registry
+            // diye kaydediliyordu (log: totem'in identifier'ı "minecraft:element_34"
+            // gibi tamamen anlamsız bir şeye çözülüyordu).
+            //
+            // ItemComponentPacket ise identifier + runtimeId + component NBT'yi
+            // DOĞRUDAN taşır — decode edilmesi için ÖNCEDEN doğru bir registry'ye
+            // ihtiyaç duymaz. Bu yüzden gerçek/güvenilir kaynak burasıdır.
+            is ItemComponentPacket -> {
+                applyItemComponents(packet, session)
+            }
+
             // ── CreativeContentPacket ──────────────────────────────────────
             // 2b2tpe.org gibi bazı sunucular StartGamePacket.itemDefinitions
-            // alanını BOŞ gönderiyor. Bu durumda codec'in fallback registry'si
-            // devreye giriyor ama definition → identifier çözümlemesi
-            // (isTotem(), inventory karşılaştırmaları vb.) çalışmıyor.
-            //
-            // CreativeContentPacket, yaratıcı moddaki TÜM item'ların
-            // ItemData'sını (ve dolayısıyla ItemDefinition'ını) içerir —
-            // StartGame'in aksine bu paket sunucudan HER ZAMAN dolu gelir
-            // (aksi halde client'ın yaratıcı envanteri boş kalırdı).
-            // Bu yüzden ItemComponentPacket'i parse etmek yerine bu paketi
-            // yakalayıp gerçek bir ItemDefinition registry'si kuruyoruz.
+            // alanını BOŞ gönderiyor. ItemComponentPacket'ten zaten doğru
+            // registry kurulduysa (normal akış — bu paket ItemComponent'ten
+            // SONRA gelir) burası artık sadece ikincil bir fallback:
+            // ItemComponentPacket hiç gelmediyse veya boşsa devreye girer.
             is CreativeContentPacket -> {
-                applyCreativeItemDefinitions(packet, session)
+                if (itemComponentsApplied) {
+                    OverlayLogger.d(TAG, "CreativeContent atlanıyor — ItemComponentPacket'ten zaten doğru registry kuruldu")
+                } else {
+                    applyCreativeItemDefinitions(packet, session)
+                }
             }
 
             // Entity tracking PacketEventBus üzerinden EntityTracker tarafından
@@ -267,6 +292,41 @@ class GamingPacketListener : OxPacketListener {
             }
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "BlockDefinitions hatası: ${e.message}", e)
+        }
+    }
+
+    /**
+     * ItemComponentPacket'ten gerçek/güvenilir ItemDefinition registry'sini kurar.
+     *
+     * Bu paket her item için identifier + runtimeId + component NBT'yi doğrudan
+     * taşır — CreativeContentPacket'in aksine, DECODE edilmesi için önceden var
+     * olan bir itemDefinitions registry'sine ihtiyaç duymaz. Bu yüzden StartGame
+     * boş geldiğinde asıl güvenilir kaynak burasıdır.
+     */
+    private fun applyItemComponents(packet: ItemComponentPacket, session: OxRelaySession) {
+        try {
+            val items = packet.items
+            if (items.isEmpty()) {
+                OverlayLogger.w(TAG, "ItemComponentPacket: items boş — atlanıyor")
+                return
+            }
+
+            val registry = SimpleDefinitionRegistry.builder<ItemDefinition>()
+                .addAll(items)
+                .build()
+
+            session.clientSession.peer.codecHelper.itemDefinitions = registry
+            session.serverSession?.peer?.codecHelper?.itemDefinitions = registry
+            itemComponentsApplied = true
+
+            val totem = items.firstOrNull { it.identifier == "minecraft:totem_of_undying" }
+            OverlayLogger.i(
+                TAG,
+                "ItemDefinitions ItemComponentPacket'ten set edildi ✓ (${items.size} item) " +
+                    "totem_of_undying=${if (totem != null) "BULUNDU rid=${totem.runtimeId}" else "YOK"}"
+            )
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "ItemComponentPacket hatası: ${e.message}", e)
         }
     }
 
