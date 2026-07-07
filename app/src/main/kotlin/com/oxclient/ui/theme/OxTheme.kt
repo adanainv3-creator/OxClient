@@ -26,6 +26,13 @@ val OxError          = Color(0xFFB1423C)
 val OxSuccess        = Color(0xFF3F9A5B)
 val OxWarning        = Color(0xFFB8863B)
 
+// --- Legacy aliases kept only so older files (e.g. OverlayService.kt) still
+// --- compile without edits. They now point at the steel-blue palette above,
+// --- not an actual purple color.
+val OxPurple      = OxAccent
+val OxPurpleLight = OxAccentLight
+val OxPurpleDark  = OxAccentDark
+
 private val Scheme = darkColorScheme(
     primary          = OxAccent,
     onPrimary        = Color.White,
