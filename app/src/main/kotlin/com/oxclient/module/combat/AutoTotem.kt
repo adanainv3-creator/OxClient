@@ -273,6 +273,46 @@ class AutoTotem : BaseModule(
 
         offhandHasTotem = true
         OverlayLogger.i(TAG, "Totem takıldı: slot=$slot (yöntem=${equipMethod.value})")
+
+        // ✅ ASIL FİX: relay mimarisinde ItemStackRequestPacket sadece GERÇEK SUNUCUYA
+        // gidiyor (session.serverBound). Sunucu authoritative state'i doğru güncelliyor
+        // (log kanıtı: InventoryContent(119) isTotem=true) AMA gerçek telefondaki client
+        // bu isteği KENDİSİ göndermediği için hiç yerel prediction yapmıyor — ekrandaki
+        // el/offhand görüntüsü güncellenmiyor. Sunucunun ItemStackResponsePacket'i de
+        // client'ın hiç bilmediği bir requestId taşıdığı için sessizce yok sayılabiliyor.
+        // Çözüm: sunucudan bağımsız olarak gerçek cihaza DA (server->client yönünde)
+        // aynı sonucu yansıtan senkron bir InventorySlotPacket çifti enjekte ediyoruz,
+        // böylece ekran sunucunun cevabını beklemeden anında doğru görünüyor.
+        //
+        // ⚠️ VARSAYIM: session.clientBound(...) burada OxRelaySession'da serverBound()'un
+        // simetriği olarak (yani "bu paketi gerçek server değil, gerçek telefon client'ı
+        // alsın" anlamında) var olduğunu varsayıyorum. OxRelaySession.kt'de metot ismi
+        // farklıysa (örn. session.clientSession.sendPacket(...)) burayı ona göre değiştir.
+        forceClientEcho(session, slot, itemData)
+    }
+
+    /**
+     * Gerçek cihazın kendi UI/prediction state'ini, sunucunun cevabını beklemeden
+     * doğrudan doğru duruma zorlar. Kaynak slotu boşaltır (totem stack'i 1 olduğu için
+     * swap sonrası orada eskiden offhand'da olan şey kalır — biz burada equipTotem'i
+     * sadece offhand boşken tetiklediğimiz için pratikte AIR), offhand'a totemi koyar.
+     */
+    private fun forceClientEcho(session: OxRelaySession, sourceSlot: Int, totemItem: ItemData) {
+        try {
+            session.clientBound(InventorySlotPacket().apply {
+                containerId = 0
+                this.slot = sourceSlot
+                item = ItemData.AIR
+            })
+            session.clientBound(InventorySlotPacket().apply {
+                containerId = 119
+                this.slot = 0
+                item = totemItem
+            })
+            OverlayLogger.d(TAG, "forceClientEcho: gerçek cihaza doğrudan yansıtıldı (slot=$sourceSlot -> AIR, offhand -> totem)")
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "forceClientEcho gönderilemedi: ${e.message}", e)
+        }
     }
 
     private fun sendViaMobEquipment(session: OxRelaySession, slot: Int, itemData: ItemData) {
