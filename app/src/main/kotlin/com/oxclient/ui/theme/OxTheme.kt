@@ -26,6 +26,10 @@ val OxError          = Color(0xFFB1423C)
 val OxSuccess        = Color(0xFF3F9A5B)
 val OxWarning        = Color(0xFFB8863B)
 
+// Idle-state fill for the pill-shaped Connect button (slate blue, matches
+// the reference mock).
+val OxConnectIdle    = Color(0xFF3D4A66)
+
 // --- Legacy aliases kept only so older files (e.g. OverlayService.kt) still
 // --- compile without edits. They now point at the steel-blue palette above,
 // --- not an actual purple color.
