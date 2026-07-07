@@ -1,12 +1,18 @@
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
+import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequest
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequestSlotData
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.SwapAction
 import org.cloudburstmc.protocol.bedrock.packet.*
 
 class AutoTotem : BaseModule(
@@ -14,12 +20,34 @@ class AutoTotem : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "Totemi sürekli sol ele takar"
 ) {
+    // ✅ YENİ: Modern Bedrock (server-authoritative inventory açık sunucularda,
+    // ki bu genelde 1.16.100+ için varsayılan) MobEquipmentPacket'i ARTIK GERÇEKTEN
+    // uygulamıyor — paket sadece bilgilendirme amaçlı, sunucu kendi authoritative
+    // envanter state'ini değiştirmiyor. Bu yüzden totem ANLIK olarak takılıymış gibi
+    // görünüp (client-side echo) hemen ardından sunucunun gerçek (değişmemiş) state'i
+    // geri geldiğinde offhand tekrar boşalıyordu (log: isTotem=true → 650ms sonra false).
+    //
+    // Asıl doğru yöntem ItemStackRequestPacket ile SwapAction göndermek — bu, gerçek
+    // bir oyuncunun envanterde sürükle-bırak/sağ-tık swap yaptığında sunucuya giden
+    // paketle birebir aynı ve sunucunun authoritative envanterini GERÇEKTEN değiştiriyor.
+    enum class EquipMethod { ItemStackRequest, MobEquipment, Both }
+
     companion object {
         private const val TAG = "AutoTotem"
     }
 
+    private val equipMethod = enum("Equip Method", EquipMethod.ItemStackRequest)
+
     @Volatile private var totemSlot       = -1
     @Volatile private var offhandHasTotem = false
+
+    // Bedrock istemcisi stackRequestId'leri NEGATİF ve azalan üretir (sunucunun
+    // kendi ürettiği pozitif id'lerle çakışmaması için).
+    @Volatile private var stackRequestIdCounter = 0
+    private fun nextStackRequestId(): Int {
+        stackRequestIdCounter -= 1
+        return stackRequestIdCounter
+    }
 
     override fun onEnable() {
         super.onEnable()
@@ -188,9 +216,68 @@ class AutoTotem : BaseModule(
             return
         }
 
+        when (equipMethod.value) {
+            EquipMethod.MobEquipment -> {
+                sendViaMobEquipment(session, slot, itemData)
+            }
+            EquipMethod.ItemStackRequest -> {
+                sendViaItemStackRequest(session, slot, itemData)
+            }
+            EquipMethod.Both -> {
+                sendViaItemStackRequest(session, slot, itemData)
+                sendViaMobEquipment(session, slot, itemData)
+            }
+        }
+
+        offhandHasTotem = true
+        OverlayLogger.i(TAG, "Totem takıldı: slot=$slot (yöntem=${equipMethod.value})")
+    }
+
+    private fun sendViaMobEquipment(session: OxRelaySession, slot: Int, itemData: ItemData) {
         OverlayLogger.i(TAG, "MobEquipmentPacket gönderiliyor: slot=$slot selfRuntimeId=${EntityTracker.selfRuntimeId}")
         InventoryUtil.sendOffhandEquip(session, slot, itemData)
-        offhandHasTotem = true
-        OverlayLogger.i(TAG, "Totem takıldı: slot=$slot")
+    }
+
+    /**
+     * ✅ ASIL FİX: ItemStackRequestPacket ile ana envanterdeki totemi offhand ile
+     * SWAP eder — gerçek bir oyuncunun elle yaptığı swap ile birebir aynı paket.
+     *
+     * ⚠️ DİKKAT: ItemStackRequestSlotData / SwapAction sınıflarının constructor imzası
+     * kullandığın CloudburstMC protocol kütüphanesi versiyonuna göre FARKLILIK
+     * gösterebilir (alan sırası, isimlendirme, ekstra parametreler gibi). Derleme
+     * hatası alırsan IDE'de ctrl+click ile gerçek sınıf tanımına bakıp parametre
+     * sırasını/isimlerini buna göre düzelt — mantık (container tipi + slot + netId
+     * ile swap action oluşturmak) aynı kalacak.
+     */
+    private fun sendViaItemStackRequest(session: OxRelaySession, slot: Int, itemData: ItemData) {
+        try {
+            val offhandSnapshot = EntityTracker.getInventoryItem(119)
+            val offhandNetId = offhandSnapshot?.netId ?: 0
+
+            val source = ItemStackRequestSlotData(
+                ContainerSlotType.HOTBAR_AND_INVENTORY,
+                slot,
+                itemData.netId
+            )
+            val destination = ItemStackRequestSlotData(
+                ContainerSlotType.OFFHAND,
+                0,
+                offhandNetId
+            )
+
+            val request = ItemStackRequest(
+                nextStackRequestId(),
+                arrayOf(SwapAction(source, destination)),
+                arrayOf()
+            )
+
+            session.serverBound(ItemStackRequestPacket().apply {
+                requests.add(request)
+            })
+
+            OverlayLogger.i(TAG, "ItemStackRequestPacket (Swap) gönderildi: slot=$slot netId=${itemData.netId} -> offhand netId=$offhandNetId")
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "ItemStackRequestPacket gönderilemedi: ${e.message}", e)
+        }
     }
 }

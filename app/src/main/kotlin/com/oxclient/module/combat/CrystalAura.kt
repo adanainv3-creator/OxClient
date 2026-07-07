@@ -1,3 +1,4 @@
+
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
@@ -28,13 +29,13 @@ class CrystalAura : BaseModule(
     description = "End kristallerini otomatik yerleştirir ve patlatır"
 ) {
     enum class BreakMode     { Instant, Sequential, Closest }
-    enum class PlaceMode     { Safe, Aggressive, Smart }
+    enum class PlaceMode     { Safe, Aggressive, Smart, Full5x5 }
     enum class TargetPriority{ Distance, Health, DamageRatio }
 
     private val autoPlace      = bool ("Auto Place",    true)
     private val autoBreak      = bool ("Auto Break",    true)
     private val breakMode      = enum ("Break Mode",    BreakMode.Instant)
-    private val placeMode      = enum ("Place Mode",    PlaceMode.Smart)
+    private val placeMode      = enum ("Place Mode",    PlaceMode.Full5x5)
     private val targetPriority = enum ("Priority",      TargetPriority.Distance)
     private val placeRange     = float("Place Range",   6f,  1f, 12f)
     private val breakRange     = float("Break Range",   6f,  1f, 12f)
@@ -49,6 +50,12 @@ class CrystalAura : BaseModule(
     private val antiSuicide    = bool ("Anti Suicide",  true)
     private val rotate         = bool ("Rotate",        true)
     private val shortcut       = bool ("Shortcut",      true)
+    // ✅ YENİ: elde obsidian olması zorunluluğu artık AÇIK/KAPALI seçilebilir bir config.
+    // Varsayılan false — elde ne olursa olsun (kılıç, boş el, vb.) yerleştirme paketi
+    // gönderilir. Sunucu tarafında held-item validasyonu YOKSA (2b2tpe gibi) bu sorun
+    // çıkarmaz; eğer ileride "yerleştirmiyor" şikayeti geri gelirse true yapıp obsidian'ı
+    // elde tutarak test et — o zaman gerçekten held-item kontrolü olduğu kanıtlanmış olur.
+    private val requireHeldItem = bool ("Require Obsidian In Hand", false)
 
     private val activeCrystals  = ConcurrentHashMap<Long, Vector3f>()
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
@@ -257,12 +264,11 @@ class CrystalAura : BaseModule(
             return
         }
 
-        // ✅ FIX: Eskiden itemInHand = hotbar 0'da GERÇEKTE ne varsa oydu — obsidian
-        // olup olmadığı hiç kontrol edilmiyordu. Sunucu elindeki item ile yerleştirilen
-        // blok eşleşmezse (özellikle anti-cheat'li survival sunucularında) paketi
-        // sessizce reddediyor: log "yerleştirildi" der ama oyunda hiçbir şey olmaz.
-        if (!isHoldingObsidian()) {
-            OverlayLogger.w(TAG, "Hotbar 0'da obsidian yok — place atlanıyor (gerçek elde tutulan item obsidian değil)")
+        // ✅ FIX: Artık varsayılan olarak KAPALI — elde obsidian olsun ya da olmasın
+        // yerleştirme paketi gönderilir. Sadece kullanıcı "Require Obsidian In Hand"ı
+        // AÇARSA bu kontrol devreye girer.
+        if (requireHeldItem.value && !isHoldingObsidian()) {
+            OverlayLogger.w(TAG, "Hotbar 0'da obsidian yok — place atlanıyor (Require Obsidian In Hand açık)")
             return
         }
 
@@ -270,6 +276,7 @@ class CrystalAura : BaseModule(
             PlaceMode.Safe -> doPlaceSafe(target, session, obsidianDef)
             PlaceMode.Aggressive -> doPlaceAggressive(target, session, obsidianDef)
             PlaceMode.Smart -> doPlaceSmart(target, session, obsidianDef)
+            PlaceMode.Full5x5 -> doPlaceFull5x5(target, session, obsidianDef)
         }
     }
 
@@ -302,6 +309,30 @@ class CrystalAura : BaseModule(
             if (dx == 0 && dy == 0 && dz == 0) continue
             positions.add(Triple(tx + dx, ty + dy, tz + dz))
         }
+
+        for ((bx, by, bz) in positions) {
+            if (placed >= maxPlace.value) return
+            if (!tryPlaceCrystal(bx, by, bz, session, obsidianDef, range)) continue
+            placed++
+        }
+    }
+
+    /**
+     * ✅ YENİ: Hedefin 5x5'lik (dx,dz: -2..2) alanındaki TÜM yerleştirilebilir
+     * konumları dener — sadece köşe/kenar gibi sabit bir örüntü değil, tüm alan.
+     * En yakın pozisyonlar önce denenir (hedefe en yakın crystal en çok hasar verir).
+     */
+    private fun doPlaceFull5x5(target: EntityTracker.TrackedEntity, session: OxRelaySession, obsidianDef: BlockDefinition) {
+        val tx = target.x.toInt(); val ty = target.y.toInt(); val tz = target.z.toInt()
+        var placed = 0
+        val range = if (throughWalls.value) wallsRange.value else placeRange.value
+
+        val positions = mutableListOf<Triple<Int, Int, Int>>()
+        for (dx in -2..2) for (dz in -2..2) {
+            positions.add(Triple(tx + dx, ty + 1, tz + dz))
+        }
+        // Hedefe en yakın pozisyonlar önce denensin.
+        positions.sortBy { (bx, _, bz) -> (bx - tx) * (bx - tx) + (bz - tz) * (bz - tz) }
 
         for ((bx, by, bz) in positions) {
             if (placed >= maxPlace.value) return
