@@ -11,13 +11,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,7 +26,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -53,11 +51,14 @@ import com.oxclient.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+// Supported target packages - no longer user-selectable, chosen automatically
 val SUPPORTED_PACKAGES = listOf(
     "com.mojang.minecraftpe"      to "Minecraft",
-    "com.netease.mc"              to "Minecraft (Çin)",
+    "com.netease.mc"              to "Minecraft (China)",
     "com.mojang.minecrafttrialpe" to "Minecraft Trial",
 )
+
+private enum class DashTab { RELAY, SETTINGS, CONFIG }
 
 class DashboardActivity : ComponentActivity() {
 
@@ -76,8 +77,8 @@ class DashboardActivity : ComponentActivity() {
             )
         }
 
-        // WaitingForWebView state'ini izle — WebView aktivitesini burada aç
-        // (Compose tarafından değil Activity tarafından, doğru lifecycle için)
+        // Observe WaitingForWebView state — open the WebView activity here
+        // (from the Activity, not from Compose, for correct lifecycle handling)
         lifecycleScope.launch {
             MicrosoftAuthManager.authState.collect { state ->
                 if (state is AuthState.WaitingForWebView) {
@@ -170,11 +171,13 @@ fun DashboardScreen(
     val recentServers by ServerConfig.recents.collectAsState(initial = emptyList())
 
     var showSignIn     by remember { mutableStateOf(false) }
-    var showAppPicker  by remember { mutableStateOf(false) }
     var showServerEdit by remember { mutableStateOf(false) }
-    var selectedApp    by remember { mutableStateOf(installedApps.firstOrNull() ?: SUPPORTED_PACKAGES.first()) }
+    var currentTab     by remember { mutableStateOf(DashTab.RELAY) }
 
-    // WaitingForWebView state'inde dialog kapat (WebView açıldı)
+    // Target package is no longer asked from the user, it's picked automatically
+    val targetApp = remember(installedApps) { installedApps.firstOrNull() ?: SUPPORTED_PACKAGES.first() }
+
+    // Close the dialog once WaitingForWebView state is reached (WebView opened)
     LaunchedEffect(authState) {
         if (authState is AuthState.WaitingForWebView) showSignIn = false
     }
@@ -186,15 +189,6 @@ fun DashboardScreen(
             onSignIn  = onSignIn,
             onSignOut = { onSignOut(); showSignIn = false },
             onCancel  = { onCancelAuth(); showSignIn = false }
-        )
-    }
-
-    if (showAppPicker) {
-        AppPickerDialog(
-            apps        = installedApps,
-            selectedPkg = selectedApp.first,
-            onSelect    = { pkg, name -> selectedApp = pkg to name; showAppPicker = false },
-            onDismiss   = { showAppPicker = false }
         )
     }
 
@@ -210,37 +204,187 @@ fun DashboardScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(OxBackground)) {
-        Box(modifier = Modifier.fillMaxWidth().height(300.dp)
-            .background(Brush.verticalGradient(listOf(OxPurpleDark.copy(0.4f), Color.Transparent))))
+        Box(modifier = Modifier.fillMaxWidth().height(280.dp)
+            .background(Brush.verticalGradient(listOf(OxAccentDark.copy(0.30f), Color.Transparent))))
 
-        Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Spacer(Modifier.height(32.dp))
-            TopBar(authState = authState, onAvatarClick = { showSignIn = true })
-            Spacer(Modifier.height(36.dp))
-            LogoSection()
-            Spacer(Modifier.height(28.dp))
-            ServerCard(host = serverHost, port = serverPort, onClick = { showServerEdit = true })
-            Spacer(Modifier.height(10.dp))
-            AppSelectorCard(selectedName = selectedApp.second, onClick = { showAppPicker = true })
-            Spacer(Modifier.height(10.dp))
-            StatusCard(running = relayActive, statusMessage = statusMessage)
-            Spacer(Modifier.height(10.dp))
-            if (relayActive) LiveStatsCard()
-            Spacer(Modifier.weight(1f))
-            ConnectButton(running = relayActive, onToggle = {
-                if (relayActive) onDisconnect() else onConnect(selectedApp.first)
-            })
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "Overlay menüsü oyun içinde görünecek",
-                fontSize = 11.sp, color = OxOnSurface.copy(0.4f),
-                fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(24.dp))
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Spacer(Modifier.height(28.dp))
+                TopBar(authState = authState, onAvatarClick = { showSignIn = true })
+                Spacer(Modifier.height(28.dp))
+
+                when (currentTab) {
+                    DashTab.RELAY -> RelayTab(
+                        serverHost    = serverHost,
+                        serverPort    = serverPort,
+                        relayActive   = relayActive,
+                        statusMessage = statusMessage,
+                        onServerClick = { showServerEdit = true },
+                        onToggle      = { if (relayActive) onDisconnect() else onConnect(targetApp.first) }
+                    )
+                    DashTab.SETTINGS -> SettingsTab()
+                    DashTab.CONFIG   -> ConfigTab()
+                }
+            }
+            BottomTabBar(current = currentTab, onSelect = { currentTab = it })
         }
+    }
+}
+
+@Composable
+private fun RelayTab(
+    serverHost    : String,
+    serverPort    : Int,
+    relayActive   : Boolean,
+    statusMessage : String,
+    onServerClick : () -> Unit,
+    onToggle      : () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        LogoSection()
+        Spacer(Modifier.height(28.dp))
+        ServerCard(host = serverHost, port = serverPort, onClick = onServerClick)
+        Spacer(Modifier.height(10.dp))
+        StatusCard(running = relayActive, statusMessage = statusMessage)
+        Spacer(Modifier.height(10.dp))
+        if (relayActive) LiveStatsCard()
+        Spacer(Modifier.weight(1f))
+        ConnectButton(running = relayActive, onToggle = onToggle)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Overlay menu will appear in-game",
+            fontSize = 11.sp, color = OxOnSurfaceDim,
+            fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun SettingsTab() {
+    Column(modifier = Modifier.fillMaxSize()) {
+        SectionHeader("SETTINGS")
+        Spacer(Modifier.height(16.dp))
+        PlaceholderToggleRow("Notifications")
+        PlaceholderToggleRow("Auto Connect")
+        PlaceholderToggleRow("Run in Background")
+        PlaceholderToggleRow("Vibration")
+        Spacer(Modifier.height(16.dp))
+        InactiveNotice()
+    }
+}
+
+@Composable
+private fun ConfigTab() {
+    Column(modifier = Modifier.fillMaxSize()) {
+        SectionHeader("CONFIGURATION")
+        Spacer(Modifier.height(16.dp))
+        PlaceholderValueRow("Packet Size Limit", "8192 B")
+        PlaceholderValueRow("Connection Timeout", "30 sec")
+        PlaceholderValueRow("Log Level", "INFO")
+        PlaceholderValueRow("Compression", "Zlib")
+        Spacer(Modifier.height(16.dp))
+        InactiveNotice()
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+        color = OxOnBackground, fontFamily = FontFamily.Monospace,
+        modifier = Modifier.fillMaxWidth())
+    Spacer(Modifier.height(8.dp))
+    HorizontalDivider(color = OxOutline)
+}
+
+@Composable
+private fun InactiveNotice() {
+    Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+        .background(OxSurfaceVar)
+        .border(1.dp, OxOutline, RoundedCornerShape(8.dp))
+        .padding(14.dp)
+    ) {
+        Text("This section is not active yet.", fontSize = 11.sp,
+            color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
+    }
+}
+
+@Composable
+private fun PlaceholderToggleRow(label: String) {
+    var checked by remember { mutableStateOf(false) }
+    Row(modifier = Modifier.fillMaxWidth()
+        .clip(RoundedCornerShape(8.dp))
+        .background(OxSurface)
+        .border(1.dp, OxOutline, RoundedCornerShape(8.dp))
+        .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontSize = 13.sp, color = OxOnBackground, fontFamily = FontFamily.Monospace)
+        Switch(
+            checked = checked, onCheckedChange = { checked = it },
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = OxAccentLight, checkedTrackColor = OxAccentDark,
+                uncheckedThumbColor = OxOnSurfaceDim, uncheckedTrackColor = OxSurfaceVar
+            )
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun PlaceholderValueRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()
+        .clip(RoundedCornerShape(8.dp))
+        .background(OxSurface)
+        .border(1.dp, OxOutline, RoundedCornerShape(8.dp))
+        .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontSize = 13.sp, color = OxOnBackground, fontFamily = FontFamily.Monospace)
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+            color = OxAccentLight, fontFamily = FontFamily.Monospace)
+    }
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
+    Column {
+        HorizontalDivider(color = OxOutline)
+        Row(
+            modifier = Modifier.fillMaxWidth().background(OxSurface)
+                .padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            TabItem("RELAY", current == DashTab.RELAY) { onSelect(DashTab.RELAY) }
+            TabItem("SETTINGS", current == DashTab.SETTINGS) { onSelect(DashTab.SETTINGS) }
+            TabItem("CONFIG", current == DashTab.CONFIG) { onSelect(DashTab.CONFIG) }
+        }
+    }
+}
+
+@Composable
+private fun TabItem(label: String, selected: Boolean, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier.clickable { onClick() }.padding(horizontal = 18.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(label, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) OxAccentLight else OxOnSurfaceDim)
+        Spacer(Modifier.height(4.dp))
+        Box(
+            modifier = Modifier.width(20.dp).height(2.dp)
+                .background(if (selected) OxAccentLight else Color.Transparent)
+        )
     }
 }
 
@@ -263,19 +407,19 @@ private fun LiveStatsCard() {
 
     Card(
         modifier  = Modifier.fillMaxWidth(),
-        shape     = RoundedCornerShape(12.dp),
+        shape     = RoundedCornerShape(8.dp),
         colors    = CardDefaults.cardColors(containerColor = OxSurface),
-        elevation = CardDefaults.cardElevation(2.dp)
+        border    = BorderStroke(1.dp, OxOutline)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            LiveStatChip("❤", "${"%.0f".format(selfHp)}",
-                if (selfHp <= 6f) Color(0xFFFF4444) else Color(0xFF1AFF6E))
-            LiveStatChip("👾", "$entityCount",  OxOnSurface.copy(0.8f))
-            LiveStatChip("👤", "$playerCount",  Color(0xFF4FC3F7))
-            LiveStatChip("⚡", "$activeCount",  OxPurpleLight)
+            LiveStatChip("HP",  "%.0f".format(selfHp),
+                if (selfHp <= 6f) OxError else OxSuccess)
+            LiveStatChip("ENT", "$entityCount", OxOnSurface)
+            LiveStatChip("PLR", "$playerCount", OxAccentLight)
+            LiveStatChip("MOD", "$activeCount", OxAccentLight)
         }
     }
 }
@@ -283,8 +427,10 @@ private fun LiveStatsCard() {
 @Composable
 private fun LiveStatChip(label: String, value: String, color: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontSize = 14.sp)
-        Text(value, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+        Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+            color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
+        Spacer(Modifier.height(2.dp))
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold,
             color = color, fontFamily = FontFamily.Monospace)
     }
 }
@@ -297,29 +443,29 @@ private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column {
-            Text("OxClient", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
+            Text("OXCLIENT", fontSize = 21.sp, fontWeight = FontWeight.ExtraBold,
                 color = OxOnBackground, fontFamily = FontFamily.Monospace)
-            Text("Bedrock Relay Client", fontSize = 10.sp,
-                color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace)
+            Text("RELAY CLIENT", fontSize = 10.sp, letterSpacing = 1.sp,
+                color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
         }
         Row(verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (isLoggedIn) {
                 Text((authState as AuthState.Success).gamertag, fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold, color = OxPurpleLight,
+                    fontWeight = FontWeight.SemiBold, color = OxAccentLight,
                     fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Box(
-                modifier = Modifier.size(36.dp).clip(CircleShape)
-                    .background(if (isLoggedIn) OxPurple.copy(0.3f) else OxSurface)
-                    .border(1.dp, if (isLoggedIn) OxPurple else OxOutline, CircleShape)
+                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp))
+                    .background(if (isLoggedIn) OxAccentDark else OxSurface)
+                    .border(1.dp, if (isLoggedIn) OxAccent else OxOutlineStrong, RoundedCornerShape(6.dp))
                     .clickable { onAvatarClick() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (isLoggedIn) (authState as AuthState.Success).gamertag.firstOrNull()?.uppercase() ?: "?" else "?",
+                    text = if (isLoggedIn) (authState as AuthState.Success).gamertag.firstOrNull()?.uppercase() ?: "-" else "-",
                     fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    color = if (isLoggedIn) OxPurpleLight else OxOnSurface.copy(0.5f),
+                    color = if (isLoggedIn) OxAccentLight else OxOnSurfaceDim,
                     fontFamily = FontFamily.Monospace
                 )
             }
@@ -331,63 +477,42 @@ private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
 private fun LogoSection() {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            modifier = Modifier.size(80.dp).clip(RoundedCornerShape(20.dp))
-                .background(Brush.radialGradient(listOf(OxPurple, OxPurpleDark))),
+            modifier = Modifier.size(76.dp).clip(RoundedCornerShape(10.dp))
+                .background(OxSurfaceRaised)
+                .border(1.dp, OxOutlineStrong, RoundedCornerShape(10.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Text("0x", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold,
-                color = Color.White, fontFamily = FontFamily.Monospace)
+            Text("0x", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold,
+                color = OxAccentLight, fontFamily = FontFamily.Monospace)
         }
         Spacer(Modifier.height(12.dp))
-        Text("Minecraft Bedrock Client", fontSize = 13.sp,
-            color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+        Text("BEDROCK RELAY", fontSize = 12.sp, letterSpacing = 1.sp,
+            color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
     }
 }
 
 @Composable
 private fun ServerCard(host: String, port: Int, onClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().clickable { onClick() },
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = OxSurface),
-        elevation = CardDefaults.cardElevation(2.dp)
+        border = BorderStroke(1.dp, OxOutline)
     ) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column {
-                Text("Hedef Sunucu", fontSize = 10.sp,
-                    color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                Text("TARGET SERVER", fontSize = 10.sp, letterSpacing = 0.5.sp,
+                    color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
                 Text("$host:$port", fontSize = 13.sp, color = OxOnBackground,
                     fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
             }
             Row(verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(OxPurple))
-                Text("✎", fontSize = 14.sp, color = OxPurple, fontFamily = FontFamily.Monospace)
+                Box(Modifier.size(8.dp).clip(CircleShape).background(OxAccent))
+                Text("EDIT", fontSize = 10.sp, color = OxAccentLight, fontFamily = FontFamily.Monospace)
             }
-        }
-    }
-}
-
-@Composable
-private fun AppSelectorCard(selectedName: String, onClick: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().clickable { onClick() },
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = OxSurface),
-        elevation = CardDefaults.cardElevation(2.dp)
-    ) {
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text("Hedef Uygulama", fontSize = 10.sp,
-                    color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
-                Text(selectedName, fontSize = 13.sp, color = OxOnBackground,
-                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
-            }
-            Text("▾", fontSize = 18.sp, color = OxPurple, fontFamily = FontFamily.Monospace)
         }
     }
 }
@@ -395,30 +520,25 @@ private fun AppSelectorCard(selectedName: String, onClick: () -> Unit) {
 @Composable
 private fun StatusCard(running: Boolean, statusMessage: String) {
     val statusColor by animateColorAsState(
-        targetValue  = if (running) Color(0xFF1AFF6E) else OxOnSurface.copy(0.3f),
+        targetValue  = if (running) OxSuccess else OxOnSurfaceDim,
         animationSpec = tween(500), label = "status"
     )
-    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
-        initialValue  = 1f,
-        targetValue   = if (running) 1.15f else 1f,
-        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
-        label         = "pulseAnim"
-    )
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = OxSurface)
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = OxSurface),
+        border = BorderStroke(1.dp, OxOutline)
     ) {
         Row(modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Box(Modifier.size(12.dp).scale(pulse).clip(CircleShape).background(statusColor))
+            Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(statusColor))
             Column {
-                Text(if (running) "Relay Aktif" else "Relay Kapalı", fontSize = 13.sp,
+                Text(if (running) "RELAY ACTIVE" else "RELAY OFFLINE", fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (running) Color(0xFF1AFF6E) else OxOnBackground,
+                    color = if (running) OxSuccess else OxOnBackground,
                     fontFamily = FontFamily.Monospace)
-                Text(statusMessage.ifBlank { if (running) "Trafik yönlendiriliyor" else "Connect'e basarak başlat" },
-                    fontSize = 11.sp, color = OxOnSurface.copy(0.5f),
+                Text(statusMessage.ifBlank { if (running) "Routing traffic" else "Tap Connect to start" },
+                    fontSize = 11.sp, color = OxOnSurfaceDim,
                     fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -427,23 +547,19 @@ private fun StatusCard(running: Boolean, statusMessage: String) {
 
 @Composable
 private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {
-    val scale by animateFloatAsState(
-        targetValue   = if (running) 1f else 0.97f,
-        animationSpec = spring(Spring.DampingRatioMediumBouncy), label = "btn"
-    )
     val bgColor by animateColorAsState(
-        targetValue   = if (running) OxError else OxPurple,
-        animationSpec = tween(400), label = "btnColor"
+        targetValue   = if (running) OxError else OxAccent,
+        animationSpec = tween(300), label = "btnColor"
     )
     Button(
         onClick   = onToggle,
-        modifier  = Modifier.fillMaxWidth().height(56.dp).scale(scale),
-        shape     = RoundedCornerShape(14.dp),
+        modifier  = Modifier.fillMaxWidth().height(54.dp),
+        shape     = RoundedCornerShape(8.dp),
         colors    = ButtonDefaults.buttonColors(containerColor = bgColor),
-        elevation = ButtonDefaults.buttonElevation(8.dp)
+        elevation = ButtonDefaults.buttonElevation(0.dp)
     ) {
-        Text(if (running) "⏹  Disconnect" else "▶  Connect",
-            fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
+        Text(if (running) "DISCONNECT" else "CONNECT",
+            fontSize = 15.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
             fontFamily = FontFamily.Monospace)
     }
 }
@@ -462,21 +578,23 @@ private fun ServerEditDialog(
     var portError by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
-        Card(shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = OxSurface)
+        Card(shape = RoundedCornerShape(10.dp),
+            colors = CardDefaults.cardColors(containerColor = OxSurface),
+            border = BorderStroke(1.dp, OxOutline)
         ) {
             Column(modifier = Modifier.padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Sunucu Ayarları", fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                Text("SERVER SETTINGS", fontSize = 15.sp, fontWeight = FontWeight.Bold,
                     color = OxOnBackground, fontFamily = FontFamily.Monospace)
                 HorizontalDivider(color = OxOutline)
                 OutlinedTextField(
                     value = hostInput, onValueChange = { hostInput = it },
-                    label = { Text("Sunucu Adresi", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    label = { Text("Server Address", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = OxPurple, unfocusedBorderColor = OxOutline,
-                        focusedLabelColor = OxPurple, cursorColor = OxPurple),
+                        focusedBorderColor = OxAccent, unfocusedBorderColor = OxOutlineStrong,
+                        focusedLabelColor = OxAccentLight, cursorColor = OxAccentLight),
                     textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground)
                 )
                 OutlinedTextField(
@@ -486,103 +604,51 @@ private fun ServerEditDialog(
                     singleLine = true, isError = portError,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = OxPurple, unfocusedBorderColor = OxOutline,
-                        focusedLabelColor = OxPurple, cursorColor = OxPurple),
+                        focusedBorderColor = OxAccent, unfocusedBorderColor = OxOutlineStrong,
+                        focusedLabelColor = OxAccentLight, cursorColor = OxAccentLight),
                     textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground),
                     supportingText = if (portError) {
-                        { Text("1–65535 arası geçerli port", color = OxError, fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
+                        { Text("Valid port range is 1-65535", color = OxError, fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
                     } else null
                 )
                 if (recentServers.isNotEmpty()) {
-                    Text("Son Bağlantılar", fontSize = 11.sp,
-                        color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace)
+                    Text("RECENT SERVERS", fontSize = 10.sp,
+                        color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
                     Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         recentServers.forEach { (h, p) ->
-                            Box(modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                            Box(modifier = Modifier.clip(RoundedCornerShape(6.dp))
                                 .background(OxSurfaceVar)
-                                .border(1.dp, OxOutline.copy(0.5f), RoundedCornerShape(8.dp))
+                                .border(1.dp, OxOutlineStrong, RoundedCornerShape(6.dp))
                                 .clickable { hostInput = h; portInput = p.toString(); portError = false }
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text("$h:$p", fontSize = 9.sp,
-                                    color = OxPurpleLight, fontFamily = FontFamily.Monospace)
+                                    color = OxAccentLight, fontFamily = FontFamily.Monospace)
                             }
                         }
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onReset, modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.dp, OxOutlineStrong),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = OxOnSurface)
-                    ) { Text("Varsayılan", fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+                    ) { Text("DEFAULT", fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
                     Button(
                         onClick = {
                             val p = portInput.toIntOrNull()
                             if (hostInput.isBlank() || p == null || p < 1 || p > 65535) { portError = true; return@Button }
                             onSave(hostInput.trim(), p)
                         },
-                        modifier = Modifier.weight(1f), shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = OxPurple)
-                    ) { Text("Kaydet", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
+                        modifier = Modifier.weight(1f), shape = RoundedCornerShape(6.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = OxAccent)
+                    ) { Text("SAVE", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("İptal", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AppPickerDialog(
-    apps        : List<Pair<String, String>>,
-    selectedPkg : String,
-    onSelect    : (String, String) -> Unit,
-    onDismiss   : () -> Unit
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Card(shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = OxSurface)) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                Text("Uygulama Seç", fontSize = 16.sp, fontWeight = FontWeight.Bold,
-                    color = OxOnBackground, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.height(8.dp)); HorizontalDivider(color = OxOutline); Spacer(Modifier.height(8.dp))
-                val listToShow = apps.ifEmpty { SUPPORTED_PACKAGES }
-                if (apps.isEmpty()) {
-                    Text("Cihazda Minecraft bulunamadı.\nYine de bir hedef seçebilirsiniz:",
-                        color = OxOnSurface.copy(0.6f), fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp, textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
-                }
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listToShow) { (pkg, name) ->
-                        val isSelected = pkg == selectedPkg
-                        Row(modifier = Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (isSelected) OxPurple.copy(0.2f) else Color.Transparent)
-                            .border(if (isSelected) 1.dp else 0.5.dp,
-                                if (isSelected) OxPurple else OxOutline.copy(0.3f), RoundedCornerShape(10.dp))
-                            .clickable { onSelect(pkg, name) }.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column {
-                                Text(name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                                    color = if (isSelected) OxPurpleLight else OxOnBackground,
-                                    fontFamily = FontFamily.Monospace)
-                                Text(pkg, fontSize = 10.sp,
-                                    color = OxOnSurface.copy(0.4f), fontFamily = FontFamily.Monospace)
-                            }
-                            if (isSelected) Text("✓", color = OxPurple, fontSize = 16.sp,
-                                fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                    Text("CANCEL", color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
                 }
             }
         }
@@ -599,65 +665,68 @@ private fun AuthDialog(
 ) {
     val canDismiss = authState !is AuthState.Loading && authState !is AuthState.WaitingForWebView
     Dialog(onDismissRequest = { if (canDismiss) onDismiss() }) {
-        Card(shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = OxSurface)) {
+        Card(shape = RoundedCornerShape(10.dp),
+            colors = CardDefaults.cardColors(containerColor = OxSurface),
+            border = BorderStroke(1.dp, OxOutline)
+        ) {
             Column(modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text("Microsoft Hesabı", fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                Text("MICROSOFT ACCOUNT", fontSize = 15.sp, fontWeight = FontWeight.Bold,
                     color = OxOnBackground, fontFamily = FontFamily.Monospace)
                 HorizontalDivider(color = OxOutline)
                 when (authState) {
                     is AuthState.Success -> {
-                        Text("✓ Giriş yapıldı", color = Color(0xFF1AFF6E), fontFamily = FontFamily.Monospace)
+                        Text("SIGNED IN", color = OxSuccess, fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         Text(authState.gamertag, fontSize = 18.sp, fontWeight = FontWeight.Bold,
                             color = OxOnBackground, fontFamily = FontFamily.Monospace)
                         Button(onClick = onSignOut, modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = OxError),
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("Çıkış Yap", fontFamily = FontFamily.Monospace) }
+                            shape = RoundedCornerShape(6.dp)
+                        ) { Text("SIGN OUT", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                         TextButton(onClick = onDismiss) {
-                            Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                            Text("CLOSE", color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
                         }
                     }
                     is AuthState.WaitingForWebView, is AuthState.Loading -> {
-                        // WebView açılıyor veya token işleniyor
-                        CircularProgressIndicator(color = OxPurple)
+                        // WebView opening or token being processed
+                        CircularProgressIndicator(color = OxAccentLight, strokeWidth = 2.dp)
                         Text(
                             if (authState is AuthState.WaitingForWebView)
-                                "Microsoft giriş penceresi açılıyor…"
+                                "Opening Microsoft sign-in window..."
                             else
-                                "Hesap doğrulanıyor…",
+                                "Verifying account...",
                             color = OxOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
                             textAlign = TextAlign.Center
                         )
                         TextButton(onClick = onCancel) {
-                            Text("İptal", color = OxError, fontFamily = FontFamily.Monospace)
+                            Text("CANCEL", color = OxError, fontFamily = FontFamily.Monospace)
                         }
                     }
                     is AuthState.Error -> {
-                        Text("Hata: ${authState.message}", color = OxError,
+                        Text("ERROR: ${authState.message}", color = OxError,
                             fontFamily = FontFamily.Monospace, fontSize = 12.sp, textAlign = TextAlign.Center)
                         Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("Tekrar Dene", fontFamily = FontFamily.Monospace) }
+                            colors = ButtonDefaults.buttonColors(containerColor = OxAccent),
+                            shape = RoundedCornerShape(6.dp)
+                        ) { Text("RETRY", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                         TextButton(onClick = onDismiss) {
-                            Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                            Text("CLOSE", color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
                         }
                     }
                     else -> {
-                        // Idle veya WaitingForUser (eski flow uyumluluğu)
-                        Text("Xbox/Microsoft hesabınla giriş yap.\nGiriş sayfası uygulama içinde açılacak.",
-                            color = OxOnSurface.copy(0.7f), fontFamily = FontFamily.Monospace,
+                        // Idle or WaitingForUser (legacy flow compatibility)
+                        Text("Sign in with your Xbox/Microsoft account.\nThe sign-in page will open inside the app.",
+                            color = OxOnSurface, fontFamily = FontFamily.Monospace,
                             textAlign = TextAlign.Center, fontSize = 13.sp)
                         Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = OxPurple),
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("▶  Giriş Yap", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
+                            colors = ButtonDefaults.buttonColors(containerColor = OxAccent),
+                            shape = RoundedCornerShape(6.dp)
+                        ) { Text("SIGN IN", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                         TextButton(onClick = onDismiss) {
-                            Text("Kapat", color = OxOnSurface.copy(0.5f), fontFamily = FontFamily.Monospace)
+                            Text("CLOSE", color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
