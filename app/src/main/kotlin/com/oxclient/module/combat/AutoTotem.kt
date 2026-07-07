@@ -164,7 +164,7 @@ class AutoTotem : BaseModule(
                         // sunucu ID uyuşmazlığı yüzünden swap'ı sessizce reddediyordu.
                         offhandNetId = 0
                         totemSlot = -1
-                        scanCachedInventory()
+                        scanMainInventoryForTotemSlot()
                         OverlayLogger.d(TAG, "Tüketim sonrası: totemSlot=$totemSlot")
                         if (totemSlot >= 0) {
                             OverlayLogger.d(TAG, "Yeni totem bulundu, direkt takılıyor")
@@ -189,6 +189,7 @@ class AutoTotem : BaseModule(
         totemSlot = -1
         val offhandItem = snapshot[119]
         offhandHasTotem = InventoryUtil.isTotem(offhandItem)
+        offhandNetId = offhandItem?.netId ?: 0
         OverlayLogger.d(TAG, "Offhand (slot 119): item=${offhandItem != null} isTotem=$offhandHasTotem netId=${offhandItem?.netId} count=${offhandItem?.count} defId=${runCatching { offhandItem?.definition?.identifier }.getOrElse { "ERR" }}")
 
         var scanned = 0
@@ -203,6 +204,27 @@ class AutoTotem : BaseModule(
             }
         }
         OverlayLogger.d(TAG, "scanCachedInventory tamamlandı: ${scanned} slot tarandı, totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem")
+    }
+
+    // ✅ FIX: consumption anında SADECE ana envanterden yeni totem slotu arar,
+    // offhand'a dokunmaz. offhandHasTotem/offhandNetId zaten consumption event'inde
+    // elle (kesin) sıfırlanmış oluyor — burada snapshot[119]'u tekrar okumak, henüz
+    // sunucudan "offhand boşaldı" paketi gelmemişse ESKİ (stale) totem verisini geri
+    // yazıp offhandHasTotem'i yanlışlıkla true yapıyordu, bu da equipTotem() hiç
+    // tetiklenmemesine ya da yanlış destNetId ile swap'ın reddedilmesine yol açıyordu.
+    private fun scanMainInventoryForTotemSlot() {
+        val snapshot = EntityTracker.getInventorySnapshot()
+        totemSlot = -1
+        var scanned = 0
+        snapshot.forEach { (slot, item) ->
+            if (slot in 0..35) {
+                scanned++
+                if (InventoryUtil.isTotem(item)) {
+                    if (totemSlot == -1) totemSlot = slot
+                }
+            }
+        }
+        OverlayLogger.d(TAG, "scanMainInventoryForTotemSlot: ${scanned} slot tarandı, totemSlot=$totemSlot (offhand dokunulmadı)")
     }
 
     private fun equipTotem() {

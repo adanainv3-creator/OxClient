@@ -149,7 +149,17 @@ class KillAura : BaseModule(
         return result
     }
 
-    private suspend fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
+    // ✅ FIX: Kritik simülasyonu için eklenen 60ms+50ms gecikmeler artık tick()
+    // döngüsünü BLOKLAMIYOR — bu fonksiyon anında dönüyor, gerçek paket gönderimi
+    // arka planda ayrı bir coroutine'de yürüyor. Eskiden doAttack suspend olup
+    // tick() içinde awaitlendiği için her saldırı ~110ms tick döngüsünü durduruyordu,
+    // bu da CPS ayarını (20-25) fiilen ~9 CPS'e düşürüyordu — "cps artmıyor" şikayetinin
+    // sebebi buydu.
+    private fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
+        scope.launch { performAttackSequence(e) }
+    }
+
+    private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
         
         OverlayLogger.v(TAG, "Attack #${attackCount}: dist=${"%.2f".format(EntityTracker.distanceTo(e))}")
@@ -167,14 +177,12 @@ class KillAura : BaseModule(
             }
         }
 
-        // ✅ ASIL FİX: Kritik vuruş simülasyonu artık saldırı paketinden ÖNCE gönderiliyor.
-        // Sunucu "critical hit" kararını attack/interact paketi geldiği ANDAKİ oyuncu
-        // hareket durumuna (havada + düşüyor mu) bakarak veriyor. Eskiden bu simülasyon
-        // saldırıdan SONRA (injectCrit çağrısı en altta) gönderiliyordu — yani sunucu
-        // saldırıyı zaten normal (kritiksiz) olarak işlemiş oluyordu, simülasyonun hiçbir
-        // etkisi olmuyordu. Bu, "her vuruş kritik olmalı ama olmuyor / hasar zayıf"
-        // şikayetinin doğrudan sebebiydi.
+        // Fake-fall move paketleri ile attack paketi arasında gerçek tick payı
+        // bırakıyoruz ki sunucu Y pozisyon farkından "düşüyor" durumunu gerçekten
+        // hesaplayabilsin. Bu artık ayrı bir coroutine'de olduğu için ana CPS
+        // döngüsünü etkilemiyor.
         injectCrit(session)
+        kotlinx.coroutines.delay(60L)
 
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
@@ -187,18 +195,19 @@ class KillAura : BaseModule(
             kotlinx.coroutines.delay(1)
             PacketUtil.sendAttack(session, e.runtimeId)
         }
-
-        lastAttackMs = now
     }
 
-    private fun injectCrit(session: com.oxclient.core.relay.OxRelaySession) {
+    private suspend fun injectCrit(session: com.oxclient.core.relay.OxRelaySession) {
         val now = System.currentTimeMillis()
         if (now - lastCritMs < 5) return
         lastCritMs = now
-        
-        // Küçük bir zıplama + düşüş hareketi: yukarı (havada) → attack paketi bu
-        // "düşüyor" durumdayken sunucuya ulaşacak şekilde SIRALAMA korunuyor.
+
+        // Küçük bir zıplama + düşüş hareketi: iki paket arasına gerçek bir tick
+        // (~50ms) koyuyoruz ki sunucu Y pozisyon farkından "düşüyor" durumunu
+        // gerçekten hesaplayabilsin. Aralıksız gönderilen iki paket sunucu için
+        // aynı tick'te işlenip hiçbir fark üretmiyordu.
         PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
+        kotlinx.coroutines.delay(50L)
         PacketUtil.sendMoveAtSelf(session, dyOffset = 0.042f, onGround = false)
     }
 
