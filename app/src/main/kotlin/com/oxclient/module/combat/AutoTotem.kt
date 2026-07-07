@@ -197,9 +197,13 @@ class AutoTotem : BaseModule(
             if (slot in 0..35) {
                 scanned++
                 val isT = InventoryUtil.isTotem(item)
+                val identifier = runCatching { item.definition?.identifier }.getOrElse { "ERR" }
+                val runtimeId = runCatching { item.definition?.runtimeId }.getOrElse { -1 }
                 if (isT) {
-                    OverlayLogger.d(TAG, "  [scan] slot=$slot TOTEM netId=${item.netId} count=${item.count} defId=${runCatching { item.definition?.identifier }.getOrElse { "ERR" }}")
+                    OverlayLogger.d(TAG, "  [scan] slot=$slot TOTEM netId=${item.netId} count=${item.count} rid=$runtimeId defId=$identifier")
                     if (totemSlot == -1) totemSlot = slot
+                } else {
+                    OverlayLogger.v(TAG, "  [scan] slot=$slot netId=${item.netId} count=${item.count} rid=$runtimeId defId=$identifier")
                 }
             }
         }

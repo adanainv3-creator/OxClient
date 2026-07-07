@@ -16,20 +16,6 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
-/**
- * TPAura — geniş menzilde oyuncu tespit edip yanına ışınlanır ve saldırır.
- *
- * ✅ GÜNCELLEME: Eskiden sadece zaten menzildeki (range+2 blok) bir hedefin
- * etrafında dolanıyordu, uzaktaki oyuncuları hiç görmüyordu ve saldırmıyordu.
- * Artık:
- *  - Tespit menzili orbit range'inden bağımsız, ayrı bir "Detect Range" (varsayılan
- *    100 blok) ile kontrol ediliyor.
- *  - Hedef orbit menzilinin dışındaysa (ör. 100 blok uzakta) önce TEK ADIMDA
- *    hedefin kenarına ışınlanıyor (kademeli strafe matematiği sadece hedefe
- *    zaten yakınken anlamlı; uzaktan gradual hareket 100 blok kat etmez).
- *  - Menzile girince orbit + attack birlikte çalışıyor (KillAura'daki gibi
- *    swing+attack paketi, gerçek seçili hotbar item'ı ile — bkz. PacketUtil fix).
- */
 class TPAura : BaseModule(
     name        = "TPAura",
     category    = ModuleCategory.MOVEMENT,
@@ -57,6 +43,15 @@ class TPAura : BaseModule(
     private var tickCounter  = 0L
     @Volatile private var lastAttackMs = 0L
 
+    // Relay'e gönderilen son pozisyonu takip eder.
+    // serverBound() pipeline'dan geçmediği için EntityTracker güncellenmiyor —
+    // bir sonraki tick'te selfX/Y/Z hâlâ eski değerde kalıp stepTowardTarget()
+    // aynı koordinatı tekrar hesaplıyordu. localPos bunu çözer.
+    @Volatile private var localX = 0f
+    @Volatile private var localY = 0f
+    @Volatile private var localZ = 0f
+    @Volatile private var localInitialized = false
+
     private companion object { const val TAG = "TPAura" }
 
     override fun onEnable() {
@@ -65,6 +60,7 @@ class TPAura : BaseModule(
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
         attackCount = 0L
+        localInitialized = false
         OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} detectRange=${detectRange.value} hSpeed=${horizontalSpeed.value} vSpeed=${verticalSpeed.value} attack=${attack.value}")
         tickJob = scope.launch { movementLoop() }
     }
@@ -73,6 +69,7 @@ class TPAura : BaseModule(
         tickJob?.cancel()
         super.onDisable()
         isMoving = false
+        localInitialized = false
         OverlayLogger.d(TAG, "Disabled (moveAttempts=$moveAttempts attackCount=$attackCount)")
     }
 
@@ -101,17 +98,18 @@ class TPAura : BaseModule(
         return target
     }
 
-    // ✅ GÜNCELLEME: OpFightBot referansındaki gibi — uzaktaki hedefe TEK PAKETTE
-    // ışınlanmak yerine, her tick'te mevcut pozisyondan hedef yönüne doğru
-    // horizontalSpeed/verticalSpeed kadar KÜÇÜK bir adım atılıyor. Sunucu her
-    // paketi normal bir yürüyüş/koşuş hareketi gibi görüyor (ardışık küçük deltalar),
-    // tek seferde 100 blok atlayan bir paket gibi değil. Menzile (range) girince
-    // otomatik olarak orbit/strafe davranışına geçiyor.
     private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
 
+        if (!localInitialized) {
+            localX = EntityTracker.selfX
+            localY = EntityTracker.selfY
+            localZ = EntityTracker.selfZ
+            localInitialized = true
+        }
+
         val targetPos = Vector3f.from(target.x, target.y + yOffset.value, target.z)
-        val dist = EntityTracker.distanceTo(target)
+        val dist = MathUtil.dist3(localX, localY, localZ, target.x, target.y, target.z)
 
         val newPos = if (dist > range.value) {
             stepTowardTarget(targetPos)
@@ -130,8 +128,13 @@ class TPAura : BaseModule(
 
         try {
             session.serverBound(packet)
+            // serverBound() doğrudan iletim yapar, EntityTracker.selfX/Y/Z güncellenmez.
+            // localX/Y/Z'yi elle güncelliyoruz ki bir sonraki tick doğru pozisyondan hesaplansın.
+            localX = newPos.x
+            localY = newPos.y
+            localZ = newPos.z
             moveAttempts++
-            if (moveAttempts % 20 == 0L) { // spam yapmadan periyodik doğrulama
+            if (moveAttempts % 20 == 0L) {
                 OverlayLogger.d(TAG, "moveAroundTarget: gönderildi #$moveAttempts dist=${"%.1f".format(dist)} newPos=$newPos target=${target.name}")
             }
         } catch (e: Exception) {
@@ -139,30 +142,23 @@ class TPAura : BaseModule(
         }
     }
 
-    // ✅ YENİ: OpFightBot'un "else" dalıyla birebir aynı mantık — mevcut pozisyondan
-    // hedefe doğru açı hesaplanıp horizontalSpeed kadar bir adım atılıyor, Y ekseni
-    // verticalSpeed ile sınırlanıyor (dikey ışınlanma/uçuş gibi görünmesin diye).
     private fun stepTowardTarget(targetPos: Vector3f): Vector3f {
-        val selfPos = getCurrentPosition()
         val direction = atan2(
-            (targetPos.z - selfPos.z).toDouble(),
-            (targetPos.x - selfPos.x).toDouble()
+            (targetPos.z - localZ).toDouble(),
+            (targetPos.x - localX).toDouble()
         ) - Math.toRadians(90.0)
 
-        val newX = selfPos.x - (sin(direction) * horizontalSpeed.value).toFloat()
-        val newZ = selfPos.z + (cos(direction) * horizontalSpeed.value).toFloat()
+        val newX = localX - (sin(direction) * horizontalSpeed.value).toFloat()
+        val newZ = localZ + (cos(direction) * horizontalSpeed.value).toFloat()
         val newY = targetPos.y.coerceIn(
-            selfPos.y - verticalSpeed.value,
-            selfPos.y + verticalSpeed.value
+            localY - verticalSpeed.value,
+            localY + verticalSpeed.value
         )
         return Vector3f.from(newX, newY, newZ)
     }
 
-    // ✅ YENİ: menzile girdiğinde otomatik saldırı — KillAura'daki ile aynı
-    // swing+attack paketi, PacketUtil'in artık gerçekten takip ettiği seçili
-    // hotbar item'ı ile gönderiliyor (bkz. EntityTracker.selfHotbarSlot fix).
     private fun tryAttack(target: EntityTracker.TrackedEntity) {
-        val dist = EntityTracker.distanceTo(target)
+        val dist = MathUtil.dist3(localX, localY, localZ, target.x, target.y, target.z)
         if (dist > attackRange.value) return
 
         val now = System.currentTimeMillis()
@@ -204,9 +200,8 @@ class TPAura : BaseModule(
             }
 
             MoveMode.Behind -> {
-                val selfPos = getCurrentPosition()
-                val dx = targetPos.x - selfPos.x
-                val dz = targetPos.z - selfPos.z
+                val dx = targetPos.x - localX
+                val dz = targetPos.z - localZ
                 val angle = atan2(dz.toDouble(), dx.toDouble()) + Math.PI
                 val behindRadius = radius * 0.7f
 
@@ -218,7 +213,4 @@ class TPAura : BaseModule(
             }
         }
     }
-
-    private fun getCurrentPosition(): Vector3f =
-        Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
 }

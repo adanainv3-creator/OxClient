@@ -2,6 +2,7 @@ package com.oxclient.utils
 
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.OxRelaySession
+import com.oxclient.events.PacketEventBus
 import com.oxclient.ui.overlay.OverlayLogger
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
@@ -35,20 +36,9 @@ object InventoryUtil {
             this.item = item
         }
         session.serverBound(packet)
-        OverlayLogger.d(TAG, "sendEquip: MobEquipmentPacket gnderildi")
+        OverlayLogger.d(TAG, "sendEquip: MobEquipmentPacket gönderildi")
     }
 
-    /**
-     * Offhand'e item takmak iin MobEquipmentPacket gnderir.
-     *
-     * Protokol notu:
-     *   MobEquipmentPacket ile offhand equip iin containerId = ContainerId.OFFHAND kullanlmal.
-     *   containerId = ContainerId.INVENTORY + hotbarSlot=40 kombinasyonu sunucu tarafndan
-     *   hotbar seimi olarak yorumlanr, offhand equip olarak deil.
-     *
-     *   inventorySlot = fromSlot (totemin ana envanterdeki slotu, kaynak konum)
-     *   hotbarSlot    = 0        (offhand container iindeki slot indisi)
-     */
     fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, itemData: ItemData) {
         OverlayLogger.d(TAG, "sendOffhandEquip: fromSlot=$fromSlot containerId=OFFHAND(${ContainerId.OFFHAND}) netId=${itemData.netId} count=${itemData.count} defId=${runCatching { itemData.definition?.identifier }.getOrElse { "ERR" }}")
         sendEquip(
@@ -91,27 +81,46 @@ object InventoryUtil {
 
     fun isTotem(item: ItemData?): Boolean {
         if (isEmpty(item)) return false
-        val definition = runCatching { item!!.definition }.getOrElse { null }
-        val identifier = definition?.identifier
-        val runtimeId = definition?.runtimeId
-        val netId = item!!.netId
-        val result = if (identifier != null) {
-            identifier == "minecraft:totem_of_undying"
-        } else {
-            OverlayLogger.v(TAG, "isTotem: definition null, netId=$netId fallback kullaniliyor")
-            netId == 702
+
+        val identifier = resolveIdentifier(item!!)
+
+        if (identifier != null) {
+            val result = identifier == "minecraft:totem_of_undying"
+            OverlayLogger.v(TAG, "isTotem check: identifier=$identifier runtimeId=${runCatching { item.definition?.runtimeId }.getOrElse { -1 }} netId=${item.netId} count=${item.count} sonuc=$result")
+            return result
         }
-        // TANI: identifier + runtimeId birlikte loglaniyor. Definitions.kt yuklerken
-        // bastigi "totem_of_undying -> index=X" logu ile buradaki runtimeId
-        // eslesmiyorsa, yuklenen palet dosyasi bu sunucunun gercek item sirasiyla
-        // uyusmuyor demektir (dosya yanlis/eksik/versiyon kaymis).
-        OverlayLogger.v(TAG, "isTotem check: identifier=$identifier runtimeId=$runtimeId netId=$netId count=${item?.count} sonuc=$result")
+
+        val runtimeId = runCatching { item.definition?.runtimeId }.getOrElse { null } ?: -1
+        val totemRuntimeId = resolveTotemRuntimeIdFromCodec()
+        val result = totemRuntimeId > 0 && runtimeId == totemRuntimeId
+        OverlayLogger.v(TAG, "isTotem fallback: runtimeId=$runtimeId totemRuntimeId=$totemRuntimeId netId=${item.netId} count=${item.count} sonuc=$result")
         return result
     }
 
+    private fun resolveIdentifier(item: ItemData): String? {
+        val fromDefinition = runCatching { item.definition?.identifier }.getOrElse { null }
+        if (!fromDefinition.isNullOrBlank()) return fromDefinition
 
-    @Deprecated("netId item tipini degil stack'i temsil eder, isTotem() kullan", ReplaceWith("isTotem(item)"))
-    fun isTotemNetId(netId: Int): Boolean = netId == 702
+        val runtimeId = runCatching { item.definition?.runtimeId }.getOrElse { null } ?: return null
+        if (runtimeId <= 0) return null
+
+        val session = PacketEventBus.currentSession ?: return null
+        val reg = runCatching { session.clientSession.peer.codecHelper.itemDefinitions }.getOrElse { null } ?: return null
+        return runCatching { reg.getDefinition(runtimeId)?.identifier }.getOrElse { null }
+    }
+
+    private fun resolveTotemRuntimeIdFromCodec(): Int {
+        val session = PacketEventBus.currentSession ?: return -1
+        val reg = runCatching { session.clientSession.peer.codecHelper.itemDefinitions }.getOrElse { null } ?: return -1
+        for (rid in 600..1800) {
+            val def = runCatching { reg.getDefinition(rid) }.getOrElse { null } ?: continue
+            if (def.identifier == "minecraft:totem_of_undying") return rid
+        }
+        return -1
+    }
+
+    @Deprecated("netId item tipini değil stack'i temsil eder, isTotem() kullan", ReplaceWith("isTotem(item)"))
+    fun isTotemNetId(netId: Int): Boolean = false
 
     private val FOOD_NET_IDS = setOf(
         260, 297, 319, 320, 349, 350, 354, 355,

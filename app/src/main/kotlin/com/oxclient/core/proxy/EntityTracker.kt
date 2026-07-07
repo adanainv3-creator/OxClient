@@ -403,30 +403,37 @@ object EntityTracker : PacketEventBus.PacketListener {
         } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
     }
 
-    /** ✅ FIX: Beta6-SNAPSHOT'ta gelen "boş" slotlar `ItemData.AIR` ile referans/structural
-     *  olarak eşleşmiyor (netId farkı nedeniyle) — bu yüzden `item != ItemData.AIR` kontrolü
-     *  boş slotları da "dolu item" sanıyordu (definition=null, netId sabit bir değer).
-     *  Artık anlamsal kontrol yapılıyor: definition null ise veya count <= 0 ise slot boştur. */
+    // Item boş mu? count <= 0 VE netId <= 0 ise boş sayılır.
+    // Sadece count kontrolü yapmak yetmiyordu: bazı sunucularda decode
+    // başarısız olduğunda count=0 ama netId>0 gelebiliyor (stack var ama
+    // tip çözülemedi). Bu durumda item'ı yine de sakla — isTotem() runtime'da
+    // codec helper üzerinden identifier çözmeyi dener.
+    // Sadece ikisi de 0/negatifse gerçekten boş slot.
     private fun isEmptyItem(item: ItemData?): Boolean {
         if (item == null) return true
-        // ✅ FIX: item.definition CloudburstMC'de network item'larda NULL olabiliyor.
-        // Paket geldikten sonra inventory item'lar henüz full resolution edilmediği için.
-        // Bunun yerine basit count kontrolü yeterli — count > 0 = geçerli item.
-        return item.count <= 0
+        if (item.count > 0) return false
+        if (item.netId > 0) return false
+        return true
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {
         when (p.containerId) {
             0 -> {
                 for (s in 0..35) selfInventory.remove(s)
+                var storedCount = 0
                 p.contents.forEachIndexed { slot, item ->
-                    if (!isEmptyItem(item)) selfInventory[slot] = item
+                    if (!isEmptyItem(item)) {
+                        selfInventory[slot] = item
+                        storedCount++
+                    }
                 }
+                OverlayLogger.d(TAG, "handleInventoryContent(0): ${p.contents.size} item geldi, $storedCount slot saklandı")
             }
             119 -> {
                 val item = p.contents.firstOrNull()
                 if (item == null || isEmptyItem(item)) selfInventory.remove(119)
                 else selfInventory[119] = item
+                OverlayLogger.d(TAG, "handleInventoryContent(119): item=${item != null} empty=${item == null || isEmptyItem(item)} netId=${item?.netId} count=${item?.count}")
             }
             else -> return
         }
@@ -436,8 +443,11 @@ object EntityTracker : PacketEventBus.PacketListener {
         if (p.containerId != 0 && p.containerId != 119) return
         val slotKey = if (p.containerId == 119) 119 else p.slot
         val item = p.item
-        if (isEmptyItem(item)) selfInventory.remove(slotKey)
-        else selfInventory[slotKey] = item
+        if (isEmptyItem(item)) {
+            selfInventory.remove(slotKey)
+        } else {
+            selfInventory[slotKey] = item
+        }
     }
 
     /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
