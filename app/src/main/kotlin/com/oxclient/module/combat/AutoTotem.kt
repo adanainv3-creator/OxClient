@@ -22,23 +22,32 @@ class AutoTotem : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "Totemi sürekli sol ele takar"
 ) {
-    // ✅ YENİ: Modern Bedrock (server-authoritative inventory açık sunucularda,
-    // ki bu genelde 1.16.100+ için varsayılan) MobEquipmentPacket'i ARTIK GERÇEKTEN
-    // uygulamıyor — paket sadece bilgilendirme amaçlı, sunucu kendi authoritative
-    // envanter state'ini değiştirmiyor. Bu yüzden totem ANLIK olarak takılıymış gibi
-    // görünüp (client-side echo) hemen ardından sunucunun gerçek (değişmemiş) state'i
-    // geri geldiğinde offhand tekrar boşalıyordu (log: isTotem=true → 650ms sonra false).
-    //
-    // Asıl doğru yöntem ItemStackRequestPacket ile SwapAction göndermek — bu, gerçek
-    // bir oyuncunun envanterde sürükle-bırak/sağ-tık swap yaptığında sunucuya giden
-    // paketle birebir aynı ve sunucunun authoritative envanterini GERÇEKTEN değiştiriyor.
-    enum class EquipMethod { ItemStackRequest, MobEquipment, Both }
+    // ✅ ASIL FİX: EquipMethod seçeneği (ItemStackRequest/MobEquipment/Both) tamamen
+    // kaldırıldı. Log kanıtı: "Both" modunda totem sunucu tarafından onaylanıyor
+    // (offhand isTotem=true) ama 4 SANİYE SONRA, hiçbir tüketim/hasar event'i olmadan
+    // kendiliğinden boşalıyordu. MobEquipmentPacket'in bu ek gönderimi sunucunun
+    // birkaç saniye sonraki rutin senkronizasyonunu bozup state'i geri alıyordu.
+    // Sadece ItemStackRequest kullanıldığında (MobEquipment hiç karışmadan) totem
+    // önceki testte 9 dakika boyunca hiç düşmeden durmuştu — kanıtlanmış tek güvenilir
+    // yol bu olduğu için artık TEK yöntem bu, ayar/karışıklık ihtimali de ortadan kalktı.
+
+    // ✅ ASIL FİX (referans koddan): Bizim eski tasarım SADECE belirli paket
+    // olaylarına (InventoryContent/Slot/EntityEvent) tepki veriyordu. Bu olaylardan
+    // biri kaçarsa veya sunucu birkaç saniye sonra state'i geri alırsa (kanıtlandı:
+    // "Both" modunda totem 4 saniye sonra sessizce düşüyordu), ASLA tekrar
+    // denemiyorduk — offhand kalıcı boş kalıyordu. Referans implementasyon
+    // (AutoTotemElement) her tick'te (event beklemeden) "offhand'da totem var mı?
+    // Yoksa hemen düzelt" diye SÜREKLİ kontrol ediyor — bu, tek bir event'i doğru
+    // yakalamaya bel bağlamak yerine kendi kendini onaran (self-healing) bir yapı.
+    // Aynı deseni burada da kuruyoruz: event tabanlı anlık tepki KALIYOR (hızlı
+    // tepki için) ama artık üstüne 200ms'lik bir tick loop da ekleniyor — sunucu
+    // state'i her ne sebeple geri alırsa alsın, en geç 200ms içinde tekrar düzeltiliyor.
+    @Volatile private var tickJob: kotlinx.coroutines.Job? = null
+    private var lastEquipAttemptMs = 0L
 
     companion object {
         private const val TAG = "AutoTotem"
     }
-
-    private val equipMethod = enum("Equip Method", EquipMethod.ItemStackRequest)
 
     @Volatile private var totemSlot       = -1
     @Volatile private var offhandHasTotem = false
@@ -77,11 +86,45 @@ class AutoTotem : BaseModule(
         } else if (offhandHasTotem) {
             OverlayLogger.d(TAG, "Enable anında offhand zaten dolu, bekleniyor")
         }
+        tickJob = launchTickLoop(200L) { tickCheck() }
     }
 
     override fun onDisable() {
         super.onDisable()
+        tickJob?.cancel()
+        tickJob = null
         OverlayLogger.i(TAG, "=== AutoTotem DISABLE === (son durum: totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem)")
+    }
+
+    /**
+     * ✅ ASIL FİX: Her 200ms'te bir, event beklemeden, offhand'ın GERÇEK anlık
+     * durumunu (cache'ten değil EntityTracker'ın en taze snapshot'ından) okuyup
+     * totem değilse hemen düzeltiyor. Sunucu state'i ne zaman/ne sebeple geri
+     * alırsa alsın en geç 200ms içinde tekrar denenmiş oluyor — tek bir event'i
+     * doğru yakalamaya bağımlı olmuyoruz.
+     */
+    private fun tickCheck() {
+        val snapshot = EntityTracker.getInventorySnapshot()
+        val offhandItem = snapshot[119]
+        val hasTotemNow = InventoryUtil.isTotem(offhandItem)
+
+        // cache'i taze veriyle senkronize tut
+        offhandHasTotem = hasTotemNow
+        offhandNetId = offhandItem?.netId ?: 0
+
+        if (hasTotemNow) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastEquipAttemptMs < 200L) return
+        lastEquipAttemptMs = now
+
+        if (totemSlot < 0 || !InventoryUtil.isTotem(snapshot[totemSlot])) {
+            scanCachedInventory()
+        }
+        if (totemSlot >= 0) {
+            OverlayLogger.d(TAG, "tickCheck: offhand totem değil, yeniden takılıyor (slot=$totemSlot)")
+            equipTotem()
+        }
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -157,11 +200,6 @@ class AutoTotem : BaseModule(
                     if (type.contains("CONSUME") || type.contains("TOTEM")) {
                         OverlayLogger.i(TAG, "TOTEM TÜKETİLDİ (event=$type), yeniden taranıyor")
                         offhandHasTotem = false
-                        // ✅ ASIL FİX: EntityTracker'ın cache'i henüz güncellenmemiş olsa bile
-                        // tüketim kesin olarak offhand'ı boşaltır — bunu ELLE 0'a çekiyoruz.
-                        // Bu satır olmadan equipTotem() bir sonraki swap isteğinde stale
-                        // (tüketilen totem'in) netId'ini "destination" olarak gönderiyordu,
-                        // sunucu ID uyuşmazlığı yüzünden swap'ı sessizce reddediyordu.
                         offhandNetId = 0
                         totemSlot = -1
                         scanMainInventoryForTotemSlot()
@@ -210,12 +248,6 @@ class AutoTotem : BaseModule(
         OverlayLogger.d(TAG, "scanCachedInventory tamamlandı: ${scanned} slot tarandı, totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem")
     }
 
-    // ✅ FIX: consumption anında SADECE ana envanterden yeni totem slotu arar,
-    // offhand'a dokunmaz. offhandHasTotem/offhandNetId zaten consumption event'inde
-    // elle (kesin) sıfırlanmış oluyor — burada snapshot[119]'u tekrar okumak, henüz
-    // sunucudan "offhand boşaldı" paketi gelmemişse ESKİ (stale) totem verisini geri
-    // yazıp offhandHasTotem'i yanlışlıkla true yapıyordu, bu da equipTotem() hiç
-    // tetiklenmemesine ya da yanlış destNetId ile swap'ın reddedilmesine yol açıyordu.
     private fun scanMainInventoryForTotemSlot() {
         val snapshot = EntityTracker.getInventorySnapshot()
         totemSlot = -1
@@ -262,61 +294,27 @@ class AutoTotem : BaseModule(
             return
         }
 
-        when (equipMethod.value) {
-            EquipMethod.MobEquipment -> {
-                sendViaMobEquipment(session, slot, itemData)
-            }
-            EquipMethod.ItemStackRequest -> {
-                sendViaItemStackRequest(session, slot, itemData)
-            }
-            EquipMethod.Both -> {
-                sendViaItemStackRequest(session, slot, itemData)
-                sendViaMobEquipment(session, slot, itemData)
-            }
-        }
+        // ✅ FIX: Artık tek yöntem var — kanıtlanmış çalışan ItemStackRequest.
+        sendViaItemStackRequest(session, slot, itemData)
 
         offhandHasTotem = true
-        OverlayLogger.i(TAG, "Totem takıldı: slot=$slot (yöntem=${equipMethod.value})")
+        OverlayLogger.i(TAG, "Totem takıldı: slot=$slot")
 
-        // ✅ FIX: forceClientEcho() KALDIRILDI. Gerçek cihaza ham InventorySlotPacket
-        // enjekte ediyordu (özellikle offhand/119 için "slot bazlı" paket — halbuki
-        // offhand normalde SADECE tam-içerik InventoryContentPacket ile güncelleniyor,
-        // logların hepsinde bunu doğruladık). Bu paket gönderildikten ~26ms sonra
-        // session kapanıyordu (log kanıtı: "forceClientEcho: ... yansıtıldı" hemen
-        // ardından "Session kapandı ... channel closed") — cihaz beklenmedik/geçersiz
-        // paketi görüp bağlantıyı kesiyordu. Ayrıca bu fonksiyon zaten GEREKSİZDİ:
-        // sunucu swap'ı kabul ettiğinde kendi InventoryContent/InventorySlot paketlerini
-        // normal akışta gönderiyor, relay bunları zaten gerçek cihaza forward ediyor —
-        // önceki (forceClientEcho'suz) oturumda totem 9 dakika boyunca sorunsuz
-        // görünüyordu. Elle ekstra paket enjekte etmeye hiç gerek yoktu.
+        // ✅ FIX: forceClientEcho() KALDIRILDI (kalıcı olarak). Gerçek cihaza ham
+        // InventorySlotPacket enjekte ediyordu — offhand (containerId=119) için
+        // "slot bazlı" bir paket, halbuki offhand normalde SADECE tam-içerik
+        // InventoryContentPacket ile güncelleniyor. Bu paket gönderildikten ~26ms
+        // sonra session kapanıyordu (log kanıtı: "forceClientEcho: ... yansıtıldı"
+        // hemen ardından "Session kapandı ... channel closed"). Ayrıca gereksizdi:
+        // sunucu swap'ı kabul ettiğinde kendi InventoryContent/InventorySlot
+        // paketlerini normal akışta gönderiyor, relay bunları zaten gerçek cihaza
+        // forward ediyor.
     }
 
-    private fun sendViaMobEquipment(session: OxRelaySession, slot: Int, itemData: ItemData) {
-        OverlayLogger.i(TAG, "MobEquipmentPacket gönderiliyor: slot=$slot selfRuntimeId=${EntityTracker.selfRuntimeId}")
-        InventoryUtil.sendOffhandEquip(session, slot, itemData)
-    }
-
-    /**
-     * ✅ ASIL FİX: ItemStackRequestPacket ile ana envanterdeki totemi offhand ile
-     * SWAP eder — gerçek bir oyuncunun elle yaptığı swap ile birebir aynı paket.
-     *
-     * Sınıf imzaları (ItemStackRequestSlotData, FullContainerName, SwapAction,
-     * ItemStackRequest) CloudburstMC protocol kaynak dosyalarından doğrulandı,
-     * tahmin değil.
-     */
     private fun sendViaItemStackRequest(session: OxRelaySession, slot: Int, itemData: ItemData) {
         try {
-            // ✅ ASIL FİX: Artık EntityTracker'dan TAZE (ve tüketim anında stale olabilen)
-            // bir okuma yapmıyoruz — bunun yerine sınıfın kendi takip ettiği offhandNetId
-            // alanını kullanıyoruz. Bu alan sadece gerçek InventoryContent/InventorySlot
-            // paketleriyle VE tüketim event'inde (kesin boşalma anında) elle güncelleniyor
-            // — böylece "destination" ID'si sunucunun gerçek anlık state'iyle eşleşiyor.
             val destNetId = offhandNetId
 
-            // ✅ GERÇEK İMZA DOĞRULANDI (kaynak dosyalardan): ItemStackRequestSlotData
-            // Lombok @Value ile 4 alanlı: (container: ContainerSlotType [deprecated ama
-            // hâlâ zorunlu], slot: Int, stackNetworkId: Int, containerName: FullContainerName).
-            // FullContainerName de @Value: (container: ContainerSlotType, dynamicId: Integer?).
             val source = ItemStackRequestSlotData(
                 ContainerSlotType.HOTBAR_AND_INVENTORY,
                 slot,
