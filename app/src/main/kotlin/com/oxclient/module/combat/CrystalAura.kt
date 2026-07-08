@@ -31,7 +31,7 @@ class CrystalAura : BaseModule(
     private val range           = float("Range", 5f, 3f, 10f)
     private val suicide         = bool ("Suicide", false)
     private val place           = bool ("Place", true)
-    private val delay           = int  ("Delay", 400, 100, 1000)
+    private val delay           = int  ("Delay", 100, 50, 500)  // 🔥 400ms → 100ms (daha hızlı)
     private val removeParticles = bool ("RemoveParticles", true)
     private val placeMode       = enum ("Place Mode", Mode.Single)
     private val breakMode       = enum ("Break Mode", Mode.Single)
@@ -71,16 +71,22 @@ class CrystalAura : BaseModule(
                 if (pkt.identifier.contains("crystal", ignoreCase = true)) {
                     activeCrystals[pkt.runtimeEntityId] = pkt.position
                     uniqueToRuntime[pkt.uniqueEntityId] = pkt.runtimeEntityId
+                    OverlayLogger.v(TAG, "Crystal eklendi: rid=${pkt.runtimeEntityId} pos=${pkt.position}")
                 }
             }
             is RemoveEntityPacket -> {
                 val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
-                if (rid != null) activeCrystals.remove(rid)
+                if (rid != null) {
+                    activeCrystals.remove(rid)
+                    OverlayLogger.v(TAG, "Crystal kaldırıldı: rid=$rid")
+                }
             }
             is LevelEventPacket -> {
                 if (removeParticles.value) {
                     val typeName = pkt.type?.toString()?.uppercase() ?: ""
-                    if (typeName.contains("PARTICLE") || typeName.contains("EXPLOSION")) event.cancel()
+                    if (typeName.contains("PARTICLE") || typeName.contains("EXPLOSION")) {
+                        event.cancel()
+                    }
                 }
             }
             else -> {}
@@ -96,12 +102,30 @@ class CrystalAura : BaseModule(
                     if (target != null) doPlace(target)
                 }
             }
-            delay(10L)
+            // 🔥 PERFORMANS: 10ms → 1ms (çok daha hızlı tepki)
+            delay(1L)
         }
     }
 
-    private fun selectTarget(): EntityTracker.TrackedEntity? =
-        EntityTracker.getEntitiesInRange(range.value).minByOrNull { EntityTracker.distanceTo(it) }
+    // 🔥 OPTİMİZE: getEntitiesInRange yerine manuel döngü (daha hızlı)
+    private fun selectTarget(): EntityTracker.TrackedEntity? {
+        val rangeSq = range.value * range.value
+        var closest: EntityTracker.TrackedEntity? = null
+        var closestDistSq = Float.MAX_VALUE
+        
+        for (e in EntityTracker.getAll()) {
+            if (!e.isCrystal) continue
+            val dx = e.x - EntityTracker.selfX
+            val dy = e.y - EntityTracker.selfY
+            val dz = e.z - EntityTracker.selfZ
+            val distSq = dx*dx + dy*dy + dz*dz
+            if (distSq < rangeSq && distSq < closestDistSq) {
+                closestDistSq = distSq
+                closest = e
+            }
+        }
+        return closest
+    }
 
     private fun identifierOf(def: BlockDefinition): String? = when (def) {
         is SimpleBlockDefinition -> def.identifier
@@ -194,33 +218,39 @@ class CrystalAura : BaseModule(
         if (MathUtil.dist3(bx.toFloat(), by.toFloat(), bz.toFloat(),
                 EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) > range.value) return
 
-        // ✅ Suicide=false: kendine >=3 blok'tan yakın yerleştirmeyi engeller (yakın
-        // dövüşte hâlâ yerleştirebilmek için sabit ve düşük bir eşik — eski
-        // "Anti Suicide" (varsayılan selfDmgLimit=6) melee menzilinden büyük olduğu
-        // için pratikte HER pozisyonu eliyor, hiç yerleştirme olmuyordu.
         if (!suicide.value) {
             val selfDist = MathUtil.dist3(bx + 0.5f, by + 1f, bz + 0.5f,
                 EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ)
             if (selfDist < 3f) return
         }
 
-        // ✅ FIX: sabit slot=0 yerine gerçekten seçili hotbar slotu kullanılıyor —
-        // aksi halde end crystal başka bir slottaysa server "elinde crystal yok"
-        // deyip yerleştirmeyi reddedebiliyordu (KillAura'daki yumruk hasarı bugu
-        // ile aynı kök sebep).
+        // 🔥 FIX: Elinde crystal var mı kontrol et
         val heldSlot = EntityTracker.selfHotbarSlot
-        val heldItem = EntityTracker.getHeldItem() ?: ItemData.AIR
+        val heldItem = EntityTracker.getHeldItem()
+        
+        // ❌ Eğer elinde crystal yoksa yerleştirme
+        if (heldItem == null || heldItem.count <= 0) {
+            OverlayLogger.v(TAG, "Elinde item yok, yerleştirme atlanıyor")
+            return
+        }
+        
+        // 🔥 Crystal olduğundan emin ol (identifier kontrolü)
+        val itemId = runCatching { heldItem.definition?.identifier }.getOrElse { null }
+        if (itemId != "minecraft:end_crystal") {
+            OverlayLogger.v(TAG, "Elindeki item crystal değil: $itemId")
+            return
+        }
 
         try {
             val packet = InventoryTransactionPacket().apply {
                 transactionType = InventoryTransactionType.ITEM_USE
                 actionType = 0
                 blockPosition = Vector3i.from(bx, by, bz)
-                blockFace = 1
+                blockFace = 1  // Yukarı
                 hotbarSlot = heldSlot
-                itemInHand = heldItem
+                itemInHand = heldItem  // 🔥 Artık AIR değil, gerçek item
                 playerPosition = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                clickPosition = Vector3f.from(0.5f, 1f, 0.5f)
+                clickPosition = Vector3f.from(0.5f, 0.0f, 0.5f)  // 🔥 Blok ortasına tıkla
                 this.blockDefinition = obsidianDef
                 triggerType = ItemUseTransaction.TriggerType.PLAYER_INPUT
                 clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
@@ -228,7 +258,7 @@ class CrystalAura : BaseModule(
             }
             session.serverBound(packet)
             placedPositions[bKey] = System.currentTimeMillis()
-            OverlayLogger.d(TAG, "Crystal yerleştirildi: ($bx,$by,$bz)")
+            OverlayLogger.d(TAG, "Crystal yerleştirildi: ($bx,$by,$bz) slot=$heldSlot")
         } catch (e: Exception) {
             OverlayLogger.w(TAG, "Crystal yerleştirme hatası: ${e.message}")
         }
@@ -241,26 +271,28 @@ class CrystalAura : BaseModule(
 
         val session = PacketEventBus.currentSession ?: return
 
-        val sorted = activeCrystals.entries
-            .filter { (_, p) ->
-                MathUtil.dist3(p.x, p.y, p.z,
-                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= range.value
-            }
-            .sortedBy { (_, p) ->
-                MathUtil.dist3(p.x, p.y, p.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-            }
+        // 🔥 PERFORMANS: önce menzildekileri filtrele
+        val inRange = activeCrystals.entries.filter { (_, p) ->
+            MathUtil.dist3(p.x, p.y, p.z,
+                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= range.value
+        }
+        
+        if (inRange.isEmpty()) return
 
-        if (sorted.isEmpty()) return
-
+        // 🔥 PERFORMANS: Sıralama sadece Single modda gerekli
         when (breakMode.value) {
             Mode.Single -> {
-                sorted.firstOrNull()?.let { (rid, _) ->
+                val nearest = inRange.minByOrNull { (_, p) ->
+                    MathUtil.dist3(p.x, p.y, p.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                }
+                nearest?.let { (rid, _) ->
                     attackCrystal(rid, session)
                     activeCrystals.remove(rid)
                 }
             }
             Mode.Full5x5 -> {
-                for ((rid, _) in sorted) {
+                // 🔥 PERFORMANS: hepsini tek seferde patlat (sıralama yok)
+                for ((rid, _) in inRange) {
                     attackCrystal(rid, session)
                     activeCrystals.remove(rid)
                 }
