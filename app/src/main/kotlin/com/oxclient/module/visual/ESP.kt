@@ -27,8 +27,10 @@ class ESP : BaseModule(
 
     private val renderMode    = enum ("Render Mode",   RenderMode.Both)
     private val sortMode      = enum ("Sort Mode",     SortMode.Distance)
-    private val scanRange     = float("Scan Range",    64f,  8f, 256f)
-    private val maxDisplay    = int  ("Max Display",   100,  10, 500)
+    // ✅ Menzil 512'ye çıkarıldı (500x500 alan isteği) — varsayılan hâlâ 64f, düşük
+    // menzilde performanslı; kullanıcı slider'ı istediği kadar (max 512) açabilir.
+    private val scanRange     = float("Scan Range",    64f,  8f, 512f)
+    private val maxDisplay    = int  ("Max Display",   150,  10, 800)
     private val tracerWidth   = float("Tracer Width",  2f,   0.5f, 8f)
     private val boxAlpha      = int  ("Box Alpha",     80,   10,  200)
     private val showLabels    = bool ("Show Labels",   true)
@@ -39,6 +41,7 @@ class ESP : BaseModule(
     private val showSpawner   = bool ("Spawner",       true)
     private val showHopper    = bool ("Hopper",        true)
     private val showBarrel    = bool ("Barrel",        true)
+    private val showFurnace   = bool ("Furnace",       true)
     private val fadeByDistance= bool ("Distance Fade", true)
     private val minAlpha      = int  ("Min Alpha",     40,   0,   255)
     private val showRadar     = bool ("Off-Screen Radar", true)
@@ -371,7 +374,7 @@ class ESP : BaseModule(
         TrackedBlockType.BARREL        -> showBarrel.value
         TrackedBlockType.FURNACE,
         TrackedBlockType.BLAST_FURNACE,
-        TrackedBlockType.SMOKER        -> true
+        TrackedBlockType.SMOKER        -> showFurnace.value
         TrackedBlockType.BREWING_STAND -> true
         TrackedBlockType.DISPENSER,
         TrackedBlockType.DROPPER       -> true

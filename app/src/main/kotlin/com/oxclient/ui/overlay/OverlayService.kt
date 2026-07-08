@@ -90,6 +90,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var fabView  : ComposeView? = null
     private var menuView : ComposeView? = null
     private var totemView: ComposeView? = null
+    private var espView  : ESPOverlayView? = null
     private val shortcutViews = mutableMapOf<String, ComposeView>()
 
     private var fabX = 50f; private var fabY = 300f
@@ -149,13 +150,18 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     private fun overlayParams(
-        w: Int, h: Int, x: Float = 0f, y: Float = 0f, focusable: Boolean = false
+        w: Int, h: Int, x: Float = 0f, y: Float = 0f, focusable: Boolean = false,
+        // ✅ ESP canvas view'ı için: tam ekranı kaplayan bu view touchable=true olsaydı,
+        // altındaki Minecraft istemcisine giden TÜM dokunuşları yutardı. touchable=false
+        // ile FLAG_NOT_TOUCHABLE ekleniyor — view hâlâ çiziyor ama dokunuşlar direkt
+        // arkasındaki pencereye (oyuna) geçiyor.
+        touchable: Boolean = true
     ): android.view.WindowManager.LayoutParams {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else @Suppress("DEPRECATION") android.view.WindowManager.LayoutParams.TYPE_PHONE
 
-        val flags = if (focusable)
+        var flags = if (focusable)
             android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         else
@@ -163,6 +169,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
             android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
+        if (!touchable) {
+            flags = flags or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
 
         return android.view.WindowManager.LayoutParams(
             w, h, type, flags, PixelFormat.TRANSLUCENT
@@ -176,6 +186,18 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private fun showOverlay() {
         if (isAttached) return
         try {
+            // ✅ ESP çizim yüzeyi — tam ekran, dokunulamaz (touchable=false), FAB/menüden
+            // ÖNCE eklenerek z-sırasında en altta kalıyor; FAB/shortcut/menü hep üstünde
+            // görünür kalır. Bu, ESP.render()'ı ekrana basan tek yer.
+            val espParams = overlayParams(
+                android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                touchable = false
+            )
+            espView = ESPOverlayView(this)
+            wm.addView(espView, espParams)
+            espView?.startRenderLoop()
+
             val fabParams = overlayParams(
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
@@ -285,10 +307,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun removeAllOverlays() {
         hideMenu()
-        listOfNotNull(fabView, totemView).plus(shortcutViews.values).forEach { v ->
+        listOfNotNull(fabView, totemView, espView).plus(shortcutViews.values).forEach { v ->
             try { wm.removeViewImmediate(v) } catch (_: Exception) {}
         }
-        fabView = null; totemView = null; shortcutViews.clear(); isAttached = false
+        fabView = null; totemView = null; espView = null; shortcutViews.clear(); isAttached = false
     }
 
     private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
