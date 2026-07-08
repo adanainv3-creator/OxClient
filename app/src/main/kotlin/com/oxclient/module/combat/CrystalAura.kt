@@ -24,36 +24,44 @@ import java.util.concurrent.ConcurrentHashMap
 class CrystalAura : BaseModule(
     name        = "CrystalAura",
     category    = ModuleCategory.COMBAT,
-    description = "End kristallerini otomatik yerleştirir ve patlatır"
+    description = "Rakip oyuncunun etrafna otomatik kristal yerletirir ve patlatr"
 ) {
     enum class Mode { Single, Full5x5 }
 
     private val range           = float("Range", 5f, 3f, 10f)
+    private val placeRange      = float("Place Range", 4.5f, 2f, 8f)  // Yerletirme menzili
+    private val breakRange      = float("Break Range", 6f, 3f, 10f)   // Patlatma menzili
     private val suicide         = bool ("Suicide", false)
     private val place           = bool ("Place", true)
-    private val delay           = int  ("Delay", 100, 50, 500)  // 🔥 400ms → 100ms (daha hızlı)
+    private val breakCrystals   = bool ("Break", true)
+    private val delay           = int  ("Delay", 100, 50, 500)
     private val removeParticles = bool ("RemoveParticles", true)
     private val placeMode       = enum ("Place Mode", Mode.Single)
     private val breakMode       = enum ("Break Mode", Mode.Single)
-    private val shortcut        = bool ("Shortcut", false)
+    private val targetMode      = enum ("Target Mode", Mode.Single)  // Single = en yakn, Full5x5 = t�m�
 
+    // Aktif crystalleri takip et
     private val activeCrystals  = ConcurrentHashMap<Long, Vector3f>()
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
+    
+    // Yerletirilen pozisyonlar cache'le (�akmay �nlemek i�in)
     private val placedPositions = ConcurrentHashMap<Long, Long>()
 
     @Volatile private var lastPlaceMs = 0L
     @Volatile private var lastBreakMs = 0L
     private var tickJob: Job? = null
 
+    // Obsidian definition cache
     private var cachedObsidianDef: BlockDefinition? = null
+    private var cachedBedrockDef: BlockDefinition? = null
 
     private companion object { const val TAG = "CrystalAura" }
 
     override fun onEnable() {
         super.onEnable()
         activeCrystals.clear(); uniqueToRuntime.clear(); placedPositions.clear()
-        cachedObsidianDef = null
-        OverlayLogger.d(TAG, "Enabled: place=${place.value} placeMode=${placeMode.value} breakMode=${breakMode.value}")
+        cachedObsidianDef = null; cachedBedrockDef = null
+        OverlayLogger.d(TAG, "Enabled: place=${place.value} break=${breakCrystals.value} target=${targetMode.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -78,7 +86,7 @@ class CrystalAura : BaseModule(
                 val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
                 if (rid != null) {
                     activeCrystals.remove(rid)
-                    OverlayLogger.v(TAG, "Crystal kaldırıldı: rid=$rid")
+                    OverlayLogger.v(TAG, "Crystal kaldrld: rid=$rid")
                 }
             }
             is LevelEventPacket -> {
@@ -96,29 +104,41 @@ class CrystalAura : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) {
-                doBreak()
-                if (place.value) {
-                    val target = selectTarget()
-                    if (target != null) doPlace(target)
+                // 1. �nce hedef oyuncuyu bul
+                val target = selectTarget()
+                
+                if (target != null) {
+                    // 2. Kristalleri patlat
+                    if (breakCrystals.value) {
+                        doBreak(target)
+                    }
+                    
+                    // 3. Yeni kristal yerletir
+                    if (place.value) {
+                        doPlace(target)
+                    }
                 }
             }
-            // 🔥 PERFORMANS: 10ms → 1ms (çok daha hızlı tepki)
             delay(1L)
         }
     }
 
-    // 🔥 OPTİMİZE: getEntitiesInRange yerine manuel döngü (daha hızlı)
+    /**
+     * En yakn rakip oyuncuyu bul
+     */
     private fun selectTarget(): EntityTracker.TrackedEntity? {
         val rangeSq = range.value * range.value
         var closest: EntityTracker.TrackedEntity? = null
         var closestDistSq = Float.MAX_VALUE
         
         for (e in EntityTracker.getAll()) {
-            if (!e.isCrystal) continue
+            // Sadece oyuncular hedef al (kendini deil)
+            if (!e.isPlayer) continue
+            if (e.runtimeId == EntityTracker.selfRuntimeId) continue
+            
             val dx = e.x - EntityTracker.selfX
-            val dy = e.y - EntityTracker.selfY
             val dz = e.z - EntityTracker.selfZ
-            val distSq = dx*dx + dy*dy + dz*dz
+            val distSq = dx*dx + dz*dz  // Sadece XZ d�zlemi
             if (distSq < rangeSq && distSq < closestDistSq) {
                 closestDistSq = distSq
                 closest = e
@@ -127,163 +147,241 @@ class CrystalAura : BaseModule(
         return closest
     }
 
-    private fun identifierOf(def: BlockDefinition): String? = when (def) {
-        is SimpleBlockDefinition -> def.identifier
-        is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
-        else -> null
-    }
+    /**
+     * Obsidian veya Bedrock definition'n bul
+     */
+    private fun getBlockDefinition(session: OxRelaySession, isBedrock: Boolean = false): BlockDefinition? {
+        if (isBedrock) {
+            cachedBedrockDef?.let { return it }
+        } else {
+            cachedObsidianDef?.let { return it }
+        }
 
-    private fun getObsidianDefinition(session: OxRelaySession): BlockDefinition? {
-        cachedObsidianDef?.let { return it }
-        val possibleIds = listOf(49, 158, 48, 160, 247, 43, 45)
-
+        val targetId = if (isBedrock) "minecraft:bedrock" else "minecraft:obsidian"
+        
         try {
-            val defs = session.clientSession.peer.codecHelper.blockDefinitions
-            if (defs != null) {
-                for (id in possibleIds) {
-                    val def = defs.getDefinition(id)
-                    if (def != null && identifierOf(def) == "minecraft:obsidian") {
-                        cachedObsidianDef = def
-                        OverlayLogger.d(TAG, "Obsidian definition bulundu (client registry): runtimeId=$id")
-                        return def
+            // 1. Server'dan gelen block definitions' dene
+            val blockDefs = session.clientSession.definitionRegistry.blockDefinitions
+            if (blockDefs != null) {
+                // T�m block ID'lerini tara
+                for (i in 0..1000) {
+                    val def = blockDefs.getDefinition(i)
+                    if (def != null) {
+                        val id = when (def) {
+                            is SimpleBlockDefinition -> def.identifier
+                            is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
+                            else -> null
+                        }
+                        if (id == targetId) {
+                            val result = def
+                            if (isBedrock) cachedBedrockDef = result else cachedObsidianDef = result
+                            OverlayLogger.d(TAG, "Block definition bulundu: $targetId runtimeId=$i")
+                            return result
+                        }
                     }
                 }
             }
 
-            val blockDefs = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions
-            for (id in possibleIds) {
-                val def = blockDefs.getDefinition(id)
-                if (def != null && identifierOf(def) == "minecraft:obsidian") {
-                    cachedObsidianDef = def
-                    OverlayLogger.d(TAG, "Obsidian definition bulundu (Definitions): runtimeId=$id")
-                    return def
+            // 2. Fallback: Definitions'dan al
+            val blockDefs2 = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions
+            for (i in 0..1000) {
+                val def = blockDefs2.getDefinition(i)
+                if (def != null) {
+                    val id = when (def) {
+                        is SimpleBlockDefinition -> def.identifier
+                        is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
+                        else -> null
+                    }
+                    if (id == targetId) {
+                        val result = def
+                        if (isBedrock) cachedBedrockDef = result else cachedObsidianDef = result
+                        OverlayLogger.d(TAG, "Block definition bulundu (Definitions): $targetId runtimeId=$i")
+                        return result
+                    }
                 }
             }
 
-            OverlayLogger.w(TAG, "Obsidian definition bulunamadı, fallback oluşturuluyor")
+            // 3. Son �are: manuel fallback
+            OverlayLogger.w(TAG, "Block definition bulunamad, fallback oluturuluyor: $targetId")
             val fallback = SimpleBlockDefinition(
-                "minecraft:obsidian",
-                49,
+                targetId,
+                if (isBedrock) 7 else 49,
                 org.cloudburstmc.nbt.NbtMap.builder()
-                    .putString("name", "minecraft:obsidian")
+                    .putString("name", targetId)
                     .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())
                     .build()
             )
-            cachedObsidianDef = fallback
+            if (isBedrock) cachedBedrockDef = fallback else cachedObsidianDef = fallback
             return fallback
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Obsidian definition hatası: ${e.message}", e)
+            OverlayLogger.e(TAG, "Block definition hatas: ${e.message}", e)
             return null
         }
     }
 
+    /**
+     * Hedef oyuncunun etrafna kristal yerletir
+     */
     private fun doPlace(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         if (now - lastPlaceMs < delay.value) return
         lastPlaceMs = now
 
         val session = PacketEventBus.currentSession ?: return
-        val obsidianDef = getObsidianDefinition(session) ?: return
-
-        val tx = target.x.toInt(); val ty = target.y.toInt(); val tz = target.z.toInt()
-        val positions = mutableListOf<Triple<Int, Int, Int>>()
-
-        when (placeMode.value) {
-            Mode.Single -> positions.add(Triple(tx, ty + 1, tz))
-            Mode.Full5x5 -> {
-                positions.add(Triple(tx, ty + 1, tz))
-                for (dx in -2..2) for (dz in -2..2) {
-                    if (dx == 0 && dz == 0) continue
-                    positions.add(Triple(tx + dx, ty + 1, tz + dz))
-                }
-            }
-        }
-
-        for ((bx, by, bz) in positions) {
-            tryPlaceCrystal(bx, by, bz, session, obsidianDef)
-        }
-    }
-
-    private fun tryPlaceCrystal(bx: Int, by: Int, bz: Int, session: OxRelaySession, obsidianDef: BlockDefinition) {
-        val bKey = packKey(bx, by, bz)
-        if (placedPositions.containsKey(bKey)) return
-
-        val alreadyPlaced = activeCrystals.values.any { c ->
-            Math.abs(c.x - bx - 0.5f) < 0.5f &&
-            Math.abs(c.y - by - 1f)   < 0.5f &&
-            Math.abs(c.z - bz - 0.5f) < 0.5f
-        }
-        if (alreadyPlaced) return
-
-        if (MathUtil.dist3(bx.toFloat(), by.toFloat(), bz.toFloat(),
-                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) > range.value) return
-
-        if (!suicide.value) {
-            val selfDist = MathUtil.dist3(bx + 0.5f, by + 1f, bz + 0.5f,
-                EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ)
-            if (selfDist < 3f) return
-        }
-
-        // 🔥 FIX: Elinde crystal var mı kontrol et
-        val heldSlot = EntityTracker.selfHotbarSlot
-        val heldItem = EntityTracker.getHeldItem()
         
-        // ❌ Eğer elinde crystal yoksa yerleştirme
+        // Elinde crystal var m kontrol et
+        val heldItem = EntityTracker.getHeldItem()
         if (heldItem == null || heldItem.count <= 0) {
-            OverlayLogger.v(TAG, "Elinde item yok, yerleştirme atlanıyor")
+            OverlayLogger.v(TAG, "Elinde item yok")
             return
         }
         
-        // 🔥 Crystal olduğundan emin ol (identifier kontrolü)
         val itemId = runCatching { heldItem.definition?.identifier }.getOrElse { null }
         if (itemId != "minecraft:end_crystal") {
-            OverlayLogger.v(TAG, "Elindeki item crystal değil: $itemId")
+            OverlayLogger.v(TAG, "Elindeki item crystal deil: $itemId")
             return
         }
 
-        try {
-            val packet = InventoryTransactionPacket().apply {
-                transactionType = InventoryTransactionType.ITEM_USE
-                actionType = 0
-                blockPosition = Vector3i.from(bx, by, bz)
-                blockFace = 1  // Yukarı
-                hotbarSlot = heldSlot
-                itemInHand = heldItem  // 🔥 Artık AIR değil, gerçek item
-                playerPosition = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                clickPosition = Vector3f.from(0.5f, 0.0f, 0.5f)  // 🔥 Blok ortasına tıkla
-                this.blockDefinition = obsidianDef
-                triggerType = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                clientCooldownState = 0
+        // Hedef oyuncunun etrafndaki yerletirme pozisyonlarn hesapla
+        val positions = getPlacePositions(target)
+        if (positions.isEmpty()) {
+            OverlayLogger.v(TAG, "Uygun yerletirme pozisyonu bulunamad")
+            return
+        }
+
+        // Obsidian veya Bedrock definition'n al
+        val blockDef = getBlockDefinition(session, false)  // false = obsidian
+            ?: return
+
+        for ((bx, by, bz) in positions) {
+            // Bu pozisyona daha �nce kristal yerletirdik mi?
+            val bKey = packKey(bx, by, bz)
+            if (placedPositions.containsKey(bKey)) {
+                // 5 saniye sonra cache'i temizle
+                val placedTime = placedPositions[bKey] ?: 0L
+                if (System.currentTimeMillis() - placedTime > 5000) {
+                    placedPositions.remove(bKey)
+                } else {
+                    continue
+                }
             }
-            session.serverBound(packet)
-            placedPositions[bKey] = System.currentTimeMillis()
-            OverlayLogger.d(TAG, "Crystal yerleştirildi: ($bx,$by,$bz) slot=$heldSlot")
-        } catch (e: Exception) {
-            OverlayLogger.w(TAG, "Crystal yerleştirme hatası: ${e.message}")
+
+            // Bu pozisyonda zaten kristal var m?
+            val alreadyPlaced = activeCrystals.values.any { c ->
+                Math.abs(c.x - bx - 0.5f) < 0.5f &&
+                Math.abs(c.y - by - 1f)   < 0.5f &&
+                Math.abs(c.z - bz - 0.5f) < 0.5f
+            }
+            if (alreadyPlaced) continue
+
+            // Menzil kontrol�
+            val dist = MathUtil.dist3(bx.toFloat(), by.toFloat(), bz.toFloat(),
+                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+            if (dist > placeRange.value) continue
+
+            // Suicide kontrol�
+            if (!suicide.value) {
+                val selfDist = MathUtil.dist3(bx + 0.5f, by + 1f, bz + 0.5f,
+                    EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ)
+                if (selfDist < 3f) continue
+            }
+
+            // Paketi olutur ve g�nder
+            try {
+                val packet = InventoryTransactionPacket().apply {
+                    transactionType = InventoryTransactionType.ITEM_USE
+                    actionType = 0  // PLACE
+                    blockPosition = Vector3i.from(bx, by, bz)
+                    blockFace = 1  // Yukar
+                    hotbarSlot = EntityTracker.selfHotbarSlot
+                    itemInHand = heldItem
+                    playerPosition = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                    clickPosition = Vector3f.from(0.5f, 0.0f, 0.5f)
+                    this.blockDefinition = blockDef
+                    triggerType = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                    clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                    clientCooldownState = 0
+                }
+                session.serverBound(packet)
+                placedPositions[bKey] = System.currentTimeMillis()
+                OverlayLogger.d(TAG, "Crystal yerletirildi: ($bx,$by,$bz) hedef=${target.name}")
+            } catch (e: Exception) {
+                OverlayLogger.w(TAG, "Crystal yerletirme hatas: ${e.message}")
+            }
         }
     }
 
-    private fun doBreak() {
+    /**
+     * Hedef oyuncunun etrafndaki yerletirme pozisyonlarn hesapla
+     */
+    private fun getPlacePositions(target: EntityTracker.TrackedEntity): List<Triple<Int, Int, Int>> {
+        val positions = mutableListOf<Triple<Int, Int, Int>>()
+        val tx = target.x.toInt()
+        val ty = target.y.toInt()
+        val tz = target.z.toInt()
+
+        // Hedef oyuncunun ayaklarnn altndan bala
+        val baseY = ty - 1  // Oyuncunun altndaki blok
+        
+        // Obsidian bulunan pozisyonlar tara
+        val searchRadius = when (placeMode.value) {
+            Mode.Single -> 1
+            Mode.Full5x5 -> 2
+        }
+
+        for (dx in -searchRadius..searchRadius) {
+            for (dz in -searchRadius..searchRadius) {
+                // Sadece �evresel pozisyonlar (merkez dahil deil)
+                if (placeMode.value == Mode.Single && dx == 0 && dz == 0) continue
+                if (placeMode.value == Mode.Full5x5) {
+                    // Full5x5'te merkez dahil t�m pozisyonlar
+                }
+                
+                val bx = tx + dx
+                val bz = tz + dz
+                val by = baseY
+                
+                // Bu pozisyon menzilde mi?
+                val dist = MathUtil.dist3(bx.toFloat(), by.toFloat(), bz.toFloat(),
+                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                if (dist > placeRange.value) continue
+                
+                // Oyuncunun kendisine �ok yakn m?
+                val distToTarget = MathUtil.dist3(bx.toFloat(), by.toFloat(), bz.toFloat(),
+                    target.x, target.y, target.z)
+                if (distToTarget > 4f) continue  // Oyuncunun �ok uzana koyma
+                
+                positions.add(Triple(bx, by, bz))
+            }
+        }
+
+        return positions
+    }
+
+    /**
+     * Hedef oyuncunun etrafndaki crystalleri patlat
+     */
+    private fun doBreak(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         if (now - lastBreakMs < delay.value) return
         lastBreakMs = now
 
         val session = PacketEventBus.currentSession ?: return
 
-        // 🔥 PERFORMANS: önce menzildekileri filtrele
-        val inRange = activeCrystals.entries.filter { (_, p) ->
-            MathUtil.dist3(p.x, p.y, p.z,
-                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= range.value
+        // Hedef oyuncunun etrafndaki crystalleri bul
+        val targetRange = breakRange.value
+        val inRange = activeCrystals.entries.filter { (_, pos) ->
+            val dist = MathUtil.dist3(pos.x, pos.y, pos.z, target.x, target.y, target.z)
+            dist <= targetRange
         }
-        
+
         if (inRange.isEmpty()) return
 
-        // 🔥 PERFORMANS: Sıralama sadece Single modda gerekli
         when (breakMode.value) {
             Mode.Single -> {
-                val nearest = inRange.minByOrNull { (_, p) ->
-                    MathUtil.dist3(p.x, p.y, p.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                // En yakn crystal'i patlat
+                val nearest = inRange.minByOrNull { (_, pos) ->
+                    MathUtil.dist3(pos.x, pos.y, pos.z, target.x, target.y, target.z)
                 }
                 nearest?.let { (rid, _) ->
                     attackCrystal(rid, session)
@@ -291,7 +389,7 @@ class CrystalAura : BaseModule(
                 }
             }
             Mode.Full5x5 -> {
-                // 🔥 PERFORMANS: hepsini tek seferde patlat (sıralama yok)
+                // T�m crystalleri patlat
                 for ((rid, _) in inRange) {
                     attackCrystal(rid, session)
                     activeCrystals.remove(rid)
@@ -305,6 +403,7 @@ class CrystalAura : BaseModule(
         val r = RotationUtil.toPoint(pos.x, pos.y, pos.z)
         PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
         PacketUtil.sendSwingAndAttack(session, rid)
+        OverlayLogger.v(TAG, "Crystal patlatld: rid=$rid pos=${pos}")
     }
 
     private fun packKey(x: Int, y: Int, z: Int): Long =
