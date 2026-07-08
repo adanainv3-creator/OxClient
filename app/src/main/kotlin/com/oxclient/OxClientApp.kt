@@ -16,6 +16,7 @@ import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.TPAura
 import com.oxclient.module.visual.ESP
 import com.oxclient.module.visual.FullBright
+import com.oxclient.utils.WorldBlockTracker
 
 class OxClientApp : Application() {
 
@@ -44,6 +45,10 @@ class OxClientApp : Application() {
             isDaemon = true
             start()
         }
+
+        // CrystalAura'nın gerçek obsidian/bedrock doğrulaması yapabilmesi için
+        // SubChunkPacket/UpdateBlockPacket dinleyicisi burada başlatılıyor.
+        WorldBlockTracker.init()
 
         registerModules()
     }
