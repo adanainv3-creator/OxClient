@@ -245,11 +245,17 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     private fun resolveIdentifier(runtimeId: Int): String? {
         identifierCache[runtimeId]?.let { return it }
         val session = PacketEventBus.currentSession ?: return null
-        // ✅ FIX: `clientSession.definitionRegistry` diye bir alan yok — GamingPacketListener'da
-        // (StartGamePacket işlenirken) zaten doğru çalışan yol `peer.codecHelper.blockDefinitions`.
-        // Aynı erişim yolunu burada da kullanıyoruz.
+        // ✅ FIX #2: `getDefinition()` geriye genel `BlockDefinition` arayüzünü döndürüyor,
+        // ve bu arayüzde `.identifier` YOK — sadece somut alt tiplerde var. CrystalAura.kt'de
+        // zaten kanıtlanmış aynı tip-daraltma (type-narrowing) deseni burada da kullanılıyor:
+        // gerçek sunucu paketinden gelen `SimpleBlockDefinition` ve yerel fallback paletindeki
+        // `Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition` ayrı ayrı ele alınıyor.
         val identifier = runCatching {
-            session.clientSession.peer.codecHelper.blockDefinitions?.getDefinition(runtimeId)?.identifier
+            when (val def = session.clientSession.peer.codecHelper.blockDefinitions?.getDefinition(runtimeId)) {
+                is org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition -> def.identifier
+                is com.oxclient.core.relay.Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
+                else -> null
+            }
         }.getOrElse { null } ?: return null
         identifierCache[runtimeId] = identifier
         return identifier
