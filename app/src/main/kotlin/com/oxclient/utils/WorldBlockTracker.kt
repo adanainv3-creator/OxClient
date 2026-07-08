@@ -245,8 +245,11 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     private fun resolveIdentifier(runtimeId: Int): String? {
         identifierCache[runtimeId]?.let { return it }
         val session = PacketEventBus.currentSession ?: return null
+        // ✅ FIX: `clientSession.definitionRegistry` diye bir alan yok — GamingPacketListener'da
+        // (StartGamePacket işlenirken) zaten doğru çalışan yol `peer.codecHelper.blockDefinitions`.
+        // Aynı erişim yolunu burada da kullanıyoruz.
         val identifier = runCatching {
-            session.clientSession.definitionRegistry.blockDefinitions?.getDefinition(runtimeId)?.identifier
+            session.clientSession.peer.codecHelper.blockDefinitions?.getDefinition(runtimeId)?.identifier
         }.getOrElse { null } ?: return null
         identifierCache[runtimeId] = identifier
         return identifier

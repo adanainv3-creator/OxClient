@@ -133,7 +133,10 @@ class CrystalAura : BaseModule(
         if (isBedrock) cachedBedrockDef?.let { return it } else cachedObsidianDef?.let { return it }
         val targetId = if (isBedrock) "minecraft:bedrock" else "minecraft:obsidian"
         try {
-            val blockDefs = session.clientSession.definitionRegistry.blockDefinitions
+            // ✅ FIX: `clientSession.definitionRegistry` diye bir alan yok (WorldBlockTracker'daki
+            // aynı hatanın kaynağı) — doğru yol GamingPacketListener'da zaten kullanılan
+            // `peer.codecHelper.blockDefinitions`.
+            val blockDefs = session.clientSession.peer.codecHelper.blockDefinitions
             if (blockDefs != null) {
                 for (i in 0..1000) {
                     val def = blockDefs.getDefinition(i) ?: continue
@@ -202,7 +205,7 @@ class CrystalAura : BaseModule(
 
         val positions = getPlacePositions(target)
         if (positions.isEmpty()) {
-            OverlayLogger.v(TAG, "Uygun (dorulanm obsidian/bedrock �zerinde) yerletirme pozisyonu bulunamad")
+            OverlayLogger.v(TAG, "Uygun (dorulanm obsidian/bedrock �zerinde) yerletirme pozisyonu bulunamad")
             return
         }
 
