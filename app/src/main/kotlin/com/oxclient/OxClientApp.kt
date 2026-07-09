@@ -7,6 +7,7 @@ import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.relay.Definitions
 import com.oxclient.module.ModuleManager
+import com.oxclient.module.combat.AutoArmor
 import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.CrystalAura
@@ -63,8 +64,8 @@ class OxClientApp : Application() {
             TPAura(),
             AntiKnockback(),
             FullBright(),
-            ESP()
-            AutoArnor()
+            ESP(),
+            AutoArmor()  // Düzeltildi: AutoArnor -> AutoArmor
         )
     }
 }
