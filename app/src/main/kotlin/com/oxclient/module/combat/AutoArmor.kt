@@ -6,6 +6,7 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
+import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
@@ -18,7 +19,6 @@ class AutoArmor : BaseModule(
 ) {
     companion object {
         private const val TAG = "AutoArmor"
-        private const val ARMOR_CONTAINER_ID = 120
         private const val RESEND_COOLDOWN_MS = 250L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
@@ -33,7 +33,7 @@ class AutoArmor : BaseModule(
         armorSlots.clear()
         lastSendMs.clear()
         consecutiveSendsWithoutChange.clear()
-        OverlayLogger.i(TAG, "=== AutoArmor ENABLE ===")
+        OverlayLogger.i(TAG, "=== AutoArmor ENABLE === inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
         tickJob = launchTickLoop(300L) { checkAndEquipBestArmor() }
     }
 
@@ -49,15 +49,16 @@ class AutoArmor : BaseModule(
 
         when (val pkt = event.packet) {
             is InventoryContentPacket -> {
-                if (pkt.containerId == ARMOR_CONTAINER_ID) {
+                if (pkt.containerId == ContainerId.ARMOR) {
                     armorSlots.clear()
                     pkt.contents.forEachIndexed { slot, item ->
                         if (!InventoryUtil.isEmpty(item)) armorSlots[slot] = item
                     }
+                    consecutiveSendsWithoutChange.clear()
                 }
             }
             is InventorySlotPacket -> {
-                if (pkt.containerId == ARMOR_CONTAINER_ID) {
+                if (pkt.containerId == ContainerId.ARMOR) {
                     if (InventoryUtil.isEmpty(pkt.item)) armorSlots.remove(pkt.slot)
                     else armorSlots[pkt.slot] = pkt.item
                     consecutiveSendsWithoutChange.remove(pkt.slot)
@@ -94,19 +95,22 @@ class AutoArmor : BaseModule(
             if (now - last < RESEND_COOLDOWN_MS) continue
             lastSendMs[armorType.slotIndex] = now
 
-            InventoryUtil.sendSlotSwap(
-                session       = session,
-                sourceSlot    = sourceSlot,
-                sourceNetId   = sourceItem.netId,
-                destContainer = ContainerSlotType.ARMOR,
-                destSlot      = armorType.slotIndex,
-                destNetId     = equipped?.netId ?: 0
+            InventoryUtil.sendInventoryMove(
+                session           = session,
+                sourceContainer   = ContainerSlotType.HOTBAR_AND_INVENTORY,
+                sourceContainerId = 0,
+                sourceSlot        = sourceSlot,
+                sourceItem        = sourceItem,
+                destContainer     = ContainerSlotType.ARMOR,
+                destContainerId   = ContainerId.ARMOR,
+                destSlot          = armorType.slotIndex,
+                destItem          = equipped ?: ItemData.AIR
             )
 
             val count = (consecutiveSendsWithoutChange[armorType.slotIndex] ?: 0) + 1
             consecutiveSendsWithoutChange[armorType.slotIndex] = count
             if (count == NO_RESPONSE_WARN_AFTER) {
-                OverlayLogger.w(TAG, "$armorType için $NO_RESPONSE_WARN_AFTER kez ItemStackRequest gönderildi ama slot doğrulanmadı - sunucu ItemStackRequestPacket'i desteklemiyor olabilir")
+                OverlayLogger.w(TAG, "$armorType için $NO_RESPONSE_WARN_AFTER kez gönderildi ama slot doğrulanmadı - inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
             }
         }
     }

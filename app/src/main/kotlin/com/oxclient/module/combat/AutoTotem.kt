@@ -7,6 +7,9 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
+import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
+import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
 
 class AutoTotem : BaseModule(
@@ -31,7 +34,7 @@ class AutoTotem : BaseModule(
         totemSlot = -1
         offhandHasTotem = false
         consecutiveSendsWithoutChange = 0
-        OverlayLogger.i(TAG, "=== AutoTotem ENABLE ===")
+        OverlayLogger.i(TAG, "=== AutoTotem ENABLE === inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
         refreshFromSnapshot()
         if (!offhandHasTotem && totemSlot >= 0) {
             equipTotem()
@@ -147,12 +150,24 @@ class AutoTotem : BaseModule(
             return
         }
 
+        val offhandItem = EntityTracker.getInventoryItem(InventoryUtil.OFFHAND_SLOT) ?: ItemData.AIR
+
         lastSendMs = System.currentTimeMillis()
-        InventoryUtil.sendOffhandEquip(session, slot, itemData)
+        InventoryUtil.sendInventoryMove(
+            session           = session,
+            sourceContainer   = ContainerSlotType.HOTBAR_AND_INVENTORY,
+            sourceContainerId = 0,
+            sourceSlot        = slot,
+            sourceItem        = itemData,
+            destContainer     = ContainerSlotType.OFFHAND,
+            destContainerId   = ContainerId.OFFHAND,
+            destSlot          = 0,
+            destItem          = offhandItem
+        )
 
         consecutiveSendsWithoutChange++
         if (consecutiveSendsWithoutChange == NO_RESPONSE_WARN_AFTER) {
-            OverlayLogger.w(TAG, "MobEquipmentPacket $NO_RESPONSE_WARN_AFTER kez gönderildi ama offhand hala doğrulanmadı - sunucu paketi görmezden geliyor olabilir")
+            OverlayLogger.w(TAG, "$NO_RESPONSE_WARN_AFTER kez gönderildi ama offhand hala doğrulanmadı - inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
         }
     }
 }

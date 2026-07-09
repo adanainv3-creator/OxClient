@@ -102,6 +102,8 @@ object EntityTracker : PacketEventBus.PacketListener {
     // hotbarSlot=X) gönderir; burada onu yakalayıp gerçek slotu tutuyoruz.
     @Volatile var selfHotbarSlot : Int     = 0
 
+    @Volatile var inventoriesServerAuthoritative: Boolean = true
+
     private var prevSelfX = 0f; private var prevSelfZ = 0f
 
     private val _entityCountFlow  = MutableStateFlow(0)
@@ -122,6 +124,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfHunger = 20f; selfSaturation = 5f; selfOnGround = true
         selfGameMode = 0; selfDimension = 0; selfSpeedXZ = 0f
         prevSelfX = 0f; prevSelfZ = 0f
+        inventoriesServerAuthoritative = true
         _entityCountFlow.value = 0; _selfHealthFlow.value = 20f
         OverlayLogger.i(TAG, "EntityTracker sıfırlandı")
     }
@@ -184,7 +187,8 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfX = p.playerPosition.x; selfY = p.playerPosition.y; selfZ = p.playerPosition.z
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
         selfGameMode = p.playerGameType.ordinal
-        OverlayLogger.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ)")
+        inventoriesServerAuthoritative = p.inventoriesServerAuthoritative
+        OverlayLogger.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ) inventoriesServerAuthoritative=$inventoriesServerAuthoritative")
     }
 
     private fun handleAddEntity(p: AddEntityPacket) {
