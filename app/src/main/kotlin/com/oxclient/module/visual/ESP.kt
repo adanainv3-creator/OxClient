@@ -30,6 +30,7 @@ class ESP : BaseModule(
     // ✅ Menzil 512'ye çıkarıldı (500x500 alan isteği) — varsayılan hâlâ 64f, düşük
     // menzilde performanslı; kullanıcı slider'ı istediği kadar (max 512) açabilir.
     private val scanRange     = float("Scan Range",    64f,  8f, 512f)
+    private val fov            = float("FOV",           70f,  30f, 130f)
     private val maxDisplay    = int  ("Max Display",   150,  10, 800)
     private val tracerWidth   = float("Tracer Width",  2f,   0.5f, 8f)
     private val boxAlpha      = int  ("Box Alpha",     80,   10,  200)
@@ -168,7 +169,8 @@ class ESP : BaseModule(
                 entry.x, entry.y, entry.z,
                 cx, cy, cz,
                 yaw, pitch,
-                screenW, screenH
+                screenW, screenH,
+                fov.value
             )
 
             // Mesafeye göre saydamlık: yakın bloklar tam opak, uzak bloklar (minAlpha'ya kadar) sönük
@@ -210,7 +212,8 @@ class ESP : BaseModule(
                             yaw, pitch,
                             screenW, screenH,
                             deltaX, deltaY,
-                            color, boxPaint, fillPaint, alphaScale, isNearest
+                            color, boxPaint, fillPaint, alphaScale, isNearest,
+                            fov.value
                         )
                     }
                     else -> {}
@@ -362,7 +365,8 @@ class ESP : BaseModule(
         strokePaint: Paint,
         fillPaint: Paint,
         alphaScale: Float = 1f,
-        isNearest: Boolean = false
+        isNearest: Boolean = false,
+        fov: Float = 70f
     ) {
         val half = 0.5f
         // Bloğun 8 köşesi (dünya koordinatı) — alt yüz 0-3, üst yüz 4-7
@@ -381,7 +385,7 @@ class ESP : BaseModule(
         for (i in worldCorners.indices) {
             val c = worldCorners[i]
             val p = MathUtil.worldToScreen(
-                c[0], c[1], c[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH
+                c[0], c[1], c[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH, fov
             ) ?: return // köşelerden biri kameranın arkasındaysa (rz<=0) bu blok için 3D kutu atlanır
             screenCorners[i] = floatArrayOf(p.first + deltaX, p.second + deltaY)
         }

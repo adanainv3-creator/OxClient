@@ -12,6 +12,7 @@ import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.CrystalAura
 import com.oxclient.module.combat.KillAura
+import com.oxclient.module.misc.ChatSpammer
 import com.oxclient.module.movement.AntiKnockback
 import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.TPAura
@@ -65,7 +66,8 @@ class OxClientApp : Application() {
             AntiKnockback(),
             FullBright(),
             ESP(),
-            AutoArmor()  // Düzeltildi: AutoArnor -> AutoArmor
+            AutoArmor(),
+            ChatSpammer()
         )
     }
 }
