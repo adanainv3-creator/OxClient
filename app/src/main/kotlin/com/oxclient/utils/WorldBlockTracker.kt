@@ -6,6 +6,7 @@ import com.oxclient.ui.overlay.OverlayLogger
 import io.netty.buffer.ByteBuf
 import com.oxclient.core.proxy.EntityTracker
 import org.cloudburstmc.protocol.bedrock.packet.ChangeDimensionPacket
+import org.cloudburstmc.protocol.bedrock.packet.ClientCacheStatusPacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelChunkPacket
 import org.cloudburstmc.protocol.bedrock.packet.SubChunkPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateBlockPacket
@@ -38,12 +39,34 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         OverlayLogger.i(TAG, "WorldBlockTracker sıfırlandı")
     }
 
+    // Client bir kez bağlandığında blob cache tercihini bildirir. Gerçek Bedrock
+    // istemcisi genelde bunu enabled=true gönderir; sunucu da bunu görünce
+    // LevelChunkPacket'i blok-blok değil, hash referanslı "blob" formatında yollar.
+    // decodeSubChunkBlocks bu formatı hiç anlamıyor (format tamamen farklı: blob
+    // hash listesi + ayrı BlobCacheMissResponse/BlobCacheAckPacket akışı gerekir),
+    // bu yüzden handleLevelChunkPacket sessizce "cachingEnabled -> return" yapıyor
+    // ve terrain hiç dolmuyor. Bunu client'tan sunucuya giden paketi burada
+    // yakalayıp zorla false yaparak engelliyoruz: sunucu böylece hep ham/inline
+    // chunk verisi gönderir ve mevcut decode kodu çalışabilir.
+    @Volatile private var loggedCacheOverride = false
+
+    private fun handleClientCacheStatus(p: ClientCacheStatusPacket) {
+        if (p.isEnabled) {
+            p.isEnabled = false
+            if (!loggedCacheOverride) {
+                loggedCacheOverride = true
+                OverlayLogger.i(TAG, "ClientCacheStatusPacket enabled=true -> false olarak zorlandı (blob-chunk devre dışı)")
+            }
+        }
+    }
+
     override fun onPacket(event: PacketEvent) {
         when (val p = event.packet) {
             is SubChunkPacket -> handleSubChunkPacket(p)
             is LevelChunkPacket -> handleLevelChunkPacket(p)
             is UpdateBlockPacket -> handleUpdateBlock(p)
             is UpdateSubChunkBlocksPacket -> handleUpdateSubChunkBlocks(p)
+            is ClientCacheStatusPacket -> handleClientCacheStatus(p)
             is ChangeDimensionPacket -> reset()
             else -> {}
         }
@@ -128,7 +151,16 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             if (subChunksLength <= 0) return
 
             val cachingEnabled = p.isCachingEnabled()
-            if (cachingEnabled) return
+            if (cachingEnabled) {
+                // Buraya hâlâ düşülüyorsa ClientCacheStatusPacket override'ı işe
+                // yaramamış demektir (ör. relay bu paketi bizim bus'tan geçirmeden
+                // kendi içinde oluşturup sunucuya yolluyor). Artık sessiz değil.
+                if (!loggedFirstFailure) {
+                    loggedFirstFailure = true
+                    OverlayLogger.w(TAG, "LevelChunk blob-cache modunda geldi (isCachingEnabled=true) — decode atlandı, ClientCacheStatusPacket override'ı kontrol et")
+                }
+                return
+            }
 
             val buf = p.data ?: return
             if (!buf.isReadable) return
