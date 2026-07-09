@@ -41,6 +41,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     fun reset() {
         sections.clear(); insertOrder.clear(); overrides.clear()
+        loggedFirstSuccess = false; loggedFirstFailure = false
         OverlayLogger.i(TAG, "WorldBlockTracker reset")
     }
 
