@@ -70,12 +70,6 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     override fun onPacket(event: PacketEvent) {
         when (val p = event.packet) {
             is SubChunkPacket -> handleSubChunkPacket(p)
-            // ✅ FIX: 2b2tpe.org gibi custom (PocketMine tabanlı) sunucular modern
-            // subchunk-request akışını KULLANMIYOR — terrain'i doğrudan LevelChunkPacket
-            // içine gömüyor (subChunkCount >= 0). Bu yüzden SubChunkPacket hiç gelmiyordu
-            // ve sections hep boş kalıyordu → CrystalAura/ESP hiçbir zaman obsidian/bedrock
-            // bulamıyordu. LevelChunkPacket.subChunkCount == -1 ise (gerçek modern akış)
-            // burası dokunmaz, SubChunkPacket beklenmeye devam eder.
             is LevelChunkPacket -> handleLevelChunkPacket(p)
             is UpdateBlockPacket -> handleUpdateBlock(p)
             is UpdateSubChunkBlocksPacket -> handleUpdateSubChunkBlocks(p)
@@ -178,18 +172,18 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
      */
     private fun handleLevelChunkPacket(p: LevelChunkPacket) {
         try {
-            // ✅ FIX: Tipi açıkça Int olarak belirt
-            val subChunkCount: Int = runCatching { p.subChunkCount }.getOrNull() ?: return
+            // Doğrudan erişim - runCatching kaldırıldı
+            val subChunkCount = p.subChunkCount
             if (subChunkCount <= 0) return // -1 (veya 0) = modern akış, burada işlenmez
 
-            val cachingEnabled = runCatching { p.isCachingEnabled }.getOrElse { false }
+            val cachingEnabled = p.isCachingEnabled
             if (cachingEnabled) return // blob-cache modu: data ham blok değil, hash içerir
 
-            val buf = runCatching { p.data }.getOrNull() ?: return
+            val buf = p.data ?: return
             if (!buf.isReadable) return
 
-            val cx = runCatching { p.chunkX }.getOrElse { return }
-            val cz = runCatching { p.chunkZ }.getOrElse { return }
+            val cx = p.chunkX
+            val cz = p.chunkZ
 
             val dim = EntityTracker.selfDimension
             val minSectionY = if (dim == 0) -4 else 0
@@ -204,7 +198,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                         loggedFirstFailure = true
                         OverlayLogger.w(TAG, "LevelChunk subchunk decode başarısız (chunk=($cx,$cz) i=$i/$subChunkCount) — format varsayımı yanlış olabilir")
                     }
-                    break // hizalama bozulmuş olabilir, kalanları okumaya çalışma
+                    break
                 }
                 storeSection(cx, sy, cz, blocks)
                 decodedCount++
@@ -318,11 +312,6 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     private fun resolveIdentifier(runtimeId: Int): String? {
         identifierCache[runtimeId]?.let { return it }
         val session = PacketEventBus.currentSession ?: return null
-        // ✅ FIX #2: `getDefinition()` geriye genel `BlockDefinition` arayüzünü döndürüyor,
-        // ve bu arayüzde `.identifier` YOK — sadece somut alt tiplerde var. CrystalAura.kt'de
-        // zaten kanıtlanmış aynı tip-daraltma (type-narrowing) deseni burada da kullanılıyor:
-        // gerçek sunucu paketinden gelen `SimpleBlockDefinition` ve yerel fallback paletindeki
-        // `Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition` ayrı ayrı ele alınıyor.
         val identifier = runCatching {
             when (val def = session.clientSession.peer.codecHelper.blockDefinitions?.getDefinition(runtimeId)) {
                 is org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition -> def.identifier

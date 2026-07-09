@@ -36,8 +36,6 @@ class OxClientApp : Application() {
         AccountManager.init(applicationContext)
         MicrosoftAuthManager.init(applicationContext)
 
-        // Block/item/camera definitions — background thread'de yükle
-        // AutoCodecListener bunları RequestNetworkSettings gelince hemen kullanır
         Thread({
             try {
                 Definitions.init(applicationContext)
@@ -49,10 +47,7 @@ class OxClientApp : Application() {
             start()
         }
 
-        // CrystalAura'nın gerçek obsidian/bedrock doğrulaması yapabilmesi için
-        // SubChunkPacket/UpdateBlockPacket dinleyicisi burada başlatılıyor.
         WorldBlockTracker.init()
-
         registerModules()
     }
 
