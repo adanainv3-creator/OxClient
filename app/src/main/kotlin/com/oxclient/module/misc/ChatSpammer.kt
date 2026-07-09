@@ -4,8 +4,8 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
 import com.oxclient.ui.overlay.OverlayLogger
-import org.cloudburstmc.protocol.bedrock.data.TextPacketType
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
+import org.cloudburstmc.protocol.bedrock.packet.TextPacket.Type
 import kotlin.random.Random
 
 /**
@@ -107,14 +107,14 @@ class ChatSpammer : BaseModule(
 
         try {
             val packet = TextPacket().apply {
-                type = TextPacketType.CHAT
+                type = Type.CHAT
                 isNeedsTranslation = false
                 sourceName = ""
-                message = finalMessage
                 xuid = ""
                 platformChatId = ""
-                filteredMessage = ""
             }
+            packet.setMessage(finalMessage)
+            packet.setFilteredMessage("")
             session.sendToServer(packet)
             OverlayLogger.d(TAG, "Gönderildi: $finalMessage")
         } catch (e: Exception) {
