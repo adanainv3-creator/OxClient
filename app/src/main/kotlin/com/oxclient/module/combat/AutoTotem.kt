@@ -22,7 +22,7 @@ class AutoTotem : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "Totemi sürekli sol ele takar"
 ) {
-    // ✅ ASIL FİX: EquipMethod seçeneği (ItemStackRequest/MobEquipment/Both) tamamen
+    // ✅ ASIL FIX: EquipMethod seçeneği (ItemStackRequest/MobEquipment/Both) tamamen
     // kaldırıldı. Log kanıtı: "Both" modunda totem sunucu tarafından onaylanıyor
     // (offhand isTotem=true) ama 4 SANİYE SONRA, hiçbir tüketim/hasar event'i olmadan
     // kendiliğinden boşalıyordu. MobEquipmentPacket'in bu ek gönderimi sunucunun
@@ -31,7 +31,7 @@ class AutoTotem : BaseModule(
     // önceki testte 9 dakika boyunca hiç düşmeden durmuştu — kanıtlanmış tek güvenilir
     // yol bu olduğu için artık TEK yöntem bu, ayar/karışıklık ihtimali de ortadan kalktı.
 
-    // ✅ ASIL FİX (referans koddan): Bizim eski tasarım SADECE belirli paket
+    // ✅ ASIL FIX (referans koddan): Bizim eski tasarım SADECE belirli paket
     // olaylarına (InventoryContent/Slot/EntityEvent) tepki veriyordu. Bu olaylardan
     // biri kaçarsa veya sunucu birkaç saniye sonra state'i geri alırsa (kanıtlandı:
     // "Both" modunda totem 4 saniye sonra sessizce düşüyordu), ASLA tekrar
@@ -97,7 +97,7 @@ class AutoTotem : BaseModule(
     }
 
     /**
-     * ✅ ASIL FİX: Her 200ms'te bir, event beklemeden, offhand'ın GERÇEK anlık
+     * ✅ ASIL FIX: Her 200ms'te bir, event beklemeden, offhand'ın GERÇEK anlık
      * durumunu (cache'ten değil EntityTracker'ın en taze snapshot'ından) okuyup
      * totem değilse hemen düzeltiyor. Sunucu state'i ne zaman/ne sebeple geri
      * alırsa alsın en geç 200ms içinde tekrar denenmiş oluyor — tek bir event'i
@@ -311,21 +311,27 @@ class AutoTotem : BaseModule(
         // forward ediyor.
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ✅ FIX: sendViaItemStackRequest - FullContainerName.dynamicId = 0
+    // ═══════════════════════════════════════════════════════════════════════
     private fun sendViaItemStackRequest(session: OxRelaySession, slot: Int, itemData: ItemData) {
         try {
             val destNetId = offhandNetId
 
+            // SOURCE: Ana envanterden (slot)
             val source = ItemStackRequestSlotData(
                 ContainerSlotType.HOTBAR_AND_INVENTORY,
                 slot,
                 itemData.netId,
-                FullContainerName(ContainerSlotType.HOTBAR_AND_INVENTORY, null)
+                FullContainerName(ContainerSlotType.HOTBAR_AND_INVENTORY, 0)  // ✅ dynamicId = 0
             )
+
+            // DESTINATION: Offhand
             val destination = ItemStackRequestSlotData(
                 ContainerSlotType.OFFHAND,
                 0,
                 destNetId,
-                FullContainerName(ContainerSlotType.OFFHAND, null)
+                FullContainerName(ContainerSlotType.OFFHAND, 0)  // ✅ dynamicId = 0
             )
 
             val request = ItemStackRequest(
@@ -338,7 +344,7 @@ class AutoTotem : BaseModule(
                 requests.add(request)
             })
 
-            OverlayLogger.i(TAG, "ItemStackRequestPacket (Swap) gönderildi: slot=$slot netId=${itemData.netId} -> offhand netId=$offhandNetId")
+            OverlayLogger.i(TAG, "ItemStackRequestPacket (Swap) gönderildi: slot=$slot netId=${itemData.netId} -> offhand netId=$destNetId")
         } catch (e: Exception) {
             OverlayLogger.e(TAG, "ItemStackRequestPacket gönderilemedi: ${e.message}", e)
         }
