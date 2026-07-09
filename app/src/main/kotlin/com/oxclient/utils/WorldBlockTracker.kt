@@ -178,7 +178,8 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
      */
     private fun handleLevelChunkPacket(p: LevelChunkPacket) {
         try {
-            val subChunkCount = runCatching { p.subChunkCount }.getOrNull() ?: return
+            // ✅ FIX: Tipi açıkça Int olarak belirt
+            val subChunkCount: Int = runCatching { p.subChunkCount }.getOrNull() ?: return
             if (subChunkCount <= 0) return // -1 (veya 0) = modern akış, burada işlenmez
 
             val cachingEnabled = runCatching { p.isCachingEnabled }.getOrElse { false }
