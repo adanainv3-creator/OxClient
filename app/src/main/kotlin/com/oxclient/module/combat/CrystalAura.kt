@@ -18,7 +18,7 @@ import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction  // TriggerType + PredictedResult enum'ları için
 import org.cloudburstmc.protocol.bedrock.packet.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.floor
@@ -245,32 +245,21 @@ class CrystalAura : BaseModule(
             }
 
             try {
-                // FIX #2: InventoryTransactionPacket yapısı — place işleminde tüm alanlar
-                // ITEM_USE için ItemUseTransaction alt objesine taşınmalı.
-                //
-                // Eski YANLIŞ kod: InventoryTransactionPacket().apply { actionType=0, blockPosition=..., ... }
-                //   → Bu alanların çoğu InventoryTransactionPacket'te DEĞİL, ItemUseTransaction'da.
-                //   → Derleyici "unresolved reference" veya silent no-op ile geçiyordu,
-                //     server'a giden pakette bu alanlar null/0 kalıyordu → ITEM_USE hiç çalışmıyordu.
-                //
-                // Doğru yapı (ItemUseTransaction__4_.java referansına göre):
-                //   packet.transactionType = ITEM_USE                    (packet üzerinde)
-                //   packet.itemUseTransaction = ItemUseTransaction().apply { ... }  (alt obje)
+                // Bu versiyonda (InventoryTransactionPacket__5_.java) tüm ITEM_USE alanları
+                // doğrudan InventoryTransactionPacket üzerinde — ayrı bir alt obje yok.
                 val packet = InventoryTransactionPacket().apply {
-                    transactionType = InventoryTransactionType.ITEM_USE
-                    itemUseTransaction = ItemUseTransaction().apply {
-                        actionType               = 0  // 0 = INTERACT (block'a tıkla/place)
-                        blockPosition            = Vector3i.from(bx, by, bz)
-                        blockFace                = 1  // 1 = UP yüzü
-                        hotbarSlot               = EntityTracker.selfHotbarSlot
-                        itemInHand               = heldItem
-                        playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                        clickPosition            = Vector3f.from(0.5f, 0.0f, 0.5f)
-                        blockDefinition          = blockDef
-                        triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                        clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                        clientCooldownState      = 0
-                    }
+                    transactionType          = InventoryTransactionType.ITEM_USE
+                    actionType               = 0  // 0 = INTERACT (block'a tıkla/place)
+                    blockPosition            = Vector3i.from(bx, by, bz)
+                    blockFace                = 1  // 1 = UP yüzü
+                    hotbarSlot               = EntityTracker.selfHotbarSlot
+                    itemInHand               = heldItem
+                    playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                    clickPosition            = Vector3f.from(0.5f, 0.0f, 0.5f)
+                    blockDefinition          = blockDef
+                    triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                    clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                    clientCooldownState      = 0
                 }
                 session.serverBound(packet)
                 placedPositions[bKey] = System.currentTimeMillis()
