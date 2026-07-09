@@ -31,7 +31,6 @@ class TPAura : BaseModule(
     private val verticalSpeed    = float("Vertical Speed",    1.5f, 0.1f, 5f)
     private val strafeSpeed      = float("Strafe Speed",      2.5f, 0.1f, 5f)
     private val yOffset          = float("Y Offset",          0.8f, -2f,   2f)
-    private val predictiveAim    = bool ("Predictive Aim",    true)
     private val attack           = bool ("Attack",            true)
     private val attackRange      = float("Attack Range",      4.2f, 1f,   6f)
     private val cpsMin           = int  ("CPS Min",           18,   1,    30)
@@ -43,11 +42,6 @@ class TPAura : BaseModule(
     private var moveAttempts = 0L
     private var attackCount  = 0L
     @Volatile private var lastAttackMs = 0L
-    
-    private var lastTargetX = 0f
-    private var lastTargetZ = 0f
-    private var lastTargetVelX = 0f
-    private var lastTargetVelZ = 0f
 
     private companion object { const val TAG = "TPAura" }
 
@@ -57,7 +51,7 @@ class TPAura : BaseModule(
         moveAttempts = 0L
         attackCount = 0L
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} range=${range.value} hSpeed=${horizontalSpeed.value} strafe=${strafeSpeed.value} attack=${attack.value} doubleAttack=${doubleAttack.value}")
+        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} range=${range.value} attackRange=${attackRange.value} cps=${cpsMin.value}-${cpsMax.value} doubleAttack=${doubleAttack.value}")
     }
 
     override fun onDisable() {
@@ -72,7 +66,6 @@ class TPAura : BaseModule(
         if (event.packet !is PlayerAuthInputPacket) return
 
         val target = findTarget() ?: return
-        updateTargetPrediction(target)
         moveAroundTarget(target)
         if (attack.value) tryAttack(target)
     }
@@ -87,14 +80,6 @@ class TPAura : BaseModule(
             OverlayLogger.v(TAG, "findTarget: ${target.name.ifEmpty { target.runtimeId }} - ${"%.1f".format(EntityTracker.distanceTo(target))}m")
         }
         return target
-    }
-
-    // ⚡ Hedef'in velocity'sini tahmin et, predictive strafe için
-    private fun updateTargetPrediction(target: EntityTracker.TrackedEntity) {
-        lastTargetVelX = target.x - lastTargetX
-        lastTargetVelZ = target.z - lastTargetZ
-        lastTargetX = target.x
-        lastTargetZ = target.z
     }
 
     private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
@@ -114,18 +99,8 @@ class TPAura : BaseModule(
             calculatePosition(selfX, selfZ, targetPos, target)
         }
 
-        val rot = if (predictiveAim.value && (lastTargetVelX != 0f || lastTargetVelZ != 0f)) {
-            // Hedef'in geldiği yere değil, geleceği yere bak (predictive aim)
-            val predictedPos = Vector3f.from(
-                target.x + lastTargetVelX * 0.5f,
-                target.y + yOffset.value,
-                target.z + lastTargetVelZ * 0.5f
-            )
-            RotationUtil.toVector(predictedPos[0], predictedPos[1], predictedPos[2],
-                selfX, selfY, selfZ)
-        } else {
-            RotationUtil.toEntity(target)
-        }
+        // ⚡ Rotation: direct aim (predictive aim RotationUtil'de yok)
+        val rot = RotationUtil.toEntity(target)
 
         try {
             session.clientBound(MovePlayerPacket().apply {
