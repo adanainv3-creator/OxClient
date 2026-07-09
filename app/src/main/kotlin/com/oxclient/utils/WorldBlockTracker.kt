@@ -161,8 +161,14 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     private fun handleLevelChunkPacket(p: LevelChunkPacket) {
         try {
-            val subChunksLength = p.subChunksLength
-            if (subChunksLength <= 0) return
+            val subChunksLength = resolveSubChunkCount(p)
+            if (subChunksLength <= 0) {
+                if (!loggedFirstFailure) {
+                    loggedFirstFailure = true
+                    OverlayLogger.w(TAG, "LevelChunk subChunksLength<=0 ($subChunksLength) — decode atlandı, alan adı bu protokol sürümünde farklı olabilir")
+                }
+                return
+            }
 
             val cachingEnabled = p.isCachingEnabled()
             if (cachingEnabled) {
@@ -209,6 +215,25 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         } catch (e: Exception) {
             OverlayLogger.v(TAG, "Error processing LevelChunk: ${e.message}")
         }
+    }
+
+    /**
+     * p.subChunksLength alanı sürüme göre 0 dönebiliyor (isim/anlam değişmiş olabilir).
+     * ChunkParser.kt'deki aynı savunmacı yaklaşım: doğrudan alanı dene, olmazsa
+     * bilinen alternatif getter isimlerini reflection ile dene.
+     */
+    private fun resolveSubChunkCount(p: LevelChunkPacket): Int {
+        val direct = try { p.subChunksLength } catch (_: Throwable) { 0 }
+        if (direct > 0) return direct
+
+        for (methodName in listOf("getSubChunkLimit", "getSubChunkCount", "getSectionCount")) {
+            try {
+                val m = p.javaClass.getMethod(methodName)
+                val v = m.invoke(p)
+                if (v is Int && v > 0) return v
+            } catch (_: Exception) {}
+        }
+        return direct
     }
 
     private fun storeSection(cx: Int, sy: Int, cz: Int, blocks: IntArray) {
