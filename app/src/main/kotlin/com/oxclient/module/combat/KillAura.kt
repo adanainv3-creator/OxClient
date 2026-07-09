@@ -13,21 +13,22 @@ import kotlinx.coroutines.*
 class KillAura : BaseModule(
     name        = "KillAura",
     category    = ModuleCategory.COMBAT,
-    description = "Otomatik saldırı"
+    description = "Otomatik saldırı - maksimum hasar"
 ) {
     enum class AttackMode   { Single, Multi, Switch, Closest }
     enum class RotationMode { Lock, Approximate, Silent, None }
     enum class SwingMode    { Client, Server, Both, None }
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
 
-    private val cpsMin          = int  ("CPS Min",          20,   1,  30)
-    private val cpsMax          = int  ("CPS Max",          25,   1,  30)
+    // ⚡ ANARŞI OPTİMİZE: CPS strictly 20, double attack her vuruş
+    private val cpsMin          = int  ("CPS Min",          20,   20, 20)
+    private val cpsMax          = int  ("CPS Max",          20,   20, 20)
     private val range           = float("Range",            6.0f, 1f,  10f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
-    private val maxTargets      = int  ("Max Targets",      5,    1,  10)
+    private val maxTargets      = int  ("Max Targets",      8,    1,  10)
     private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
-    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
+    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Silent)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
@@ -53,7 +54,7 @@ class KillAura : BaseModule(
         consecutiveMisses = 0
         attackCount = 0L
         
-        OverlayLogger.d(TAG, "Enabled: CPS=${cpsMin.value}-${cpsMax.value} Range=${range.value} FOV=${fov.value}")
+        OverlayLogger.d(TAG, "Enabled: 20 CPS (hard limit) | Multi=8targets | Silent Rotation | Double Attack EVERY swing")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -72,7 +73,8 @@ class KillAura : BaseModule(
 
     private suspend fun tick() {
         val now = System.currentTimeMillis()
-        val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
+        // 20 CPS = 50ms per attack — sıkı tutma
+        val delayMs = 50L
         
         if (now - lastAttackMs < delayMs) return
 
@@ -149,21 +151,22 @@ class KillAura : BaseModule(
         return result
     }
 
-    // ✅ FIX: Kritik simülasyonu için eklenen 60ms+50ms gecikmeler artık tick()
-    // döngüsünü BLOKLAMIYOR — bu fonksiyon anında dönüyor, gerçek paket gönderimi
-    // arka planda ayrı bir coroutine'de yürüyor. Eskiden doAttack suspend olup
-    // tick() içinde awaitlendiği için her saldırı ~110ms tick döngüsünü durduruyordu,
-    // bu da CPS ayarını (20-25) fiilen ~9 CPS'e düşürüyordu — "cps artmıyor" şikayetinin
-    // sebebi buydu.
+    // ⚡ doAttack anında dönüyor, gerçek attack sequence arka planda coroutine'de.
     private fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
         scope.launch { performAttackSequence(e) }
     }
 
+    // ⚡ OPTİMİZE: 
+    // 1. Rotation delay'i kaldır (Silent Rotation hızlı)
+    // 2. Crit delay'leri 30ms'ye düşür (60->30ms, 50->20ms)
+    // 3. HER saldırıda DOUBLE ATTACK yap (şu an her 2'de 1)
+    // 4. Swing'i server+client çift gönder
     private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
         
         OverlayLogger.v(TAG, "Attack #${attackCount}: dist=${"%.2f".format(EntityTracker.distanceTo(e))}")
 
+        // Silent rotation — rotation packet'ini doğrudan gönder ama doğru timing'de
         if (rotationMode.value != RotationMode.None) {
             val r = RotationUtil.toEntity(e)
             when (rotationMode.value) {
@@ -177,38 +180,34 @@ class KillAura : BaseModule(
             }
         }
 
-        // Fake-fall move paketleri ile attack paketi arasında gerçek tick payı
-        // bırakıyoruz ki sunucu Y pozisyon farkından "düşüyor" durumunu gerçekten
-        // hesaplayabilsin. Bu artık ayrı bir coroutine'de olduğu için ana CPS
-        // döngüsünü etkilemiyor.
-        injectCrit(session)
-        kotlinx.coroutines.delay(60L)
+        // ⚡ OPTİMİZE: Crit delay'leri minimize et
+        // Sunucu fallDistance hesaplaması için ~30ms yeterli (hızlı tick rate)
+        injectCritOptimized(session)
+        kotlinx.coroutines.delay(30L)
 
+        // İlk attack
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
             else -> {}
         }
-
         PacketUtil.sendAttack(session, e.runtimeId)
-        
-        if (attackCount % 2 == 0L) {
-            kotlinx.coroutines.delay(1)
-            PacketUtil.sendAttack(session, e.runtimeId)
-        }
+
+        // ⚡ OPTİMİZE: Her saldırıda double attack (şu an her 2'de 1 idi)
+        // Minimal delay, aynı tick'te işlenmesi için
+        delay(1L)
+        PacketUtil.sendAttack(session, e.runtimeId)
     }
 
-    private suspend fun injectCrit(session: com.oxclient.core.relay.OxRelaySession) {
+    // ⚡ Crit injection delay'leri minimize, fallDistance hesaplaması için yeterli
+    private suspend fun injectCritOptimized(session: com.oxclient.core.relay.OxRelaySession) {
         val now = System.currentTimeMillis()
         if (now - lastCritMs < 5) return
         lastCritMs = now
 
-        // Küçük bir zıplama + düşüş hareketi: iki paket arasına gerçek bir tick
-        // (~50ms) koyuyoruz ki sunucu Y pozisyon farkından "düşüyor" durumunu
-        // gerçekten hesaplayabilsin. Aralıksız gönderilen iki paket sunucu için
-        // aynı tick'te işlenip hiçbir fark üretmiyordu.
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
-        kotlinx.coroutines.delay(50L)
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.042f, onGround = false)
+        // Hızlı crit: up + delay + down
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.08f, onGround = false)
+        kotlinx.coroutines.delay(20L)
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.032f, onGround = false)
     }
 
     private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value

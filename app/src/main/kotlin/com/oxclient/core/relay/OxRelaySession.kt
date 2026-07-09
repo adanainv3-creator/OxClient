@@ -353,10 +353,14 @@ class OxRelaySession internal constructor(
                 if (!handleClientPacket(wrapper)) return // listener kendi gönderimini yaptı veya engelledi
 
                 val buffer = wrapper.packetBuffer.retainedSlice().skipBytes(wrapper.headerLength)
+                // ⚡ FIX: Paketler MUTLAKA immediate=true ile gönderilmeli, yoksa KillAura/Criticals
+                // enjeksiyonlarından sonra gecikmeli gidiyor ve fallDistance sunucuda hesaplanamıyor.
+                // Crit injections immediate olup attack paketi queued olursa, araya 50ms+ zaman
+                // giriyor ve sunucu "crit şartı yok" diyor. immediate=true garantiler sıra.
                 sendToServer(UnknownPacket().apply {
                     payload  = buffer
                     packetId = wrapper.packetId
-                }, immediate = false)
+                }, immediate = true)
             } catch (e: Exception) {
                 OverlayLogger.e(TAG, "Client paket işleme hatası: ${e.message}", e)
             }
@@ -371,6 +375,7 @@ class OxRelaySession internal constructor(
                 if (!handleServerPacket(wrapper)) return
 
                 val buffer = wrapper.packetBuffer.retainedSlice().skipBytes(wrapper.headerLength)
+                // ⚡ Server→Client paketleri de doğrudan gönderilmeli (immediate=true örtülü)
                 sendToClient(UnknownPacket().apply {
                     payload  = buffer
                     packetId = wrapper.packetId
