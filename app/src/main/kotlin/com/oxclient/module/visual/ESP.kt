@@ -92,7 +92,13 @@ class ESP : BaseModule(
 
     private fun rebuildRenderList() {
         val cx = EntityTracker.selfX
-        val cy = EntityTracker.selfY + 1.62f
+        // ⚠️ FIX: Bedrock'ta PlayerAuthInputPacket.position kendi oyuncumuz için
+        // zaten göz seviyesinde geliyor (Java'daki gibi ayak pozisyonu DEĞİL).
+        // Önceden buraya ayrıca +1.62f eklenince sanal ESP kamerası gerçek oyun
+        // kamerasından ~1 blok daha yukarıda hesaplanıyordu — bu da her ESP
+        // kutusunun/tracer'ının gerçek blok konumuna göre bir alt bloğu
+        // gösteriyormuş gibi görünmesine sebep oluyordu.
+        val cy = EntityTracker.selfY
         val cz = EntityTracker.selfZ
         val range = scanRange.value
 
@@ -126,7 +132,7 @@ class ESP : BaseModule(
     fun render(canvas: Canvas, screenW: Int, screenH: Int) {
         if (!isEnabled) return
         val cx = EntityTracker.selfX
-        val cy = EntityTracker.selfY + 1.62f
+        val cy = EntityTracker.selfY // bkz. rebuildRenderList() — göz yüksekliği zaten dahil
         val cz = EntityTracker.selfZ
         val yaw   = EntityTracker.selfYaw
         val pitch = EntityTracker.selfPitch

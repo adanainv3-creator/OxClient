@@ -8,6 +8,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -47,6 +49,22 @@ object AccountManager {
     val selectedAccount: SavedAccount?
         get() = _selectedGamertag?.let { tag -> _accounts.find { it.gamertag == tag } }
 
+    // ── Reaktif State (Compose UI için) ─────────────────────────────────
+    // Accounts sayfasının listeyi ve seçili hesabı canlı izleyebilmesi için.
+    // Senkron `accounts`/`selectedAccount` getter'ları relay tarafındaki
+    // (non-Compose) kullanımlar için duruyor; bunlar sadece UI'a yönelik ek.
+
+    private val _accountsFlow = MutableStateFlow<List<SavedAccount>>(emptyList())
+    val accountsFlow: StateFlow<List<SavedAccount>> = _accountsFlow
+
+    private val _selectedGamertagFlow = MutableStateFlow<String?>(null)
+    val selectedGamertagFlow: StateFlow<String?> = _selectedGamertagFlow
+
+    private fun publishState() {
+        _accountsFlow.value = _accounts.toList()
+        _selectedGamertagFlow.value = _selectedGamertag
+    }
+
     // ── Init ──────────────────────────────────────────────────────────
 
     fun init(context: Context) {
@@ -81,6 +99,7 @@ object AccountManager {
                 OverlayLogger.e(TAG, "AccountManager init hatası", e)
             }
         }
+        publishState()
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────
@@ -90,6 +109,7 @@ object AccountManager {
         val idx = _accounts.indexOfFirst { it.gamertag == account.gamertag }
         if (idx >= 0) _accounts[idx] = account else _accounts.add(account)
         persist()
+        publishState()
         OverlayLogger.i(TAG, "Hesap eklendi/güncellendi: ${account.gamertag}")
         OverlayLogger.d(TAG, "  pubKey(ilk32)=${account.publicKeyB64.take(32)}… privKey.boş=${account.privateKeyB64.isBlank()}")
     }
@@ -98,6 +118,7 @@ object AccountManager {
         _accounts.removeAll { it.gamertag == account.gamertag }
         if (_selectedGamertag == account.gamertag) clearSelectedAccount()
         persist()
+        publishState()
         OverlayLogger.i(TAG, "Hesap silindi: ${account.gamertag}")
     }
 
@@ -106,6 +127,7 @@ object AccountManager {
         scope.launch {
             dataStore?.edit { it[KEY_SELECTED_ACCOUNT] = account.gamertag }
         }
+        publishState()
         OverlayLogger.d(TAG, "Hesap seçildi: ${account.gamertag}")
     }
 
@@ -114,6 +136,7 @@ object AccountManager {
         scope.launch {
             dataStore?.edit { it.remove(KEY_SELECTED_ACCOUNT) }
         }
+        publishState()
     }
 
     /** Token yenilendiğinde hesabı güncelle ve persist et. */
@@ -130,6 +153,7 @@ object AccountManager {
             publicKeyB64  = newPublicKeyB64 ?: _accounts[idx].publicKeyB64
         )
         persist()
+        publishState()
         OverlayLogger.i(TAG, "Token yenilendi: $gamertag")
         OverlayLogger.d(TAG, "  yeni pubKey(ilk32)=${_accounts[idx].publicKeyB64.take(32)}…")
     }

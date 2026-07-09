@@ -1,28 +1,25 @@
 package com.oxclient.utils
 
-import android.util.Log
 import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.packet.StartGamePacket
 import java.util.concurrent.ConcurrentHashMap
 
 object BlockTracker {
 
-    private const val TAG = "BlockTracker"
-
     enum class TrackedBlockType(val displayName: String, val colorArgb: Int) {
-        CHEST        ("Sandık",      0xFFFF8C00.toInt()),
-        SHULKER_BOX  ("Shulker",     0xFFAA00FF.toInt()),
-        ENDER_CHEST  ("Ender Sandık",0xFF00BFFF.toInt()),
-        SPAWNER      ("Spawner",     0xFFFF2020.toInt()),
-        HOPPER       ("Huni",        0xFF888888.toInt()),
-        BARREL       ("Varil",       0xFF8B4513.toInt()),
-        TRAPPED_CHEST("Tuzak Sandık",0xFFFF4400.toInt()),
-        FURNACE      ("Fırın",       0xFFCCCCCC.toInt()),
-        BLAST_FURNACE("Patlama Fırın",0xFFFFAA00.toInt()),
-        SMOKER       ("Tütücü",      0xFFAAFFAA.toInt()),
-        BREWING_STAND("Demleme Sehpası",0xFF9966FF.toInt()),
-        DISPENSER    ("Dağıtıcı",    0xFFFFFF00.toInt()),
-        DROPPER      ("Düşürücü",    0xFFFFCC00.toInt()),
+        CHEST        ("Chest",       0xFFCC7A00.toInt()),
+        SHULKER_BOX  ("Shulker",     0xFFD9639C.toInt()),
+        ENDER_CHEST  ("Ender Chest", 0xFF8E5FBF.toInt()),
+        SPAWNER      ("Spawner",     0xFF1A1A1A.toInt()),
+        HOPPER       ("Hopper",      0xFFD0D0D0.toInt()),
+        BARREL       ("Barrel",      0xFF8B5A2B.toInt()),
+        TRAPPED_CHEST("Trapped Chest",0xFFB8960C.toInt()),
+        FURNACE      ("Furnace",     0xFF9E9E9E.toInt()),
+        BLAST_FURNACE("Blast Furnace",0xFFB33A2E.toInt()),
+        SMOKER       ("Smoker",      0xFF7FA86B.toInt()),
+        BREWING_STAND("Brewing Stand",0xFF5C6BC0.toInt()),
+        DISPENSER    ("Dispenser",   0xFF5B7DB1.toInt()),
+        DROPPER      ("Dropper",     0xFF8A7B1E.toInt()),
     }
 
     data class TrackedBlock(
@@ -33,10 +30,7 @@ object BlockTracker {
 
     private val trackedBlocks = ConcurrentHashMap<Long, TrackedBlock>()
 
-    // ✅ PERFORMANS: Büyük dünyalarda (binlerce takip edilen blok) her render tick'inde
-    // tüm map'i taramak yerine, bloklar 16x16x16'lık hücrelere (chunk-benzeri) gruplanıyor.
-    // getAllInRange artık sadece oyuncunun etrafındaki ilgili hücrelere bakıyor.
-    private const val CELL_SHIFT = 4 // 2^4 = 16
+    private const val CELL_SHIFT = 4
     private val cellIndex = ConcurrentHashMap<Long, MutableSet<Long>>()
 
     private fun cellKey(x: Int, y: Int, z: Int): Long {
@@ -102,19 +96,9 @@ object BlockTracker {
 
     fun size(): Int = trackedBlocks.size
 
-    /** Türe göre kaç blok takip ediliyor (özet paneli için). */
     fun countByType(): Map<TrackedBlockType, Int> =
         trackedBlocks.values.groupingBy { it.type }.eachCount()
 
-    // ✅ ASIL SORUN BURADAYDI:
-    // Bedrock'ta blokların "runtime id"si Java Edition'daki gibi sabit sayılar değil;
-    // her sunucu StartGamePacket ile kendi blok paletini gönderir ve runtime id o paletteki
-    // SIRAYA (index) göre atanır. "54 = Sandık" gibi sabit bir eşleşme yok — sunucudan sunucuya,
-    // versiyondan versiyona değişir. Bu yüzden eski BLOCK_ID_MAP pratikte hiç eşleşmiyordu ve
-    // ESP, UpdateBlockPacket üzerinden hiçbir blok yakalayamıyordu.
-    //
-    // Çözüm: StartGamePacket ile gelen blok paletini index -> identifier olarak kaydedip
-    // resolveBlockId çağrısında önce bu dinamik tabloya bakıyoruz.
     private val paletteMap = ConcurrentHashMap<Int, TrackedBlockType>()
     @Volatile private var paletteLoaded = false
 
@@ -122,7 +106,6 @@ object BlockTracker {
         try {
             val paletteList = extractPaletteList(startGame)
             if (paletteList == null) {
-                Log.w(TAG, "Blok paleti bulunamadı (API alan adı değişmiş olabilir), legacy ID map fallback kullanılacak")
                 return
             }
             paletteMap.clear()
@@ -134,9 +117,7 @@ object BlockTracker {
                 matched++
             }
             paletteLoaded = true
-            Log.d(TAG, "Blok paleti yüklendi: ${paletteList.size} blok, $matched eşleşme (chest/shulker/vb.)")
         } catch (e: Exception) {
-            Log.w(TAG, "Blok paleti okunamadı: ${e.message}")
         }
     }
 
