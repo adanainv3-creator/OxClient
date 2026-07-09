@@ -15,6 +15,7 @@ import com.oxclient.module.combat.KillAura
 import com.oxclient.module.misc.ChatSpammer
 import com.oxclient.module.movement.AntiKnockback
 import com.oxclient.module.movement.Jetpack
+import com.oxclient.module.movement.MotionFly
 import com.oxclient.module.movement.TPAura
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
@@ -58,6 +59,7 @@ class OxClientApp : Application() {
             AutoTotem(),
             Criticals(),
             Jetpack(),
+            MotionFly(),
             TPAura(),
             AntiKnockback(),
             FullBright(),
