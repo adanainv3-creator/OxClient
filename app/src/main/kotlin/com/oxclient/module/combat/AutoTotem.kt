@@ -15,7 +15,7 @@ import org.cloudburstmc.protocol.bedrock.packet.*
 class AutoTotem : BaseModule(
     name        = "AutoTotem",
     category    = ModuleCategory.COMBAT,
-    description = "Totemi sürekli sol ele takar"
+    description = "Totemi sürekli sol ele takaar"
 ) {
     companion object {
         private const val TAG = "AutoTotem"
@@ -171,3 +171,5 @@ class AutoTotem : BaseModule(
         }
     }
 }
+
+
