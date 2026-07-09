@@ -14,6 +14,7 @@ import com.oxclient.utils.WorldBlockTracker
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.math.vector.Vector3i
+import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
@@ -25,7 +26,7 @@ import kotlin.math.floor
 class CrystalAura : BaseModule(
     name        = "CrystalAura",
     category    = ModuleCategory.COMBAT,
-    description = "Rakip oyuncunun etrafna otomatik kristal yerletirir ve patlatr"
+    description = "Rakip oyuncunun etrafına otomatik kristal yerleştirir ve patlatır"
 ) {
     enum class Mode { Single, Full5x5 }
 
@@ -83,13 +84,18 @@ class CrystalAura : BaseModule(
                 val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
                 if (rid != null) {
                     activeCrystals.remove(rid)
-                    OverlayLogger.v(TAG, "Crystal kaldrld: rid=$rid")
+                    OverlayLogger.v(TAG, "Crystal kaldırıldı: rid=$rid")
                 }
             }
             is LevelEventPacket -> {
+                // FIX #1: String karşılaştırması yerine LevelEvent enum'u doğrudan karşılaştır.
+                // Eski kod: pkt.type?.toString()?.uppercase() ile "PARTICLE"/"EXPLOSION" string arama →
+                //   yanlış: ses efektleri de (SOUND_GHAST_FIREBALL gibi) "EXPLOSION" içerdiği için
+                //   cancel ediliyordu. Ayrıca toString() implementasyona göre değişebilir.
+                // ModuleCrystalAura_kt.txt referansı: `packet.type == LevelEvent.PARTICLE_EXPLOSION`
                 if (removeParticles.value) {
-                    val typeName = pkt.type?.toString()?.uppercase() ?: ""
-                    if (typeName.contains("PARTICLE") || typeName.contains("EXPLOSION")) {
+                    val type = pkt.type
+                    if (type == LevelEvent.PARTICLE_EXPLOSION || type == LevelEvent.PARTICLE_BLOCK_EXPLOSION) {
                         event.cancel()
                     }
                 }
@@ -133,13 +139,10 @@ class CrystalAura : BaseModule(
         if (isBedrock) cachedBedrockDef?.let { return it } else cachedObsidianDef?.let { return it }
         val targetId = if (isBedrock) "minecraft:bedrock" else "minecraft:obsidian"
         try {
-            // ✅ FIX: `clientSession.definitionRegistry` diye bir alan yok (WorldBlockTracker'daki
-            // aynı hatanın kaynağı) — doğru yol GamingPacketListener'da zaten kullanılan
-            // `peer.codecHelper.blockDefinitions`.
             val blockDefs = session.clientSession.peer.codecHelper.blockDefinitions
             if (blockDefs != null) {
-                for (i in 0..1000) {
-                    val def = blockDefs.getDefinition(i) ?: continue
+                for (i in 0..2048) {
+                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null } ?: continue
                     val id = when (def) {
                         is SimpleBlockDefinition -> def.identifier
                         is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
@@ -154,8 +157,8 @@ class CrystalAura : BaseModule(
                 }
             }
             val blockDefs2 = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions
-            for (i in 0..1000) {
-                val def = blockDefs2.getDefinition(i) ?: continue
+            for (i in 0..2048) {
+                val def = try { blockDefs2.getDefinition(i) } catch (_: Exception) { null } ?: continue
                 val id = when (def) {
                     is SimpleBlockDefinition -> def.identifier
                     is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
@@ -168,7 +171,7 @@ class CrystalAura : BaseModule(
                     return result
                 }
             }
-            OverlayLogger.w(TAG, "Block definition bulunamad, fallback oluturuluyor: $targetId")
+            OverlayLogger.w(TAG, "Block definition bulunamadı, fallback oluşturuluyor: $targetId")
             val fallback = SimpleBlockDefinition(
                 targetId,
                 if (isBedrock) 7 else 49,
@@ -180,7 +183,7 @@ class CrystalAura : BaseModule(
             if (isBedrock) cachedBedrockDef = fallback else cachedObsidianDef = fallback
             return fallback
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Block definition hatas: ${e.message}", e)
+            OverlayLogger.e(TAG, "Block definition hatası: ${e.message}", e)
             return null
         }
     }
@@ -199,13 +202,13 @@ class CrystalAura : BaseModule(
         }
         val itemId = runCatching { heldItem.definition?.identifier }.getOrElse { null }
         if (itemId != "minecraft:end_crystal") {
-            OverlayLogger.v(TAG, "Elindeki item crystal deil: $itemId")
+            OverlayLogger.v(TAG, "Elindeki item crystal değil: $itemId")
             return
         }
 
         val positions = getPlacePositions(target)
         if (positions.isEmpty()) {
-            OverlayLogger.v(TAG, "Uygun (dorulanm obsidian/bedrock �zerinde) yerletirme pozisyonu bulunamad")
+            OverlayLogger.v(TAG, "Uygun (doğrulanmış obsidian/bedrock üzerinde) yerleştirme pozisyonu bulunamadı")
             return
         }
 
@@ -242,25 +245,38 @@ class CrystalAura : BaseModule(
             }
 
             try {
+                // FIX #2: InventoryTransactionPacket yapısı — place işleminde tüm alanlar
+                // ITEM_USE için ItemUseTransaction alt objesine taşınmalı.
+                //
+                // Eski YANLIŞ kod: InventoryTransactionPacket().apply { actionType=0, blockPosition=..., ... }
+                //   → Bu alanların çoğu InventoryTransactionPacket'te DEĞİL, ItemUseTransaction'da.
+                //   → Derleyici "unresolved reference" veya silent no-op ile geçiyordu,
+                //     server'a giden pakette bu alanlar null/0 kalıyordu → ITEM_USE hiç çalışmıyordu.
+                //
+                // Doğru yapı (ItemUseTransaction__4_.java referansına göre):
+                //   packet.transactionType = ITEM_USE                    (packet üzerinde)
+                //   packet.itemUseTransaction = ItemUseTransaction().apply { ... }  (alt obje)
                 val packet = InventoryTransactionPacket().apply {
                     transactionType = InventoryTransactionType.ITEM_USE
-                    actionType = 0
-                    blockPosition = Vector3i.from(bx, by, bz)
-                    blockFace = 1
-                    hotbarSlot = EntityTracker.selfHotbarSlot
-                    itemInHand = heldItem
-                    playerPosition = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                    clickPosition = Vector3f.from(0.5f, 0.0f, 0.5f)
-                    this.blockDefinition = blockDef
-                    triggerType = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                    clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                    clientCooldownState = 0
+                    itemUseTransaction = ItemUseTransaction().apply {
+                        actionType               = 0  // 0 = INTERACT (block'a tıkla/place)
+                        blockPosition            = Vector3i.from(bx, by, bz)
+                        blockFace                = 1  // 1 = UP yüzü
+                        hotbarSlot               = EntityTracker.selfHotbarSlot
+                        itemInHand               = heldItem
+                        playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                        clickPosition            = Vector3f.from(0.5f, 0.0f, 0.5f)
+                        blockDefinition          = blockDef
+                        triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                        clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                        clientCooldownState      = 0
+                    }
                 }
                 session.serverBound(packet)
                 placedPositions[bKey] = System.currentTimeMillis()
-                OverlayLogger.d(TAG, "Crystal yerletirildi: ($bx,$by,$bz) hedef=${target.name}")
+                OverlayLogger.d(TAG, "Crystal yerleştirildi: ($bx,$by,$bz) hedef=${target.name}")
             } catch (e: Exception) {
-                OverlayLogger.w(TAG, "Crystal yerletirme hatas: ${e.message}")
+                OverlayLogger.w(TAG, "Crystal yerleştirme hatası: ${e.message}")
             }
         }
     }
@@ -336,7 +352,7 @@ class CrystalAura : BaseModule(
         val r = RotationUtil.toPoint(pos.x, pos.y, pos.z)
         PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
         PacketUtil.sendSwingAndAttack(session, rid)
-        OverlayLogger.v(TAG, "Crystal patlatld: rid=$rid pos=${pos}")
+        OverlayLogger.v(TAG, "Crystal patlatıldı: rid=$rid pos=${pos}")
     }
 
     private fun packKey(x: Int, y: Int, z: Int): Long =
