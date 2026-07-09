@@ -1,15 +1,15 @@
 package com.oxclient.module.movement
 
 import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
-import kotlinx.coroutines.*
-import org.cloudburstmc.math.vector.Vector2f
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -20,7 +20,8 @@ class TPAura : BaseModule(
     name        = "TPAura",
     category    = ModuleCategory.MOVEMENT,
     description = "Uzaktaki oyuncuyu tespit edip yanına ışınlanır ve saldırır"
-) {
+), PacketEventBus.PacketListener {
+
     enum class MoveMode { Random, Strafe, Behind }
 
     private val moveMode         = enum ("Mode",              MoveMode.Strafe)
@@ -35,55 +36,36 @@ class TPAura : BaseModule(
     private val cpsMax           = int  ("CPS Max",           15,   1,    30)
     private val shortcut         = bool ("Shortcut",          false)
 
-    @Volatile private var isMoving = false
     private var strafeAngle = 0.0
-    private var tickJob: Job? = null
     private var moveAttempts = 0L
     private var attackCount  = 0L
-    private var tickCounter  = 0L
     @Volatile private var lastAttackMs = 0L
-
-    // Relay'e gönderilen son pozisyonu takip eder.
-    // serverBound() pipeline'dan geçmediği için EntityTracker güncellenmiyor —
-    // bir sonraki tick'te selfX/Y/Z hâlâ eski değerde kalıp stepTowardTarget()
-    // aynı koordinatı tekrar hesaplıyordu. localPos bunu çözer.
-    @Volatile private var localX = 0f
-    @Volatile private var localY = 0f
-    @Volatile private var localZ = 0f
-    @Volatile private var localInitialized = false
 
     private companion object { const val TAG = "TPAura" }
 
     override fun onEnable() {
         super.onEnable()
-        isMoving = false
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
         attackCount = 0L
-        localInitialized = false
+        PacketEventBus.register(this)
         OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} detectRange=${detectRange.value} hSpeed=${horizontalSpeed.value} vSpeed=${verticalSpeed.value} attack=${attack.value}")
-        tickJob = scope.launch { movementLoop() }
     }
 
     override fun onDisable() {
-        tickJob?.cancel()
+        PacketEventBus.unregister(this)
         super.onDisable()
-        isMoving = false
-        localInitialized = false
         OverlayLogger.d(TAG, "Disabled (moveAttempts=$moveAttempts attackCount=$attackCount)")
     }
 
-    private suspend fun movementLoop() {
-        while (currentCoroutineContext().isActive) {
-            if (isEnabled) {
-                val target = findTarget()
-                if (target != null) {
-                    moveAroundTarget(target)
-                    if (attack.value) tryAttack(target)
-                }
-            }
-            delay(50L)
-        }
+    override fun onPacket(event: PacketEvent) {
+        if (!isEnabled) return
+        if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+        if (event.packet !is PlayerAuthInputPacket) return
+
+        val target = findTarget() ?: return
+        moveAroundTarget(target)
+        if (attack.value) tryAttack(target)
     }
 
     private fun findTarget(): EntityTracker.TrackedEntity? {
@@ -101,38 +83,30 @@ class TPAura : BaseModule(
     private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
 
-        if (!localInitialized) {
-            localX = EntityTracker.selfX
-            localY = EntityTracker.selfY
-            localZ = EntityTracker.selfZ
-            localInitialized = true
-        }
+        val selfX = EntityTracker.selfX
+        val selfY = EntityTracker.selfY
+        val selfZ = EntityTracker.selfZ
 
         val targetPos = Vector3f.from(target.x, target.y + yOffset.value, target.z)
-        val dist = MathUtil.dist3(localX, localY, localZ, target.x, target.y, target.z)
+        val dist = MathUtil.dist3(selfX, selfY, selfZ, target.x, target.y, target.z)
 
         val newPos = if (dist > range.value) {
-            stepTowardTarget(targetPos)
+            stepTowardTarget(selfX, selfY, selfZ, targetPos)
         } else {
-            calculatePosition(targetPos)
+            calculatePosition(selfX, selfZ, targetPos)
         }
 
         val rot = RotationUtil.toEntity(target)
 
-        val packet = PlayerAuthInputPacket().apply {
-            position = newPos
-            rotation = Vector3f.from(rot.pitch, rot.yaw, 0f)
-            motion = Vector2f.ZERO
-            tick = tickCounter++
-        }
-
         try {
-            session.serverBound(packet)
-            // serverBound() doğrudan iletim yapar, EntityTracker.selfX/Y/Z güncellenmez.
-            // localX/Y/Z'yi elle güncelliyoruz ki bir sonraki tick doğru pozisyondan hesaplansın.
-            localX = newPos.x
-            localY = newPos.y
-            localZ = newPos.z
+            session.clientBound(MovePlayerPacket().apply {
+                runtimeEntityId       = EntityTracker.selfRuntimeId
+                position              = newPos
+                rotation              = Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
+                mode                  = MovePlayerPacket.Mode.NORMAL
+                isOnGround            = true
+                ridingRuntimeEntityId = 0L
+            })
             moveAttempts++
             if (moveAttempts % 20 == 0L) {
                 OverlayLogger.d(TAG, "moveAroundTarget: gönderildi #$moveAttempts dist=${"%.1f".format(dist)} newPos=$newPos target=${target.name}")
@@ -142,23 +116,23 @@ class TPAura : BaseModule(
         }
     }
 
-    private fun stepTowardTarget(targetPos: Vector3f): Vector3f {
+    private fun stepTowardTarget(selfX: Float, selfY: Float, selfZ: Float, targetPos: Vector3f): Vector3f {
         val direction = atan2(
-            (targetPos.z - localZ).toDouble(),
-            (targetPos.x - localX).toDouble()
+            (targetPos.z - selfZ).toDouble(),
+            (targetPos.x - selfX).toDouble()
         ) - Math.toRadians(90.0)
 
-        val newX = localX - (sin(direction) * horizontalSpeed.value).toFloat()
-        val newZ = localZ + (cos(direction) * horizontalSpeed.value).toFloat()
+        val newX = selfX - (sin(direction) * horizontalSpeed.value).toFloat()
+        val newZ = selfZ + (cos(direction) * horizontalSpeed.value).toFloat()
         val newY = targetPos.y.coerceIn(
-            localY - verticalSpeed.value,
-            localY + verticalSpeed.value
+            selfY - verticalSpeed.value,
+            selfY + verticalSpeed.value
         )
         return Vector3f.from(newX, newY, newZ)
     }
 
     private fun tryAttack(target: EntityTracker.TrackedEntity) {
-        val dist = MathUtil.dist3(localX, localY, localZ, target.x, target.y, target.z)
+        val dist = EntityTracker.distanceTo(target)
         if (dist > attackRange.value) return
 
         val now = System.currentTimeMillis()
@@ -172,7 +146,7 @@ class TPAura : BaseModule(
         OverlayLogger.v(TAG, "tryAttack #$attackCount: hedef=${target.name.ifEmpty { target.runtimeId.toString() }} dist=${"%.2f".format(dist)}")
     }
 
-    private fun calculatePosition(targetPos: Vector3f): Vector3f {
+    private fun calculatePosition(selfX: Float, selfZ: Float, targetPos: Vector3f): Vector3f {
         val radius = range.value
 
         return when (moveMode.value) {
@@ -200,8 +174,8 @@ class TPAura : BaseModule(
             }
 
             MoveMode.Behind -> {
-                val dx = targetPos.x - localX
-                val dz = targetPos.z - localZ
+                val dx = targetPos.x - selfX
+                val dz = targetPos.z - selfZ
                 val angle = atan2(dz.toDouble(), dx.toDouble()) + Math.PI
                 val behindRadius = radius * 0.7f
 
