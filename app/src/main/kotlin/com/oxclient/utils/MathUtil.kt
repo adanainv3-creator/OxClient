@@ -57,9 +57,9 @@ object MathUtil {
         val sinY = sin(yawR); val cosY = cos(yawR)
         val sinP = sin(pitchR); val cosP = cos(pitchR)
 
-        val rx =  dx * cosY - dz * sinY
-        val ry = -dx * sinY * sinP + dy * cosP + dz * cosY * sinP
-        val rz = -dx * sinY * cosP - dy * sinP + dz * cosY * cosP
+        val rx = dx * cosY - dz * sinY
+        val ry = dx * sinY * sinP + dy * cosP + dz * cosY * sinP
+        val rz = dx * sinY * cosP - dy * sinP + dz * cosY * cosP
 
         if (rz <= 0.05f) return null
 
