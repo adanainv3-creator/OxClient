@@ -53,10 +53,18 @@ object AccountManager {
         if (dataStore != null) return
         dataStore = context.accountDataStore
 
-        // Kaydedilmiş verileri oku
-        scope.launch {
+        // ÖNEMLİ: Bu okuma senkron (bloklayarak) yapılmalı.
+        // Önceki halinde `scope.launch { ... }` fire-and-forget çalışıyordu;
+        // init() hemen geri dönüyor ve çağıran taraf (MicrosoftAuthManager.init)
+        // _selectedGamertag henüz doldurulmadan `selectedAccount`'u okuyordu.
+        // Bu yüzden kayıtlı hesap olsa bile her açılışta null görünüp
+        // kullanıcı yeniden login ekranına düşüyordu.
+        // runBlocking burada güvenli: DataStore okuması küçük bir local
+        // dosyadan yapılır, sadece uygulama açılışında bir kez çalışır ve
+        // birkaç ms sürer.
+        runBlocking {
             try {
-                val prefs = dataStore!!.data.first()
+                val prefs = withContext(Dispatchers.IO) { dataStore!!.data.first() }
 
                 val accountsJson = prefs[KEY_ACCOUNTS]
                 if (!accountsJson.isNullOrBlank()) {

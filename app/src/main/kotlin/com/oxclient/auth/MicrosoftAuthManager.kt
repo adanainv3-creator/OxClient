@@ -117,6 +117,43 @@ object MicrosoftAuthManager {
         OverlayLogger.i(TAG, "Çıkış yapıldı")
     }
 
+    /**
+     * Accounts sayfasında daha önce giriş yapılmış bir hesaba dokunulduğunda
+     * çağrılır. Yeniden Microsoft login akışına gitmeden, kayıtlı chain/key
+     * ile doğrudan o hesaba geçer. Token süresi dolmuşsa arka planda sessizce
+     * yenilenir (refreshTokenSilently) — kullanıcı bir şey yapmaz.
+     */
+    fun switchAccount(account: SavedAccount) {
+        if (activeJob?.isActive == true) return
+        AccountManager.selectAccount(account)
+
+        if (account.isRelayReady()) {
+            _authState.value = AuthState.Success(account.gamertag, account.mcToken)
+            try {
+                if (account.privateKeyB64.isNotBlank()) {
+                    val keyBytes = android.util.Base64.decode(account.privateKeyB64, android.util.Base64.NO_WRAP)
+                    encryptionPrivateKey = java.security.KeyFactory.getInstance("EC")
+                        .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
+                }
+            } catch (e: Exception) {
+                OverlayLogger.e(TAG, "switchAccount: encryptionPrivateKey set edilemedi: ${e.message}")
+            }
+            OverlayLogger.i(TAG, "Hesap değiştirildi: ${account.gamertag}")
+        } else {
+            _authState.value = AuthState.Loading
+            OverlayLogger.i(TAG, "Hesap değiştirildi (token yenileniyor): ${account.gamertag}")
+            activeJob = scope.launch {
+                runCatching { refreshTokenSilently(account) }
+                    .onFailure { e ->
+                        if (e !is CancellationException) {
+                            OverlayLogger.e(TAG, "switchAccount token yenileme başarısız", e)
+                            _authState.value = AuthState.Error(e.message ?: "Hesap yenilenemedi")
+                        }
+                    }
+            }
+        }
+    }
+
     fun getActiveChainForRelay(): String? {
         val account = AccountManager.selectedAccount ?: run {
             OverlayLogger.w(TAG, "getActiveChainForRelay: seçili hesap yok")

@@ -27,6 +27,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -60,9 +61,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.oxclient.auth.AccountManager
 import com.oxclient.auth.AuthState
 import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
+import com.oxclient.auth.SavedAccount
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEventBus
@@ -82,7 +85,7 @@ val SUPPORTED_PACKAGES = listOf(
 
 // SETTINGS was removed as a standalone tab - server configuration now lives
 // behind the gear icon under the top bar instead.
-private enum class DashTab { RELAY, CONFIG }
+private enum class DashTab { RELAY, ACCOUNTS, CONFIG }
 
 class DashboardActivity : ComponentActivity() {
 
@@ -127,7 +130,8 @@ class DashboardActivity : ComponentActivity() {
                     onDisconnect  = { stopRelay() },
                     onSignIn      = { MicrosoftAuthManager.startSignIn() },
                     onSignOut     = { MicrosoftAuthManager.signOut() },
-                    onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() }
+                    onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() },
+                    onSelectAccount = { account -> MicrosoftAuthManager.switchAccount(account) }
                 )
             }
         }
@@ -190,7 +194,8 @@ fun DashboardScreen(
     onDisconnect  : () -> Unit,
     onSignIn      : () -> Unit,
     onSignOut     : () -> Unit,
-    onCancelAuth  : () -> Unit
+    onCancelAuth  : () -> Unit,
+    onSelectAccount : (SavedAccount) -> Unit
 ) {
     val authState     by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
     val scope          = rememberCoroutineScope()
@@ -198,6 +203,8 @@ fun DashboardScreen(
     val serverPort    by ServerConfig.port.collectAsState(initial = ServerConfig.DEFAULT_PORT)
     val recentServers by ServerConfig.recents.collectAsState(initial = emptyList())
     val isOnline      by rememberIsOnline()
+    val savedAccounts     by AccountManager.accountsFlow.collectAsStateWithLifecycle()
+    val selectedGamertag  by AccountManager.selectedGamertagFlow.collectAsStateWithLifecycle()
 
     var showSignIn      by remember { mutableStateOf(false) }
     var showServerPanel by remember { mutableStateOf(false) }
@@ -280,6 +287,12 @@ fun DashboardScreen(
                             relayActive = relayActive,
                             onToggle    = { if (relayActive) onDisconnect() else onConnect(targetApp.first) }
                         )
+                        DashTab.ACCOUNTS -> AccountsTab(
+                            accounts         = savedAccounts,
+                            selectedGamertag = selectedGamertag,
+                            onSelectAccount  = onSelectAccount,
+                            onAddAccount     = onSignIn
+                        )
                         DashTab.CONFIG -> ConfigTab()
                     }
                 }
@@ -311,6 +324,115 @@ private fun RelayTab(
             ConnectButton(running = relayActive, onToggle = onToggle)
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun AccountsTab(
+    accounts         : List<SavedAccount>,
+    selectedGamertag : String?,
+    onSelectAccount  : (SavedAccount) -> Unit,
+    onAddAccount     : () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Başlık + sağ üstte "+" (referans görseldeki gibi)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Accounts",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = OxOnBackground,
+                fontFamily = FontFamily.Monospace
+            )
+            Box(
+                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
+                    .background(OxSurface)
+                    .border(1.dp, OxOutlineStrong, RoundedCornerShape(8.dp))
+                    .clickable { onAddAccount() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = OxAccentLight)
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+
+        if (accounts.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text(
+                    "No accounts yet.\nTap + to sign in with Microsoft.",
+                    color = OxOnSurfaceDim,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                accounts.forEach { account ->
+                    AccountRow(
+                        account  = account,
+                        selected = account.gamertag == selectedGamertag,
+                        onClick  = { onSelectAccount(account) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountRow(
+    account  : SavedAccount,
+    selected : Boolean,
+    onClick  : () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) OxAccentDark else OxSurface)
+            .border(1.dp, if (selected) OxAccent else OxOutline, RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(34.dp).clip(RoundedCornerShape(6.dp))
+                    .background(if (selected) OxAccent.copy(alpha = 0.25f) else OxSurfaceVar),
+                contentAlignment = Alignment.Center
+            ) {
+                PersonGlyph(tint = if (selected) OxAccentLight else OxOnSurfaceDim)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(
+                    account.gamertag,
+                    color = OxOnBackground,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    if (account.isExpired()) "Token expired — will refresh" else "Signed in",
+                    color = if (account.isExpired()) OxWarning else OxOnSurfaceDim,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp
+                )
+            }
+        }
+        if (selected) {
+            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(OxSuccess))
+        }
     }
 }
 
@@ -377,6 +499,7 @@ private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             TabItem("RELAY", current == DashTab.RELAY) { onSelect(DashTab.RELAY) }
+            TabItem("ACCOUNTS", current == DashTab.ACCOUNTS) { onSelect(DashTab.ACCOUNTS) }
             TabItem("CONFIG", current == DashTab.CONFIG) { onSelect(DashTab.CONFIG) }
         }
     }
