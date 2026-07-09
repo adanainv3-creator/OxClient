@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.view.View
 import com.oxclient.module.ModuleManager
+import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
 
 /**
@@ -45,6 +46,13 @@ class ESPOverlayView(context: Context) : View(context) {
     private val espModule: ESP?
         get() = ModuleManager.byName("ESP") as? ESP
 
+    // ✅ Mod List (ArrayList) burada ESP ile AYNI Canvas yüzeyine, ESP'den SONRA
+    // çiziliyor — böylece z-sırasında her zaman ESP tracer/box'larının üstünde
+    // kalıyor. Ayrı bir WindowManager view'ı eklemeye gerek yok: bu view zaten
+    // tam ekranı kaplıyor, touch-through ve her frame invalidate ediliyor.
+    private val arrayListModule: ArrayListModule?
+        get() = ModuleManager.byName("Mod List") as? ArrayListModule
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
@@ -56,6 +64,15 @@ class ESPOverlayView(context: Context) : View(context) {
                 // ESP render hatası servisi/relay'i asla düşürmemeli — sessizce logla,
                 // bir sonraki frame'de tekrar denenir.
                 OverlayLogger.v(TAG, "Render hatası: ${e.message}")
+            }
+        }
+
+        val arrayList = arrayListModule
+        if (arrayList != null && arrayList.isEnabled) {
+            try {
+                arrayList.render(canvas, width, height)
+            } catch (e: Exception) {
+                OverlayLogger.v(TAG, "ArrayList render hatası: ${e.message}")
             }
         }
 

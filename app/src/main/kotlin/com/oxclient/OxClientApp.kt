@@ -16,6 +16,7 @@ import com.oxclient.module.misc.ChatSpammer
 import com.oxclient.module.movement.AntiKnockback
 import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.TPAura
+import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
 import com.oxclient.module.visual.FullBright
 import com.oxclient.utils.WorldBlockTracker
@@ -66,6 +67,7 @@ class OxClientApp : Application() {
             AntiKnockback(),
             FullBright(),
             ESP(),
+            ArrayListModule(),
             AutoArmor(),
             ChatSpammer()
         )
