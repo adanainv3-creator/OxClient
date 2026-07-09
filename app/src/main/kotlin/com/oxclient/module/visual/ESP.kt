@@ -184,6 +184,11 @@ class ESP : BaseModule(
             val isNearest = nearestGlow.value && entry === nearest
 
             if (screenPos != null) {
+                // rawPos != null burada garanti (screenPos != null ise rawPos da != null'dır,
+                // çünkü screenPos ya rawPos'un smooth'lanmış hali ya da rawPos'un kendisidir).
+                val deltaX = screenPos.first  - rawPos!!.first
+                val deltaY = screenPos.second - rawPos.second
+
                 when (renderMode.value) {
                     RenderMode.Tracer, RenderMode.Both -> {
                         tracerPaint.color = color
@@ -196,8 +201,17 @@ class ESP : BaseModule(
 
                 when (renderMode.value) {
                     RenderMode.Box, RenderMode.Both -> {
-                        drawBox(canvas, screenPos.first, screenPos.second,
-                            entry.distance, color, boxPaint, fillPaint, alphaScale, isNearest)
+                        // ✅ Artık gerçek 3D wireframe küp: bloğun 8 köşesi ayrı ayrı izdüşürülüyor.
+                        // deltaX/deltaY, tracer'ın bittiği smooth'lanmış noktayla kutuyu hizalar.
+                        drawBox3D(
+                            canvas,
+                            entry.x, entry.y, entry.z,
+                            cx, cy, cz,
+                            yaw, pitch,
+                            screenW, screenH,
+                            deltaX, deltaY,
+                            color, boxPaint, fillPaint, alphaScale, isNearest
+                        )
                     }
                     else -> {}
                 }
@@ -317,50 +331,101 @@ class ESP : BaseModule(
         }
     }
 
-    private fun drawBox(
+    /**
+     * ═══════════════════════════════════════════════════════════════════
+     * GERÇEK 3D KUTU (wireframe cube) — eskiden burada ekran-uzayında SABİT
+     * boyutlu, düz bir kare + köşe parantezleri çiziliyordu. Bu, kameranın
+     * açısından bağımsız her zaman aynı "kare" göründüğü için özellikle yan
+     * açılardan bakınca gerçek bloğun perspektifiyle uyuşmuyor, "yamuk"/
+     * yanlış hizalı görünüyordu.
+     *
+     * Bunun yerine artık bloğun 8 gerçek dünya köşesi (x-0.5..x+0.5 vb.)
+     * tek tek worldToScreen ile ekrana izdüşürülüyor ve 12 kenar çizgiyle
+     * birleştiriliyor — yani kamera açısına göre doğru şekilde küçülüp
+     * büyüyen, eğilen gerçek bir 3D küp.
+     *
+     * deltaX/deltaY: tracer çizgisinin bittiği (yumuşatılmış) merkez nokta
+     * ile bloğun ham (yumuşatılmamış) merkez izdüşümü arasındaki fark.
+     * Bunu her köşeye aynen uygulayarak kutu her zaman tracer'ın bittiği
+     * noktayla TAM hizalı kalıyor — aksi halde tracer smoothing'li, kutu
+     * ham konumda olur ve ikisi birbirinden kopuk görünürdü.
+     * ═══════════════════════════════════════════════════════════════════
+     */
+    private fun drawBox3D(
         canvas: Canvas,
-        sx: Float, sy: Float,
-        distance: Float,
+        wx: Float, wy: Float, wz: Float,
+        selfX: Float, selfY: Float, selfZ: Float,
+        yaw: Float, pitch: Float,
+        screenW: Int, screenH: Int,
+        deltaX: Float, deltaY: Float,
         colorArgb: Int,
         strokePaint: Paint,
         fillPaint: Paint,
         alphaScale: Float = 1f,
         isNearest: Boolean = false
     ) {
-        val size = (40f / (distance * 0.1f + 1f)).coerceIn(6f, 40f)
-        val half = size / 2f
+        val half = 0.5f
+        // Bloğun 8 köşesi (dünya koordinatı) — alt yüz 0-3, üst yüz 4-7
+        val worldCorners = arrayOf(
+            floatArrayOf(wx - half, wy - half, wz - half), // 0
+            floatArrayOf(wx + half, wy - half, wz - half), // 1
+            floatArrayOf(wx + half, wy - half, wz + half), // 2
+            floatArrayOf(wx - half, wy - half, wz + half), // 3
+            floatArrayOf(wx - half, wy + half, wz - half), // 4
+            floatArrayOf(wx + half, wy + half, wz - half), // 5
+            floatArrayOf(wx + half, wy + half, wz + half), // 6
+            floatArrayOf(wx - half, wy + half, wz + half)  // 7
+        )
+
+        val screenCorners = arrayOfNulls<FloatArray>(8)
+        for (i in worldCorners.indices) {
+            val c = worldCorners[i]
+            val p = MathUtil.worldToScreen(
+                c[0], c[1], c[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH
+            ) ?: return // köşelerden biri kameranın arkasındaysa (rz<=0) bu blok için 3D kutu atlanır
+            screenCorners[i] = floatArrayOf(p.first + deltaX, p.second + deltaY)
+        }
 
         strokePaint.color = colorArgb
         strokePaint.alpha = (220 * alphaScale).toInt().coerceIn(0, 255)
+        strokePaint.strokeWidth = if (isNearest) tracerWidth.value + 1.5f else tracerWidth.value
 
+        // 12 kenar: alt yüz (4) + üst yüz (4) + dikey kenarlar (4)
+        val edges = intArrayOf(
+            0, 1,  1, 2,  2, 3,  3, 0,
+            4, 5,  5, 6,  6, 7,  7, 4,
+            0, 4,  1, 5,  2, 6,  3, 7
+        )
+        drawEdges(canvas, screenCorners, edges, strokePaint)
+
+        // Üst yüzü hafif dolgu ile vurgulayarak bloğun okunurluğunu artır
         fillPaint.color = colorArgb
         fillPaint.alpha = (boxAlpha.value * alphaScale).toInt().coerceIn(0, 255)
-
-        val left   = sx - half
-        val top    = sy - half
-        val right  = sx + half
-        val bottom = sy + half
-
-        canvas.drawRect(left, top, right, bottom, fillPaint)
-        canvas.drawRect(left, top, right, bottom, strokePaint)
-
-        val cornerLen = size * 0.3f
-        strokePaint.strokeWidth = if (isNearest) tracerWidth.value + 2f else tracerWidth.value + 1f
-        canvas.drawLine(left,  top,    left  + cornerLen, top,            strokePaint)
-        canvas.drawLine(left,  top,    left,              top + cornerLen, strokePaint)
-        canvas.drawLine(right, top,    right - cornerLen, top,            strokePaint)
-        canvas.drawLine(right, top,    right,             top + cornerLen, strokePaint)
-        canvas.drawLine(left,  bottom, left  + cornerLen, bottom,         strokePaint)
-        canvas.drawLine(left,  bottom, left,              bottom - cornerLen, strokePaint)
-        canvas.drawLine(right, bottom, right - cornerLen, bottom,         strokePaint)
-        canvas.drawLine(right, bottom, right,             bottom - cornerLen, strokePaint)
+        val topPath = Path().apply {
+            val p4 = screenCorners[4]!!; moveTo(p4[0], p4[1])
+            val p5 = screenCorners[5]!!; lineTo(p5[0], p5[1])
+            val p6 = screenCorners[6]!!; lineTo(p6[0], p6[1])
+            val p7 = screenCorners[7]!!; lineTo(p7[0], p7[1])
+            close()
+        }
+        canvas.drawPath(topPath, fillPaint)
 
         if (isNearest) {
             val glowPaint = Paint(strokePaint)
             glowPaint.color = colorArgb
             glowPaint.alpha = (90 * alphaScale).toInt().coerceIn(0, 255)
             glowPaint.strokeWidth = strokePaint.strokeWidth + 3f
-            canvas.drawRect(left - 3f, top - 3f, right + 3f, bottom + 3f, glowPaint)
+            drawEdges(canvas, screenCorners, edges, glowPaint)
+        }
+    }
+
+    private fun drawEdges(canvas: Canvas, corners: Array<FloatArray?>, edges: IntArray, paint: Paint) {
+        var i = 0
+        while (i < edges.size) {
+            val a = corners[edges[i]]!!
+            val b = corners[edges[i + 1]]!!
+            canvas.drawLine(a[0], a[1], b[0], b[1], paint)
+            i += 2
         }
     }
 
