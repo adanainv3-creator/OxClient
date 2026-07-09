@@ -197,18 +197,26 @@ class CrystalAura : BaseModule(
 
         val heldItem = EntityTracker.getHeldItem()
         if (heldItem == null || heldItem.count <= 0) {
-            OverlayLogger.v(TAG, "Elinde item yok")
+            OverlayLogger.d(TAG, "Elinde item yok")
             return
         }
         val itemId = runCatching { heldItem.definition?.identifier }.getOrElse { null }
         if (itemId != "minecraft:end_crystal") {
-            OverlayLogger.v(TAG, "Elindeki item crystal değil: $itemId")
+            OverlayLogger.d(TAG, "Elindeki item crystal değil: $itemId")
             return
         }
 
         val positions = getPlacePositions(target)
         if (positions.isEmpty()) {
-            OverlayLogger.v(TAG, "Uygun (doğrulanmış obsidian/bedrock üzerinde) yerleştirme pozisyonu bulunamadı")
+            // ✅ TANI: "chunk verisi hiç yok" ile "chunk verisi var ama yakında
+            // obsidian/bedrock yok" durumlarını ayırt et — WorldBlockTracker'ın
+            // hiç terrain almadığı (ör. LevelChunkPacket/SubChunkPacket akışı
+            // uyuşmazlığı) durumda pozisyon bulunamaz ve bunu bilmek gerekir.
+            val terrainKnown = WorldBlockTracker.hasAnyTerrainData()
+            OverlayLogger.d(
+                TAG,
+                "Uygun yerleştirme pozisyonu bulunamadı (terrain verisi ${if (terrainKnown) "MEVCUT ama yakında obsidian/bedrock yok" else "HİÇ YOK — WorldBlockTracker henüz bir chunk decode edemedi"})"
+            )
             return
         }
 
@@ -255,7 +263,11 @@ class CrystalAura : BaseModule(
                     hotbarSlot               = EntityTracker.selfHotbarSlot
                     itemInHand               = heldItem
                     playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                    clickPosition            = Vector3f.from(0.5f, 0.0f, 0.5f)
+                    // ✅ FIX: blockFace=UP iken clickPosition'ın y bileşeni o yüzün
+                    // düzlemine (y=1.0) denk gelmeli. Eskiden y=0.0 veriliyordu —
+                    // face/clickPos tutarsızlığı bazı sunucularda (ör. anti-cheat/
+                    // vanilla place-validation) paketin sessizce reddedilmesine yol açar.
+                    clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
                     blockDefinition          = blockDef
                     triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
                     clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS

@@ -4,7 +4,9 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.ui.overlay.OverlayLogger
 import io.netty.buffer.ByteBuf
+import com.oxclient.core.proxy.EntityTracker
 import org.cloudburstmc.protocol.bedrock.packet.ChangeDimensionPacket
+import org.cloudburstmc.protocol.bedrock.packet.LevelChunkPacket
 import org.cloudburstmc.protocol.bedrock.packet.SubChunkPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateBlockPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateSubChunkBlocksPacket
@@ -68,12 +70,25 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     override fun onPacket(event: PacketEvent) {
         when (val p = event.packet) {
             is SubChunkPacket -> handleSubChunkPacket(p)
+            // ✅ FIX: 2b2tpe.org gibi custom (PocketMine tabanlı) sunucular modern
+            // subchunk-request akışını KULLANMIYOR — terrain'i doğrudan LevelChunkPacket
+            // içine gömüyor (subChunkCount >= 0). Bu yüzden SubChunkPacket hiç gelmiyordu
+            // ve sections hep boş kalıyordu → CrystalAura/ESP hiçbir zaman obsidian/bedrock
+            // bulamıyordu. LevelChunkPacket.subChunkCount == -1 ise (gerçek modern akış)
+            // burası dokunmaz, SubChunkPacket beklenmeye devam eder.
+            is LevelChunkPacket -> handleLevelChunkPacket(p)
             is UpdateBlockPacket -> handleUpdateBlock(p)
             is UpdateSubChunkBlocksPacket -> handleUpdateSubChunkBlocks(p)
             is ChangeDimensionPacket -> reset()
             else -> {}
         }
     }
+
+    /** Tanı amaçlı: şimdiye kadar HİÇ terrain verisi (section) alınabildi mi?
+     *  CrystalAura gibi modüller pozisyon bulamadığında bunu loglayarak
+     *  "chunk verisi hiç yok" ile "chunk verisi var ama obsidian yakında yok"
+     *  durumlarını ayırt edebilir. */
+    fun hasAnyTerrainData(): Boolean = sections.isNotEmpty()
 
     fun getBlockIdentifier(x: Int, y: Int, z: Int): String? {
         val posKey = blockPosKey(x, y, z)
@@ -143,6 +158,63 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             } catch (e: Exception) {
                 OverlayLogger.v(TAG, "SubChunk işlenirken hata: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * LevelChunkPacket'ten DOĞRUDAN terrain decode.
+     *
+     * subChunkCount == -1  → modern akış: gerçek client SubChunkRequestPacket
+     *   gönderecek, sunucu SubChunkPacket ile cevap verecek. Burada dokunmuyoruz.
+     * subChunkCount >= 0   → LEGACY/CUSTOM akış: tüm subchunk'lar bu paketin
+     *   `data` alanına, SubChunkPacket'teki İLE AYNI per-section formatta
+     *   (version byte + storage(lar)), sırayla, en alt section'dan başlayarak
+     *   art arda gömülü. 2b2tpe.org gibi PocketMine tabanlı sunucular bunu kullanır.
+     *
+     * DÜRÜST UYARI: minSectionY varsayımı (Overworld=-4, Nether/End=0) 1.18+
+     * yükseklik aralığına dayanıyor. Loglardaki "İlk LevelChunk blok decode
+     * başarılı" satırından sonra obsidian/bedrock YANLIŞ Y'de bulunuyor gibi
+     * görünürse (örn. hep birkaç blok yukarıda/aşağıda), minSectionY kaydırılmalı.
+     */
+    private fun handleLevelChunkPacket(p: LevelChunkPacket) {
+        try {
+            val subChunkCount = runCatching { p.subChunkCount }.getOrNull() ?: return
+            if (subChunkCount <= 0) return // -1 (veya 0) = modern akış, burada işlenmez
+
+            val cachingEnabled = runCatching { p.isCachingEnabled }.getOrElse { false }
+            if (cachingEnabled) return // blob-cache modu: data ham blok değil, hash içerir
+
+            val buf = runCatching { p.data }.getOrNull() ?: return
+            if (!buf.isReadable) return
+
+            val cx = runCatching { p.chunkX }.getOrElse { return }
+            val cz = runCatching { p.chunkZ }.getOrElse { return }
+
+            val dim = EntityTracker.selfDimension
+            val minSectionY = if (dim == 0) -4 else 0
+
+            val dup = buf.duplicate()
+            var decodedCount = 0
+            for (i in 0 until subChunkCount) {
+                val sy = minSectionY + i
+                val blocks = decodeSubChunkBlocks(dup)
+                if (blocks == null) {
+                    if (!loggedFirstFailure) {
+                        loggedFirstFailure = true
+                        OverlayLogger.w(TAG, "LevelChunk subchunk decode başarısız (chunk=($cx,$cz) i=$i/$subChunkCount) — format varsayımı yanlış olabilir")
+                    }
+                    break // hizalama bozulmuş olabilir, kalanları okumaya çalışma
+                }
+                storeSection(cx, sy, cz, blocks)
+                decodedCount++
+            }
+
+            if (decodedCount > 0 && !loggedFirstSuccess) {
+                loggedFirstSuccess = true
+                OverlayLogger.i(TAG, "İlk LevelChunk blok decode başarılı: chunk=($cx,$cz) $decodedCount/$subChunkCount section, minSectionY=$minSectionY")
+            }
+        } catch (e: Exception) {
+            OverlayLogger.v(TAG, "LevelChunk işlenirken hata: ${e.message}")
         }
     }
 
