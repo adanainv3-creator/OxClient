@@ -64,6 +64,7 @@ class OxClientApp : Application() {
             AntiKnockback(),
             FullBright(),
             ESP()
+            AutoArnor()
         )
     }
 }
