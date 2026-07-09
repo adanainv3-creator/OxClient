@@ -15,32 +15,6 @@ import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * WorldBlockTracker — gerçek dünya blok durumunu (obsidian/bedrock/air/vb.) takip eder.
- *
- * ═══════════════════════════════════════════════════════════════════════
- * NEDEN BlockTracker/ChunkParser DEĞİL:
- * BlockTracker sadece POI bloklarını (sandık/shulker/vb, ESP amaçlı) tutuyor.
- * ChunkParser bilinçli olarak SADECE block-entity NBT'sini çıkarıyor, terrain
- * section'larını atlıyor (skipBlockStorage) — çünkü modern protokolde (1.18+,
- * bizim protokol 975 dahil) LevelChunkPacket'in subChunkLimit'i genelde -1'dir
- * ve gerçek terrain verisi bu pakette YOKTUR. Gerçek client bunun yerine
- * SubChunkRequestPacket gönderir, sunucu SubChunkPacket ile cevap verir —
- * asıl blok verisi ORADADIR. Relay zaten gerçek client'ın bu trafiğini
- * ilettiği için burada sadece dinleyip decode ediyoruz.
- *
- * DÜRÜST UYARI — decode katmanında iki gerçek belirsizlik var:
- * 1) SubChunkData.data içindeki "version 9" formatında bir Y-index baytının
- *    olup olmadığı kesin değil (SubChunkPacket zaten position.y'de section Y'yi
- *    veriyor, bu yüzden sunucu bunu tekrar yazmayabilir). Kod önce Y-baytsız
- *    dener, header anlamsız çıkarsa (bitsPerBlock geçersiz aralıkta) bir bayt
- *    kaydırıp tekrar dener. İlk decode'lardan sonra logu kontrol et.
- * 2) Bit-paketleme index sırası (x,y,z -> düz index) ağ formatı için resmi
- *    olarak belgelenmemiş; burada PocketMine-MP'nin persistent format
- *    dönüştürücüsündeki isimlendirmeye (YZX — Y en anlamlı, X en az anlamlı)
- *    dayanarak index = (y shl 8) or (z shl 4) or x kullanıldı. Yanlışsa
- *    belirti şu olur: obsidian/bedrock DOĞRU pozisyonda değil ama YAKIN bir
- *    pozisyonda "bulunuyor" gibi görünür (eksen karışması). Böyle bir şey
- *    gözlemlersen bana söyle, index formülünü değiştiririz.
- * ═══════════════════════════════════════════════════════════════════════
  */
 object WorldBlockTracker : PacketEventBus.PacketListener {
 
@@ -49,7 +23,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     private val sections = ConcurrentHashMap<Long, IntArray>()
     private val insertOrder = ConcurrentLinkedQueue<Long>()
-    private const val MAX_SECTIONS = 4096 // güvenlik sınırı (~4096 * 16KB ≈ 64MB tavan)
+    private const val MAX_SECTIONS = 4096
 
     private val overrides = ConcurrentHashMap<Long, Int>()
     private val identifierCache = ConcurrentHashMap<Int, String>()
@@ -78,10 +52,6 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         }
     }
 
-    /** Tanı amaçlı: şimdiye kadar HİÇ terrain verisi (section) alınabildi mi?
-     *  CrystalAura gibi modüller pozisyon bulamadığında bunu loglayarak
-     *  "chunk verisi hiç yok" ile "chunk verisi var ama obsidian yakında yok"
-     *  durumlarını ayırt edebilir. */
     fun hasAnyTerrainData(): Boolean = sections.isNotEmpty()
 
     fun getBlockIdentifier(x: Int, y: Int, z: Int): String? {
@@ -155,29 +125,14 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         }
     }
 
-    /**
-     * LevelChunkPacket'ten DOĞRUDAN terrain decode.
-     *
-     * subChunkCount == -1  → modern akış: gerçek client SubChunkRequestPacket
-     *   gönderecek, sunucu SubChunkPacket ile cevap verecek. Burada dokunmuyoruz.
-     * subChunkCount >= 0   → LEGACY/CUSTOM akış: tüm subchunk'lar bu paketin
-     *   `data` alanına, SubChunkPacket'teki İLE AYNI per-section formatta
-     *   (version byte + storage(lar)), sırayla, en alt section'dan başlayarak
-     *   art arda gömülü. 2b2tpe.org gibi PocketMine tabanlı sunucular bunu kullanır.
-     *
-     * DÜRÜST UYARI: minSectionY varsayımı (Overworld=-4, Nether/End=0) 1.18+
-     * yükseklik aralığına dayanıyor. Loglardaki "İlk LevelChunk blok decode
-     * başarılı" satırından sonra obsidian/bedrock YANLIŞ Y'de bulunuyor gibi
-     * görünürse (örn. hep birkaç blok yukarıda/aşağıda), minSectionY kaydırılmalı.
-     */
     private fun handleLevelChunkPacket(p: LevelChunkPacket) {
         try {
-            // Doğrudan erişim - runCatching kaldırıldı
-            val subChunkCount = p.subChunkCount
-            if (subChunkCount <= 0) return // -1 (veya 0) = modern akış, burada işlenmez
+            // ✅ FIX: LevelChunkPacket'te alan adı 'subChunksLength'
+            val subChunksLength = p.subChunksLength
+            if (subChunksLength <= 0) return // -1 veya 0 = modern akış
 
-            val cachingEnabled = p.isCachingEnabled
-            if (cachingEnabled) return // blob-cache modu: data ham blok değil, hash içerir
+            val cachingEnabled = p.cachingEnabled
+            if (cachingEnabled) return
 
             val buf = p.data ?: return
             if (!buf.isReadable) return
@@ -190,13 +145,13 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
             val dup = buf.duplicate()
             var decodedCount = 0
-            for (i in 0 until subChunkCount) {
+            for (i in 0 until subChunksLength) {
                 val sy = minSectionY + i
                 val blocks = decodeSubChunkBlocks(dup)
                 if (blocks == null) {
                     if (!loggedFirstFailure) {
                         loggedFirstFailure = true
-                        OverlayLogger.w(TAG, "LevelChunk subchunk decode başarısız (chunk=($cx,$cz) i=$i/$subChunkCount) — format varsayımı yanlış olabilir")
+                        OverlayLogger.w(TAG, "LevelChunk subchunk decode başarısız (chunk=($cx,$cz) i=$i/$subChunksLength)")
                     }
                     break
                 }
@@ -206,7 +161,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
             if (decodedCount > 0 && !loggedFirstSuccess) {
                 loggedFirstSuccess = true
-                OverlayLogger.i(TAG, "İlk LevelChunk blok decode başarılı: chunk=($cx,$cz) $decodedCount/$subChunkCount section, minSectionY=$minSectionY")
+                OverlayLogger.i(TAG, "İlk LevelChunk blok decode başarılı: chunk=($cx,$cz) $decodedCount/$subChunksLength section, minSectionY=$minSectionY")
             }
         } catch (e: Exception) {
             OverlayLogger.v(TAG, "LevelChunk işlenirken hata: ${e.message}")
