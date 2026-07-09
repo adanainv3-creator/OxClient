@@ -29,6 +29,7 @@ class TPAura : BaseModule(
     private val range            = float("Range",             3f,   1f,   8f)
     private val horizontalSpeed  = float("Horizontal Speed",  2f,   0.5f, 10f)
     private val verticalSpeed    = float("Vertical Speed",    1f,   0.1f, 5f)
+    private val strafeSpeed      = float("Strafe Speed",      1f,   0.1f, 5f) // YENİ: Strafe dönüş hızı çarpanı
     private val yOffset          = float("Y Offset",          0f,  -2f,   2f)
     private val attack           = bool ("Attack",            true)
     private val attackRange      = float("Attack Range",      3.5f, 1f,   6f)
@@ -49,7 +50,7 @@ class TPAura : BaseModule(
         moveAttempts = 0L
         attackCount = 0L
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} detectRange=${detectRange.value} hSpeed=${horizontalSpeed.value} vSpeed=${verticalSpeed.value} attack=${attack.value}")
+        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} detectRange=${detectRange.value} hSpeed=${horizontalSpeed.value} vSpeed=${verticalSpeed.value} strafeSpeed=${strafeSpeed.value} attack=${attack.value}")
     }
 
     override fun onDisable() {
@@ -163,7 +164,7 @@ class TPAura : BaseModule(
             }
 
             MoveMode.Strafe -> {
-                strafeAngle += horizontalSpeed.value * 0.03
+                strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.03 // GÜNCELLENDİ: strafeSpeed çarpanı eklendi
                 val verticalWave = sin(strafeAngle * 0.5f).toFloat() * 0.3f * verticalSpeed.value
 
                 Vector3f.from(
