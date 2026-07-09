@@ -18,6 +18,7 @@ import com.oxclient.module.movement.MotionFly
 import com.oxclient.module.movement.TPAura
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
+import com.oxclient.module.visual.FOVChanger
 import com.oxclient.module.visual.FullBright
 import com.oxclient.utils.WorldBlockTracker
 
@@ -32,6 +33,7 @@ class OxClientApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
         ServerConfig.init(applicationContext)
         AccountManager.init(applicationContext)
         MicrosoftAuthManager.init(applicationContext)
@@ -62,6 +64,7 @@ class OxClientApp : Application() {
             AntiKnockback(),
             FullBright(),
             ESP(),
+            FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
             ChatSpammer()
