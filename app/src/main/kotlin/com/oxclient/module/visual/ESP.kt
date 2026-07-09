@@ -258,7 +258,10 @@ class ESP : BaseModule(
         selfYaw: Float, color: Int, paint: Paint
     ) {
         val angleToTarget = Math.toDegrees(
-            atan2((entry.x - EntityTracker.selfX).toDouble(), (entry.z - EntityTracker.selfZ).toDouble())
+            atan2(
+                (EntityTracker.selfX - entry.x).toDouble(),   // ⚠️ FIX: dx ters çevrildi
+                (entry.z - EntityTracker.selfZ).toDouble()
+            )
         ).toFloat()
         val relative = ((angleToTarget - selfYaw) % 360f + 540f) % 360f - 180f
         val rad = Math.toRadians(relative.toDouble())

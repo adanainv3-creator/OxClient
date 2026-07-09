@@ -47,7 +47,13 @@ object MathUtil {
         screenW: Int, screenH: Int,
         fov: Float = 70f
     ): Pair<Float, Float>? {
-        val dx = wx - selfX
+        // ⚠️ FIX: X ekseni ayna (mirror) hatası — Bedrock look-vector'ünde
+        // Fx = -sin(yaw)*cos(pitch) olduğu için dx'in işareti ters alınmalı.
+        // yaw=90 (batıya bakış) iken -X yönündeki (batıdaki) hedefin rz'si
+        // pozitif (önde) çıkmalıydı; eski kodda dx = wx - selfX olduğunda
+        // hedef "arkada" hesaplanıyor, tracer'lar doğu/batı yönlerinde
+        // ters/kaymış çıkıyordu. dy ve dz işaretleri zaten doğruydu.
+        val dx = selfX - wx
         val dy = wy - selfY
         val dz = wz - selfZ
 
