@@ -6,8 +6,16 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.ui.overlay.OverlayLogger
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
+import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
+import org.cloudburstmc.protocol.bedrock.data.inventory.FullContainerName
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequest
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequestSlotData
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.ItemStackRequestAction
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.SwapAction
+import org.cloudburstmc.protocol.bedrock.packet.ItemStackRequestPacket
 import org.cloudburstmc.protocol.bedrock.packet.MobEquipmentPacket
+import java.util.concurrent.atomic.AtomicInteger
 
 object InventoryUtil {
 
@@ -95,6 +103,64 @@ object InventoryUtil {
         val result = totemRuntimeId > 0 && runtimeId == totemRuntimeId
         OverlayLogger.v(TAG, "isTotem fallback: runtimeId=$runtimeId totemRuntimeId=$totemRuntimeId netId=${item.netId} count=${item.count} sonuc=$result")
         return result
+    }
+
+    enum class ArmorSlotType(val slotIndex: Int) { HELMET(0), CHESTPLATE(1), LEGGINGS(2), BOOTS(3) }
+
+    fun resolveArmorSlotType(item: ItemData?): ArmorSlotType? {
+        if (isEmpty(item)) return null
+        val identifier = resolveIdentifier(item!!) ?: return null
+        return when {
+            identifier.endsWith("_helmet") || identifier == "minecraft:turtle_helmet" -> ArmorSlotType.HELMET
+            identifier.endsWith("_chestplate") || identifier == "minecraft:elytra" -> ArmorSlotType.CHESTPLATE
+            identifier.endsWith("_leggings") -> ArmorSlotType.LEGGINGS
+            identifier.endsWith("_boots") -> ArmorSlotType.BOOTS
+            else -> null
+        }
+    }
+
+    private val ARMOR_MATERIAL_TIER = mapOf(
+        "leather" to 1, "golden" to 2, "chainmail" to 2,
+        "iron" to 3, "diamond" to 4, "netherite" to 5
+    )
+
+    fun armorMaterialTier(item: ItemData?): Int {
+        if (isEmpty(item)) return -1
+        val identifier = resolveIdentifier(item!!) ?: return 0
+        val material = identifier.removePrefix("minecraft:").substringBefore("_")
+        return ARMOR_MATERIAL_TIER[material] ?: if (identifier == "minecraft:turtle_helmet") 2 else 0
+    }
+
+    private val stackRequestIdCounter = AtomicInteger(0)
+    fun nextStackRequestId(): Int = stackRequestIdCounter.decrementAndGet()
+
+    fun sendSlotSwap(
+        session: OxRelaySession,
+        sourceSlot: Int,
+        sourceNetId: Int,
+        destContainer: ContainerSlotType,
+        destSlot: Int,
+        destNetId: Int
+    ) {
+        val source = ItemStackRequestSlotData(
+            ContainerSlotType.HOTBAR_AND_INVENTORY,
+            sourceSlot,
+            sourceNetId,
+            FullContainerName(ContainerSlotType.HOTBAR_AND_INVENTORY, null)
+        )
+        val destination = ItemStackRequestSlotData(
+            destContainer,
+            destSlot,
+            destNetId,
+            FullContainerName(destContainer, null)
+        )
+        val request = ItemStackRequest(
+            nextStackRequestId(),
+            arrayOf<ItemStackRequestAction>(SwapAction(source, destination)),
+            arrayOf<String>()
+        )
+        session.serverBound(ItemStackRequestPacket().apply { requests.add(request) })
+        OverlayLogger.d(TAG, "ItemStackRequest (Swap) gönderildi: srcSlot=$sourceSlot srcNetId=$sourceNetId -> $destContainer[$destSlot] destNetId=$destNetId")
     }
 
     private fun resolveIdentifier(item: ItemData): String? {
