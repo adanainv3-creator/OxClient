@@ -19,11 +19,16 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     private const val TAG = "WorldBlockTracker"
     private const val SECTION_BLOCKS = 4096
 
+    // Cache for storing block data per section (chunk column + sub-chunk Y level)
     private val sections = ConcurrentHashMap<Long, IntArray>()
+    // FIFO queue to track insertion order for cache eviction
     private val insertOrder = ConcurrentLinkedQueue<Long>()
+    // Maximum number of sections to keep in memory
     private const val MAX_SECTIONS = 4096
 
+    // Override cache for individual block updates (e.g., UpdateBlockPacket)
     private val overrides = ConcurrentHashMap<Long, Int>()
+    // Cache for resolving runtime IDs to block identifiers
     private val identifierCache = ConcurrentHashMap<Int, String>()
 
     @Volatile private var loggedFirstSuccess = false
@@ -31,31 +36,36 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     fun init() {
         PacketEventBus.register(this)
-        OverlayLogger.i(TAG, "WorldBlockTracker başlatıldı")
+        OverlayLogger.i(TAG, "WorldBlockTracker initialized")
     }
 
     fun reset() {
         sections.clear(); insertOrder.clear(); overrides.clear()
-        OverlayLogger.i(TAG, "WorldBlockTracker sıfırlandı")
+        OverlayLogger.i(TAG, "WorldBlockTracker reset")
     }
 
-    // Client bir kez bağlandığında blob cache tercihini bildirir. Gerçek Bedrock
-    // istemcisi genelde bunu enabled=true gönderir; sunucu da bunu görünce
-    // LevelChunkPacket'i blok-blok değil, hash referanslı "blob" formatında yollar.
-    // decodeSubChunkBlocks bu formatı hiç anlamıyor (format tamamen farklı: blob
-    // hash listesi + ayrı BlobCacheMissResponse/BlobCacheAckPacket akışı gerekir),
-    // bu yüzden handleLevelChunkPacket sessizce "cachingEnabled -> return" yapıyor
-    // ve terrain hiç dolmuyor. Bunu client'tan sunucuya giden paketi burada
-    // yakalayıp zorla false yaparak engelliyoruz: sunucu böylece hep ham/inline
-    // chunk verisi gönderir ve mevcut decode kodu çalışabilir.
+    /**
+     * When the client first connects, it informs the server about its blob cache preference.
+     * A real Bedrock client typically sends this with enabled=true; the server then sends
+     * LevelChunkPacket in blob format (hash references) instead of block-by-block.
+     *
+     * Our decodeSubChunkBlocks does NOT understand this format (it requires a different
+     * structure: blob hash list + separate BlobCacheMissResponse/BlobCacheAckPacket flow).
+     * Therefore, handleLevelChunkPacket silently returns when cachingEnabled=true,
+     * leaving the terrain empty.
+     *
+     * We intercept this client->server packet here and force it to false, preventing
+     * the server from sending blob-format chunks. This ensures the server always sends
+     * raw/inline chunk data, which our existing decode code can handle.
+     */
     @Volatile private var loggedCacheOverride = false
 
     private fun handleClientCacheStatus(p: ClientCacheStatusPacket) {
-        if (p.isEnabled) {
-            p.isEnabled = false
+        if (p.isSupported) {
+            p.isSupported = false
             if (!loggedCacheOverride) {
                 loggedCacheOverride = true
-                OverlayLogger.i(TAG, "ClientCacheStatusPacket enabled=true -> false olarak zorlandı (blob-chunk devre dışı)")
+                OverlayLogger.i(TAG, "Forced ClientCacheStatusPacket enabled=true -> false (blob-chunk disabled)")
             }
         }
     }
@@ -75,14 +85,17 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     fun hasAnyTerrainData(): Boolean = sections.isNotEmpty()
 
     fun getBlockIdentifier(x: Int, y: Int, z: Int): String? {
+        // Check overrides first (individual block updates take precedence)
         val posKey = blockPosKey(x, y, z)
         overrides[posKey]?.let { return resolveIdentifier(it) }
 
+        // Calculate section coordinates
         val cx = x shr 4
         val cz = z shr 4
         val sy = y shr 4
         val arr = sections[sectionKey(cx, sy, cz)] ?: return null
 
+        // Get local coordinates within the section
         val lx = x and 15
         val ly = y and 15
         val lz = z and 15
@@ -128,7 +141,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                 if (blocks == null) {
                     if (!loggedFirstFailure) {
                         loggedFirstFailure = true
-                        OverlayLogger.w(TAG, "SubChunk blok decode başarısız (pos=$pos)")
+                        OverlayLogger.w(TAG, "SubChunk block decode failed (pos=$pos)")
                     }
                     continue
                 }
@@ -137,10 +150,10 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
                 if (!loggedFirstSuccess) {
                     loggedFirstSuccess = true
-                    OverlayLogger.i(TAG, "İlk SubChunk blok decode başarılı: pos=$pos (${blocks.count { it != 0 }} boş-olmayan blok)")
+                    OverlayLogger.i(TAG, "First SubChunk block decode successful: pos=$pos (${blocks.count { it != 0 }} non-air blocks)")
                 }
             } catch (e: Exception) {
-                OverlayLogger.v(TAG, "SubChunk işlenirken hata: ${e.message}")
+                OverlayLogger.v(TAG, "Error processing SubChunk: ${e.message}")
             }
         }
     }
@@ -152,12 +165,12 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
             val cachingEnabled = p.isCachingEnabled()
             if (cachingEnabled) {
-                // Buraya hâlâ düşülüyorsa ClientCacheStatusPacket override'ı işe
-                // yaramamış demektir (ör. relay bu paketi bizim bus'tan geçirmeden
-                // kendi içinde oluşturup sunucuya yolluyor). Artık sessiz değil.
+                // If we still reach this point, the ClientCacheStatusPacket override
+                // didn't work (e.g., the relay might be creating/sending this packet
+                // internally without passing through our bus). Now we log explicitly.
                 if (!loggedFirstFailure) {
                     loggedFirstFailure = true
-                    OverlayLogger.w(TAG, "LevelChunk blob-cache modunda geldi (isCachingEnabled=true) — decode atlandı, ClientCacheStatusPacket override'ı kontrol et")
+                    OverlayLogger.w(TAG, "LevelChunk received in blob-cache mode (isCachingEnabled=true) — decode skipped, check ClientCacheStatusPacket override")
                 }
                 return
             }
@@ -169,6 +182,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             val cz = p.chunkZ
 
             val dim = EntityTracker.selfDimension
+            // Overworld has sections starting at Y=-4, nether/end start at 0
             val minSectionY = if (dim == 0) -4 else 0
 
             val dup = buf.duplicate()
@@ -179,7 +193,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                 if (blocks == null) {
                     if (!loggedFirstFailure) {
                         loggedFirstFailure = true
-                        OverlayLogger.w(TAG, "LevelChunk subchunk decode başarısız (chunk=($cx,$cz) i=$i/$subChunksLength)")
+                        OverlayLogger.w(TAG, "LevelChunk subchunk decode failed (chunk=($cx,$cz) i=$i/$subChunksLength)")
                     }
                     break
                 }
@@ -189,10 +203,10 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
             if (decodedCount > 0 && !loggedFirstSuccess) {
                 loggedFirstSuccess = true
-                OverlayLogger.i(TAG, "İlk LevelChunk blok decode başarılı: chunk=($cx,$cz) $decodedCount/$subChunksLength section, minSectionY=$minSectionY")
+                OverlayLogger.i(TAG, "First LevelChunk block decode successful: chunk=($cx,$cz) $decodedCount/$subChunksLength sections, minSectionY=$minSectionY")
             }
         } catch (e: Exception) {
-            OverlayLogger.v(TAG, "LevelChunk işlenirken hata: ${e.message}")
+            OverlayLogger.v(TAG, "Error processing LevelChunk: ${e.message}")
         }
     }
 
@@ -200,6 +214,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         val key = sectionKey(cx, sy, cz)
         sections[key] = blocks
         insertOrder.add(key)
+        // Evict oldest sections if cache exceeds maximum size
         while (insertOrder.size > MAX_SECTIONS) {
             val old = insertOrder.poll() ?: break
             sections.remove(old)
@@ -227,7 +242,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             1 -> storageCount = 1
             8, 9 -> {
                 storageCount = buf.readUnsignedByte().toInt()
-                if (skipYByte) buf.readByte()
+                if (skipYByte) buf.readByte() // Skip the Y byte for version 8/9
             }
             else -> return null
         }
@@ -245,14 +260,16 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         val header = buf.readUnsignedByte().toInt()
         val bitsPerBlock = header ushr 1
         val isPersistent = (header and 1) == 1
-        if (isPersistent) return null
+        if (isPersistent) return null // Persistent storage is not supported
         if (bitsPerBlock !in intArrayOf(0, 1, 2, 3, 4, 5, 6, 8, 16)) return null
 
         if (bitsPerBlock == 0) {
+            // All blocks are the same ID
             val id = readUnsignedVarInt(buf)
             return IntArray(SECTION_BLOCKS) { id }
         }
 
+        // Read the block indices
         val blocksPerWord = 32 / bitsPerBlock
         val wordCount = (SECTION_BLOCKS + blocksPerWord - 1) / blocksPerWord
         val indices = IntArray(SECTION_BLOCKS)
@@ -269,10 +286,12 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             }
         }
 
+        // Read the palette
         val paletteSize = readUnsignedVarInt(buf)
         if (paletteSize <= 0 || paletteSize > 8192) return null
         val palette = IntArray(paletteSize) { readUnsignedVarInt(buf) }
 
+        // Map indices to runtime IDs using the palette
         return IntArray(SECTION_BLOCKS) { i ->
             val p = indices[i]
             if (p < palette.size) palette[p] else 0
@@ -287,7 +306,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             result = result or ((b and 0x7F) shl shift)
             if (b and 0x80 == 0) break
             shift += 7
-            if (shift > 35) throw IllegalStateException("VarInt çok uzun")
+            if (shift > 35) throw IllegalStateException("VarInt too long")
         }
         return result
     }
@@ -308,7 +327,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     private fun sectionKey(cx: Int, sy: Int, cz: Int): Long {
         val cxL = cx.toLong() and 0xFFFFFFL
-        val syL = (sy + 128).toLong() and 0xFFL
+        val syL = (sy + 128).toLong() and 0xFFL // Offset Y by 128 to handle negative values
         val czL = cz.toLong() and 0xFFFFFFL
         return (cxL shl 32) or (syL shl 24) or czL
     }
