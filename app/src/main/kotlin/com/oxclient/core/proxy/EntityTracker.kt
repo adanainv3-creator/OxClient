@@ -187,7 +187,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfX = p.playerPosition.x; selfY = p.playerPosition.y; selfZ = p.playerPosition.z
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
         selfGameMode = p.playerGameType.ordinal
-        inventoriesServerAuthoritative = p.inventoriesServerAuthoritative
+        inventoriesServerAuthoritative = p.isInventoriesServerAuthoritative
         OverlayLogger.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ) inventoriesServerAuthoritative=$inventoriesServerAuthoritative")
     }
 

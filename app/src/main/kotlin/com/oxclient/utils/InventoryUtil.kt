@@ -12,7 +12,12 @@ import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequest
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequestSlotData
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.ItemStackRequestAction
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.PlaceAction
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.SwapAction
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryActionData
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventorySource
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 import org.cloudburstmc.protocol.bedrock.packet.ItemStackRequestPacket
 import org.cloudburstmc.protocol.bedrock.packet.MobEquipmentPacket
 import java.util.concurrent.atomic.AtomicInteger
@@ -133,6 +138,69 @@ object InventoryUtil {
 
     private val stackRequestIdCounter = AtomicInteger(0)
     fun nextStackRequestId(): Int = stackRequestIdCounter.decrementAndGet()
+
+    fun sendInventoryMove(
+        session: OxRelaySession,
+        sourceContainer: ContainerSlotType,
+        sourceContainerId: Int,
+        sourceSlot: Int,
+        sourceItem: ItemData,
+        destContainer: ContainerSlotType,
+        destContainerId: Int,
+        destSlot: Int,
+        destItem: ItemData
+    ) {
+        if (!EntityTracker.inventoriesServerAuthoritative) {
+            sendLegacyMove(session, sourceContainerId, sourceSlot, sourceItem, destContainerId, destSlot, destItem)
+            return
+        }
+        sendItemStackMove(session, sourceContainer, sourceSlot, sourceItem, destContainer, destSlot, destItem)
+    }
+
+    private fun sendItemStackMove(
+        session: OxRelaySession,
+        sourceContainer: ContainerSlotType,
+        sourceSlot: Int,
+        sourceItem: ItemData,
+        destContainer: ContainerSlotType,
+        destSlot: Int,
+        destItem: ItemData
+    ) {
+        val srcSlotData = ItemStackRequestSlotData(
+            sourceContainer, sourceSlot, sourceItem.netId, FullContainerName(sourceContainer, null)
+        )
+        val dstSlotData = ItemStackRequestSlotData(
+            destContainer, destSlot, destItem.netId, FullContainerName(destContainer, null)
+        )
+
+        val action: ItemStackRequestAction = if (isEmpty(destItem)) {
+            PlaceAction(sourceItem.count, srcSlotData, dstSlotData)
+        } else {
+            SwapAction(srcSlotData, dstSlotData)
+        }
+
+        val request = ItemStackRequest(nextStackRequestId(), arrayOf(action), arrayOf())
+        session.serverBound(ItemStackRequestPacket().apply { requests.add(request) })
+        OverlayLogger.d(TAG, "ItemStackRequest (${action::class.simpleName}) gönderildi: $sourceContainer[$sourceSlot] netId=${sourceItem.netId} -> $destContainer[$destSlot] destNetId=${destItem.netId}")
+    }
+
+    private fun sendLegacyMove(
+        session: OxRelaySession,
+        sourceContainerId: Int,
+        sourceSlot: Int,
+        sourceItem: ItemData,
+        destContainerId: Int,
+        destSlot: Int,
+        destItem: ItemData
+    ) {
+        val packet = InventoryTransactionPacket().apply {
+            transactionType = InventoryTransactionType.NORMAL
+            actions.add(InventoryActionData(InventorySource.fromContainerWindowId(sourceContainerId), sourceSlot, sourceItem, destItem))
+            actions.add(InventoryActionData(InventorySource.fromContainerWindowId(destContainerId), destSlot, destItem, sourceItem))
+        }
+        session.serverBound(packet)
+        OverlayLogger.d(TAG, "InventoryTransactionPacket (legacy) gönderildi: container=$sourceContainerId slot=$sourceSlot -> container=$destContainerId slot=$destSlot")
+    }
 
     fun sendSlotSwap(
         session: OxRelaySession,
