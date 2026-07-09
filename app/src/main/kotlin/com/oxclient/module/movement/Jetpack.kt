@@ -14,12 +14,11 @@ import kotlin.math.sin
 class Jetpack : BaseModule(
     name        = "Jetpack",
     category    = ModuleCategory.MOVEMENT,
-    description = "Zıplama tuşuna basılı tutulduğunda motion paketiyle yukarı itiş uygular"
+    description = "Zıplama tuşuna basılı tutulduğunda karakterin baktığı yöne doğru motion paketiyle itiş uygular"
 ) {
-    private val verticalSpeed   = float("Vertical Speed",   1.2f, 0.1f, 3.0f)
-    private val horizontalBoost = float("Horizontal Boost", 0.3f, 0.0f, 2.0f)
-    private val requireJump     = bool ("Require Jump",     true)
-    private val shortcut        = bool ("Shortcut",         false)
+    private val thrustSpeed = float("Thrust Speed", 1.2f, 0.1f, 3.0f)
+    private val requireJump = bool ("Require Jump", true)
+    private val shortcut    = bool ("Shortcut",     false)
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
@@ -32,24 +31,23 @@ class Jetpack : BaseModule(
 
         if (requireJump.value && !jumping) return
 
-        val inputX = pkt.motion.x
-        val inputZ = pkt.motion.y
-        val yaw    = Math.toRadians(pkt.rotation.y.toDouble()).toFloat()
-        val sinYaw = sin(yaw)
-        val cosYaw = cos(yaw)
+        // rotation.x = pitch (yukarı/aşağı bakış), rotation.y = yaw (sağ/sol bakış)
+        val pitch = Math.toRadians(pkt.rotation.x.toDouble()).toFloat()
+        val yaw   = Math.toRadians(pkt.rotation.y.toDouble()).toFloat()
 
-        val strafe  = inputX * horizontalBoost.value
-        val forward = inputZ * horizontalBoost.value
+        val cosPitch = cos(pitch)
 
-        val motionX = strafe * cosYaw - forward * sinYaw
-        val motionZ = forward * cosYaw + strafe * sinYaw
+        // Baktığın yöne dönük birim vektör (forward direction)
+        val dirX = -sin(yaw) * cosPitch
+        val dirY = -sin(pitch)
+        val dirZ = cos(yaw) * cosPitch
 
         val motionPacket = SetEntityMotionPacket().apply {
             runtimeEntityId = EntityTracker.selfRuntimeId
             motion = Vector3f.from(
-                motionX,
-                verticalSpeed.value,
-                motionZ
+                dirX * thrustSpeed.value,
+                dirY * thrustSpeed.value,
+                dirZ * thrustSpeed.value
             )
         }
 
