@@ -13,13 +13,10 @@ import org.cloudburstmc.protocol.bedrock.packet.UpdateSubChunkBlocksPacket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
-/**
- * WorldBlockTracker — gerçek dünya blok durumunu (obsidian/bedrock/air/vb.) takip eder.
- */
 object WorldBlockTracker : PacketEventBus.PacketListener {
 
     private const val TAG = "WorldBlockTracker"
-    private const val SECTION_BLOCKS = 4096 // 16*16*16
+    private const val SECTION_BLOCKS = 4096
 
     private val sections = ConcurrentHashMap<Long, IntArray>()
     private val insertOrder = ConcurrentLinkedQueue<Long>()
@@ -108,7 +105,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                 if (blocks == null) {
                     if (!loggedFirstFailure) {
                         loggedFirstFailure = true
-                        OverlayLogger.w(TAG, "SubChunk blok decode başarısız (pos=$pos) — format varsayımı yanlış olabilir")
+                        OverlayLogger.w(TAG, "SubChunk blok decode başarısız (pos=$pos)")
                     }
                     continue
                 }
@@ -127,11 +124,10 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     private fun handleLevelChunkPacket(p: LevelChunkPacket) {
         try {
-            // ✅ FIX: LevelChunkPacket'te alan adı 'subChunksLength'
             val subChunksLength = p.subChunksLength
-            if (subChunksLength <= 0) return // -1 veya 0 = modern akış
+            if (subChunksLength <= 0) return
 
-            val cachingEnabled = p.cachingEnabled
+            val cachingEnabled = p.isCachingEnabled()
             if (cachingEnabled) return
 
             val buf = p.data ?: return
