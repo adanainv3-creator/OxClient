@@ -66,16 +66,15 @@ object OverlayNotifier {
     }
 
     fun notifyLowHealth(health: Float) {
-        showWarning("❤ Düşük can: ${"%.1f".format(health)}")
+        showWarning("Dusuk can: ${"%.1f".format(health)}")
     }
 
     fun notifyModuleError(moduleName: String, reason: String) {
         showError("$moduleName hata: $reason")
-        OverlayLogger.e("OverlayNotifier", "$moduleName hata: $reason")
     }
 
     fun notifyRelay(connected: Boolean, host: String = "") {
-        if (connected) showInfo("✅ Relay bağlandı → $host")
-        else           showWarning("❌ Relay bağlantısı kesildi")
+        if (connected) showInfo("Relay baglandi: $host")
+        else           showWarning("Relay baglantisi kesildi")
     }
 }

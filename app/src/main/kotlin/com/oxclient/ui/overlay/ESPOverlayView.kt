@@ -10,10 +10,6 @@ import com.oxclient.module.visual.EnemyESP
 
 class ESPOverlayView(context: Context) : View(context) {
 
-    companion object {
-        private const val TAG = "ESPOverlayView"
-    }
-
     init {
         setLayerType(LAYER_TYPE_HARDWARE, null)
     }
@@ -32,29 +28,17 @@ class ESPOverlayView(context: Context) : View(context) {
 
         val esp = espModule
         if (esp != null && esp.isEnabled) {
-            try {
-                esp.render(canvas, width, height)
-            } catch (e: Exception) {
-                // silent
-            }
+            try { esp.render(canvas, width, height) } catch (_: Exception) {}
         }
 
         val enemyEsp = enemyEspModule
         if (enemyEsp != null && enemyEsp.isEnabled) {
-            try {
-                enemyEsp.render(canvas, width, height)
-            } catch (e: Exception) {
-                // silent
-            }
+            try { enemyEsp.render(canvas, width, height) } catch (_: Exception) {}
         }
 
         val arrayList = arrayListModule
         if (arrayList != null && arrayList.isEnabled) {
-            try {
-                arrayList.render(canvas, width, height)
-            } catch (e: Exception) {
-                // silent
-            }
+            try { arrayList.render(canvas, width, height) } catch (_: Exception) {}
         }
 
         postInvalidateOnAnimation()

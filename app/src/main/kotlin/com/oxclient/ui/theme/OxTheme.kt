@@ -5,34 +5,28 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// --- Core palette: dark graphite / steel blue. No purple, no pastel. ---
-val OxBackground     = Color(0xFF0A0C10)
-val OxSurface        = Color(0xFF12151B)
-val OxSurfaceVar     = Color(0xFF191D25)
-val OxSurfaceRaised  = Color(0xFF1F2430)
+val OxBackground     = Color(0xFF0E1020)
+val OxSurface        = Color(0xFF1E2340)
+val OxSurfaceVar     = Color(0xFF2D3561)
+val OxSurfaceRaised  = Color(0xFF3A4580)
 
-val OxAccent         = Color(0xFF3E6E9E)   // steel blue - main accent
-val OxAccentLight    = Color(0xFF5C8CBF)
-val OxAccentDark     = Color(0xFF1C3247)
+val OxAccent         = Color(0xFF4A5899)
+val OxAccentLight    = Color(0xFF6B7EC2)
+val OxAccentDark     = Color(0xFF1A1F3A)
 
-val OxOnBackground   = Color(0xFFE7EAEE)
-val OxOnSurface      = Color(0xFFA6ACB8)
-val OxOnSurfaceDim   = Color(0xFF6B7280)
+val OxOnBackground   = Color(0xFFDDE2F0)
+val OxOnSurface      = Color(0xFFB8C0D8)
+val OxOnSurfaceDim   = Color(0xFF6B7499)
 
-val OxOutline        = Color(0xFF272C36)
-val OxOutlineStrong  = Color(0xFF39404D)
+val OxOutline        = Color(0xFF2D3561)
+val OxOutlineStrong  = Color(0xFF3A4580)
 
 val OxError          = Color(0xFFB1423C)
 val OxSuccess        = Color(0xFF3F9A5B)
 val OxWarning        = Color(0xFFB8863B)
 
-// Idle-state fill for the pill-shaped Connect button (slate blue, matches
-// the reference mock).
-val OxConnectIdle    = Color(0xFF3D4A66)
+val OxConnectIdle    = Color(0xFF2D3561)
 
-// --- Legacy aliases kept only so older files (e.g. OverlayService.kt) still
-// --- compile without edits. They now point at the steel-blue palette above,
-// --- not an actual purple color.
 val OxPurple      = OxAccent
 val OxPurpleLight = OxAccentLight
 val OxPurpleDark  = OxAccentDark

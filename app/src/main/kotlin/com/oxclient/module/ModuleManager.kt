@@ -1,14 +1,11 @@
 package com.oxclient.module
 
-import android.util.Log
 import com.oxclient.core.relay.OxRelaySession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 object ModuleManager {
-
-    private const val TAG = "ModuleManager"
 
     private val _modules = mutableListOf<BaseModule>()
     val modules: List<BaseModule> get() = _modules
@@ -20,12 +17,10 @@ object ModuleManager {
 
     fun registerAll(vararg mods: BaseModule) {
         if (initialized) {
-            Log.w(TAG, "registerAll() zaten çağrıldı, atlanıyor")
             return
         }
         initialized = true
         _modules.addAll(mods)
-        Log.d(TAG, "${_modules.size} modül yüklendi")
     }
 
     fun register(vararg mods: BaseModule) = registerAll(*mods)
@@ -33,7 +28,6 @@ object ModuleManager {
     fun getAll(): List<BaseModule> = _modules
 
     fun registerToSession(session: OxRelaySession) {
-        Log.d(TAG, "registerToSession: ${_modules.count { it.isEnabled }} aktif modül PacketEventBus'ta")
     }
 
     fun shortcutModules(): List<BaseModule> =
@@ -45,7 +39,6 @@ object ModuleManager {
     fun toggle(module: BaseModule) {
         module.setEnabled(!module.isEnabled)
         _version.value++
-        Log.d(TAG, "${module.name} → ${module.isEnabled}")
     }
 
     fun enable(module: BaseModule) {
