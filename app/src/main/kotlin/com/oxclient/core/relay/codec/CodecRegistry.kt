@@ -1,23 +1,7 @@
 package com.oxclient.core.relay.codec
 
-import com.oxclient.ui.overlay.OverlayLogger
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 
-/**
- * CodecRegistry — wclient'in CodecRegistry.kt'sinden taşındı.
- *
- * OxRelay'in eski yaklaşımı (sabit 15 candidate, ilk bulunanı al) yerine:
- * tüm bilinen protokol versiyonlarını yükler, sıralı tutar ve
- * tam eşleşme yoksa "en yakın küçük" versiyona fallback yapar.
- *
- * NOT: 924/935/948/975 etiketleri (Minecraft sürüm string'i) yaklaşık/kozmetiktir
- * — sadece log/debug amaçlı. Asıl doğru protocolVersion/minecraftVersion bilgisi
- * her zaman yüklenen CODEC sınıfının kendisinden gelir (reflection ile alınan
- * gerçek alan), bu registry sadece hangi sınıfı yükleyeceğine karar verir.
- * Eğer bu 4 yeni versiyon senin bağımlı olduğun
- * org.cloudburstmc.protocol:bedrock-codec:3.0.0.Beta6-SNAPSHOT içinde yoksa,
- * registerCodec() sessizce atlar — relay diğer versiyonlarla çalışmaya devam eder.
- */
 object CodecRegistry {
 
     private const val TAG = "CodecRegistry"
@@ -31,7 +15,6 @@ object CodecRegistry {
     }
 
     private fun registerAllCodecs() {
-        // ── wclient CodecRegistry ile birebir aynı aralık (1.2.0 → 1.21.130) ──
         registerCodec(291, "1.2.0", "org.cloudburstmc.protocol.bedrock.codec.v291.Bedrock_v291")
         registerCodec(313, "1.2.10", "org.cloudburstmc.protocol.bedrock.codec.v313.Bedrock_v313")
         registerCodec(332, "1.4.0", "org.cloudburstmc.protocol.bedrock.codec.v332.Bedrock_v332")
@@ -90,19 +73,11 @@ object CodecRegistry {
         registerCodec(860, "1.21.124", "org.cloudburstmc.protocol.bedrock.codec.v860.Bedrock_v860")
         registerCodec(898, "1.21.130", "org.cloudburstmc.protocol.bedrock.codec.v898.Bedrock_v898")
 
-        // ── OxClient'in eski candidate listesinde olan, wclient'te olmayan daha
-        //    yeni sürümler — MC sürüm etiketleri yaklaşıktır, bkz. üstteki not.
-        // NOT: 935 ve 948 vendored kaynakta (relay/Protocol/bedrock-codec) hiç
-        // bulunmuyor — o yüzden buradan kaldırıldı (zaten sessizce atlanıyordu).
-        // 944 ise 2b2tpe.org'un istediği TAM protokol ve artık vendored kaynakta
-        // mevcut (Bedrock_v944.java doğrulandı) — bu satır kritik fix.
         registerCodec(924, "1.21.140~", "org.cloudburstmc.protocol.bedrock.codec.v924.Bedrock_v924")
         registerCodec(944, "1.21.150~", "org.cloudburstmc.protocol.bedrock.codec.v944.Bedrock_v944")
         registerCodec(975, "26.23~", "org.cloudburstmc.protocol.bedrock.codec.v975.Bedrock_v975")
 
         sortedProtocolVersions.sortDescending()
-
-        OverlayLogger.i(TAG, "CodecRegistry hazır: ${sortedProtocolVersions.size} codec yüklendi (${sortedProtocolVersions.lastOrNull()}–${sortedProtocolVersions.firstOrNull()})")
     }
 
     private fun registerCodec(protocolVersion: Int, minecraftVersionLabel: String, className: String) {
@@ -115,23 +90,12 @@ object CodecRegistry {
             codecMap[protocolVersion] = codec
             minecraftVersionMap[minecraftVersionLabel] = protocolVersion
             sortedProtocolVersions.add(protocolVersion)
-
-            OverlayLogger.d(TAG, "Codec kaydedildi: $minecraftVersionLabel (protocol=$protocolVersion)")
         } catch (e: Throwable) {
-            // Beklenen durum: bu artifact'ta bu versiyon henüz/artık yok — sessizce atla.
-            OverlayLogger.v(TAG, "Codec yok, atlandı: $minecraftVersionLabel (protocol=$protocolVersion) — ${e.message}")
         }
     }
 
-    /** Tam eşleşme varsa onu, yoksa null döner. */
     fun getCodecByProtocol(protocolVersion: Int): BedrockCodec? = codecMap[protocolVersion]
 
-    /**
-     * Tam eşleşme yoksa, talep edilenden küçük en yakın versiyonu döner.
-     * Hiçbiri uygun değilse (talep edilen, kayıtlı en küçükten de küçükse)
-     * kayıtlı en eski versiyona düşer. Hiç codec yüklenmemişse hata fırlatır
-     * (bu durumda zaten relay hiçbir protokolle çalışamaz).
-     */
     fun getClosestCodec(protocolVersion: Int): BedrockCodec {
         codecMap[protocolVersion]?.let { return it }
 
@@ -145,7 +109,6 @@ object CodecRegistry {
         return codecMap[closest]!!
     }
 
-    /** Kayıtlı en yüksek protokol versiyonuna sahip codec. */
     fun getLatestCodec(): BedrockCodec {
         check(sortedProtocolVersions.isNotEmpty()) {
             "Hiçbir Bedrock codec yüklenemedi — bedrock-codec dependency'sini kontrol et"

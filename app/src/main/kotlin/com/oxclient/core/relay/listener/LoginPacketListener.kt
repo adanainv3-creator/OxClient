@@ -1,1 +1,321 @@
-package com.oxclient.core.relay.listenerimport android.util.Base64import com.oxclient.ui.overlay.OverlayLoggerimport com.oxclient.auth.MicrosoftAuthManagerimport com.oxclient.core.relay.ClientIdentificationimport com.oxclient.core.relay.ConnectionManagerimport com.oxclient.core.relay.OxRelaySessionimport org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithmimport org.cloudburstmc.protocol.bedrock.data.auth.AuthPayloadimport org.cloudburstmc.protocol.bedrock.data.auth.AuthTypeimport org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayloadimport org.cloudburstmc.protocol.bedrock.data.auth.TokenPayloadimport org.cloudburstmc.protocol.bedrock.packet.*import org.json.JSONArrayimport org.json.JSONObjectimport java.math.BigIntegerimport java.security.*import java.security.interfaces.ECPrivateKeyimport java.security.interfaces.ECPublicKeyimport java.security.spec.ECGenParameterSpecclass LoginPacketListener : OxPacketListener {    companion object {        private const val TAG = "LoginPacketListener"    }    override val priority: Int = 0    @Volatile var clientIdentification: ClientIdentification? = null        private set    @Volatile private var loginProcessed = false    @Volatile private var pendingLogin  : LoginPacket? = null    @Volatile private var loginSentAtMs : Long = 0L    private val resignClientJwtEnabled = true    override fun onSessionStart(session: OxRelaySession) {        OverlayLogger.d(TAG, "onSessionStart — server bağlandı")        ConnectionManager.onHandshaking()    }    override fun onSessionEnd(session: OxRelaySession) {        pendingLogin = null        loginSentAtMs = 0L        ConnectionManager.onDisconnected()    }    override fun onClientPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {        when (packet) {            is RequestNetworkSettingsPacket -> {                OverlayLogger.d(TAG, "RequestNetworkSettings geçti — protocol=${packet.protocolVersion}")            }            is LoginPacket -> {                if (loginProcessed) {                    OverlayLogger.w(TAG, "Tekrarlanan Login engellendi")                    return false                }                loginProcessed = true                OverlayLogger.i(TAG, "Login alındı — server bağlantısı başlatılıyor")                val chainJson = extractChainJson(packet)                val extraJson = extractExtraJson(packet)                try {                    clientIdentification = ClientIdentification.fromLogin(chainJson, extraJson)                    OverlayLogger.i(TAG, "Client: $clientIdentification")                } catch (e: Exception) {                    OverlayLogger.w(TAG, "ClientIdentification parse hatası: ${e.message}")                }                injectAuthChain(packet, session)                pendingLogin = packet                session.connectToServer {                    OverlayLogger.i(TAG, "Server hazır — RequestNetworkSettings gönderiliyor")                    val reqNet = RequestNetworkSettingsPacket().apply {                        protocolVersion = session.activeCodec.protocolVersion                    }                    session.sendToServer(reqNet)                }                return false            }            is ClientToServerHandshakePacket -> {                // Client'tan gelen Handshake'i server'a iletme — relay zaten kendi                // ClientToServerHandshakePacket'ini gönderdi (enableEncryption içinde).                OverlayLogger.d(TAG, "ClientToServerHandshake (client'tan) — engellendi, relay zaten gönderdi")                return false            }        }        return true    }    override fun onServerPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {        when (packet) {            is NetworkSettingsPacket -> {                OverlayLogger.d(TAG, "Server NetworkSettings: algo=${packet.compressionAlgorithm} threshold=${packet.compressionThreshold}")                try {                    val algo = if (packet.compressionThreshold > 0)                        packet.compressionAlgorithm                    else                        PacketCompressionAlgorithm.NONE                    session.serverSession?.setCompression(algo)                    OverlayLogger.i(TAG, "Server compression: $algo")                } catch (e: Exception) {                    OverlayLogger.w(TAG, "Server compression ayarlanamadı: ${e.message}")                }                val login = pendingLogin                if (login != null) {                    OverlayLogger.i(TAG, "Login server'a gönderiliyor")                    loginSentAtMs = System.currentTimeMillis()                    session.sendToServer(login)                    pendingLogin = null                } else {                    OverlayLogger.e(TAG, "HATA: pendingLogin null — Login kaybedildi!")                    session.disconnect("Login paketi kayboldu")                }                return false            }            is ServerToClientHandshakePacket -> {                OverlayLogger.d(TAG, "ServerToClientHandshake alındı")                try {                    enableEncryption(packet, session)                } catch (e: Exception) {                    OverlayLogger.w(TAG, "Şifreleme başarısız (devam ediliyor): ${e.message}")                    session.sendToServer(ClientToServerHandshakePacket())                }                // KRİTİK: client'a iletme — client şifrelemeyi açmasın.                // Relay↔Server şifreli, Client↔Relay şifresiz çalışır.                // Client'a iletilirse: client yanlış key'le şifreleme açar →                // sonraki client paketleri relay'de decode edilemez → timeout.                return false            }            is PlayStatusPacket -> {                OverlayLogger.d(TAG, "PlayStatus: ${packet.status}")                when (packet.status) {                    PlayStatusPacket.Status.LOGIN_SUCCESS -> {                        OverlayLogger.i(TAG, "Login başarılı ✓")                        ConnectionManager.onHandshaking()                    }                    PlayStatusPacket.Status.PLAYER_SPAWN -> {                        OverlayLogger.i(TAG, "Oyuncu spawn ✓")                        ConnectionManager.onGameStarted()                    }                    else -> {                        if (packet.status.name.contains("FAIL", ignoreCase = true))                            OverlayLogger.e(TAG, "Login BAŞARISIZ: ${packet.status}")                    }                }            }            is StartGamePacket -> {                OverlayLogger.i(TAG, "StartGame → oyun içi")                ConnectionManager.onGameStarted()            }            is DisconnectPacket -> {                val elapsed = if (loginSentAtMs > 0) System.currentTimeMillis() - loginSentAtMs else -1L                OverlayLogger.w(TAG, "Server Disconnect: ${packet.kickMessage}")                try {                    OverlayLogger.w(TAG, "  ↳ raw alanlar: reason=${packet.reason} hideDisconnectionScreen=${packet.isMessageSkipped}")                } catch (e: Exception) {                    OverlayLogger.d(TAG, "  ↳ ek DisconnectPacket alanları okunamadı: ${e.message}")                }                if (elapsed in 0..5000) {                    OverlayLogger.e(TAG, "↳ Login gönderildikten ${elapsed}ms sonra disconnect — sunucu LoginPacket/authPayload/clientJwt doğrulamasında reddetti.")                    OverlayLogger.e(TAG, "↳ Kontrol sırası: 1) chain[0] anahtar tutarlılığı  2) JWT exp/nbf süresi  3) clientJwt imzası  4) ServerAddress/DeviceId alanları")                } else if (elapsed > 5000) {                    OverlayLogger.w(TAG, "↳ Login'den ${elapsed}ms sonra disconnect — muhtemelen auth sonrası bir aşamada")                }                loginSentAtMs = 0L            }        }        return true    }    private fun enableEncryption(packet: ServerToClientHandshakePacket, session: OxRelaySession) {        val jwt    = packet.jwt ?: throw IllegalStateException("JWT null")        val parts  = jwt.split(".")        require(parts.size == 3) { "Geçersiz JWT format" }        val decoder     = java.util.Base64.getUrlDecoder()        val headerJson  = JSONObject(String(decoder.decode(parts[0])))        val payloadJson = JSONObject(String(decoder.decode(parts[1])))        val x5u  = headerJson.getString("x5u")        val salt = java.util.Base64.getDecoder().decode(payloadJson.getString("salt"))        val serverPubKey = org.cloudburstmc.protocol.bedrock.util.EncryptionUtils.parseKey(x5u)        val privateKey   = MicrosoftAuthManager.getPrivateKeyForEncryption()            ?: throw IllegalStateException("Encryption private key yok")        val secretKey = org.cloudburstmc.protocol.bedrock.util.EncryptionUtils            .getSecretKey(privateKey, serverPubKey, salt)        session.serverSession?.enableEncryption(secretKey)        OverlayLogger.i(TAG, "Server şifreleme aktif ✓")        session.sendToServer(ClientToServerHandshakePacket())    }    private fun injectAuthChain(packet: LoginPacket, session: OxRelaySession) {        val savedChain = MicrosoftAuthManager.getActiveChainForRelay()        if (savedChain.isNullOrBlank()) {            OverlayLogger.w(TAG, "Kayıtlı chain yok — offline mod (orijinal authPayload iletiliyor)")            return        }        val privKeyB64 = MicrosoftAuthManager.getActivePrivateKeyForRelay()        if (privKeyB64.isNullOrBlank()) {            OverlayLogger.e(TAG, "Kayıtlı private key yok — chain enjeksiyonu atlandı")            return        }        val pubKeyB64 = MicrosoftAuthManager.getActivePublicKeyForRelay()        if (pubKeyB64.isNullOrBlank()) {            OverlayLogger.e(TAG, "Kayıtlı public key yok — chain enjeksiyonu atlandı")            return        }        OverlayLogger.d(TAG, "injectAuthChain başladı — hedef=${session.remoteHost}:${session.remotePort}")        OverlayLogger.d(TAG, "  pubKeyB64  (ilk 32) = ${pubKeyB64.take(32)}…  (len=${pubKeyB64.length})")        OverlayLogger.d(TAG, "  privKeyB64 (ilk 16) = ${privKeyB64.take(16)}…  (len=${privKeyB64.length})")        try {            val savedJwts = parseSavedChain(savedChain)            if (savedJwts.isEmpty()) {                OverlayLogger.e(TAG, "Kayıtlı chain boş/parse edilemedi — enjeksiyon atlandı")                return            }            logChainDiagnostics(savedJwts, pubKeyB64)            packet.authPayload = CertificateChainPayload(savedJwts, AuthType.FULL)            OverlayLogger.i(TAG, "Chain enjekte edildi [authPayload]: ${savedJwts.size} JWT (orijinal, değiştirilmeden), authType=FULL")            val originalClientJwt = packet.clientJwt            if (!originalClientJwt.isNullOrBlank()) {                OverlayLogger.d(TAG, "── clientJwt (ORİJİNAL, client'tan geldi) ──")                logClientJwtFields(originalClientJwt)                if (!resignClientJwtEnabled) {                    OverlayLogger.w(TAG, "★ DEBUG: resignClientJwtEnabled=false — clientJwt DOKUNULMADAN gönderiliyor")                } else {                    val resigned = resignClientJwt(originalClientJwt, privKeyB64, pubKeyB64, session)                    if (resigned != null) {                        packet.clientJwt = resigned                        OverlayLogger.i(TAG, "clientJwt yeniden imzalandı ✓ (chain key'i ile)")                        OverlayLogger.d(TAG, "── clientJwt (YENİDEN İMZALANMIŞ, sunucuya gidecek) ──")                        logClientJwtFields(resigned)                    } else {                        OverlayLogger.e(TAG, "clientJwt yeniden imzalanamadı — login muhtemelen reddedilecek")                    }                }            } else {                OverlayLogger.w(TAG, "clientJwt boş — skin data yok")            }        } catch (e: Exception) {            OverlayLogger.e(TAG, "Chain inject hatası: ${e.message}", e)        }    }    private fun decodeJwtPart(b64UrlPart: String): JSONObject? = try {        val padded = b64UrlPart + "=".repeat((4 - b64UrlPart.length % 4) % 4)        val bytes  = Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP)        JSONObject(String(bytes, Charsets.UTF_8))    } catch (e: Exception) {        OverlayLogger.w(TAG, "JWT parça decode edilemedi: ${e.message}")        null    }    private fun logChainDiagnostics(chainJwts: List<String>, expectedPubKeyB64: String) {        val nowSec = System.currentTimeMillis() / 1000L        OverlayLogger.i(TAG, "── Chain diagnostiği (${chainJwts.size} JWT) ──")        chainJwts.forEachIndexed { idx, jwt ->            val parts = jwt.split(".")            if (parts.size != 3) {                OverlayLogger.e(TAG, "  [$idx] geçersiz JWT formatı (${parts.size} parça, beklenen 3)")                return@forEachIndexed            }            val header  = decodeJwtPart(parts[0])            val payload = decodeJwtPart(parts[1])            val alg     = header?.optString("alg") ?: "?"            val x5u     = header?.optString("x5u")?.takeIf { it.isNotBlank() }            val certAuthority  = payload?.optBoolean("certificateAuthority", false) ?: false            val identityPubKey = payload?.optString("identityPublicKey")?.takeIf { it.isNotBlank() }            val extraDataObj   = payload?.optJSONObject("extraData")            val hasExtraData   = extraDataObj != null            val xuid = extraDataObj?.optString("XUID")            val displayName = extraDataObj?.optString("displayName")            val identityUuid = extraDataObj?.optString("identity")            val titleId = extraDataObj?.optString("titleId")            val sandboxId = extraDataObj?.optString("sandboxId")            val exp = payload?.optLong("exp", -1L) ?: -1L            val nbf = payload?.optLong("nbf", -1L) ?: -1L            val iat = payload?.optLong("iat", -1L) ?: -1L            val expStatus = when {                exp < 0      -> "yok"                exp < nowSec -> "★ SÜRESİ DOLMUŞ (${nowSec - exp}s önce) ★"                else         -> "geçerli (${exp - nowSec}s kaldı)"            }            val nbfStatus = if (nbf > 0 && nbf > nowSec) "★ HENÜZ BAŞLAMADI (${nbf - nowSec}s sonra) ★" else "ok"            OverlayLogger.i(TAG, "  [$idx] alg=$alg certAuthority=$certAuthority extraData=$hasExtraData" +                if (hasExtraData) " xuid=${xuid ?: "-"} name=${displayName ?: "-"}" else "")            OverlayLogger.i(TAG, "        exp=$expStatus nbf=$nbfStatus iat=$iat x5u=${x5u?.take(28) ?: "-"}…")            if (hasExtraData) {                OverlayLogger.i(TAG, "        extraData.identity(UUID)=${identityUuid ?: "★ YOK/BOŞ ★"} " +                    "titleId=${titleId ?: "-"} sandboxId=${sandboxId ?: "-"}")                if (identityUuid.isNullOrBlank()) {                    OverlayLogger.e(TAG, "        ↳ ★★★ extraData.identity (UUID) EKSİK/BOŞ ★★★")                } else {                    val uuidRegex = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")                    if (!uuidRegex.matches(identityUuid)) {                        OverlayLogger.e(TAG, "        ↳ ★★★ extraData.identity GEÇERLİ BİR UUID DEĞİL: '$identityUuid' ★★★")                    }                }            }            if (exp in 1 until nowSec) {                OverlayLogger.e(TAG, "        ↳ BU JWT SÜRESİ DOLMUŞ — sunucu chain'i tamamen reddedebilir!")            }            if (idx == 0) {                when {                    identityPubKey == null ->                        OverlayLogger.e(TAG, "        ↳ chain[0].identityPublicKey YOK — self-signed sertifika eksik!")                    identityPubKey == expectedPubKeyB64 ->                        OverlayLogger.i(TAG, "        ↳ chain[0].identityPublicKey ✓ kayıtlı pubKeyB64 ile eşleşiyor")                    else -> {                        OverlayLogger.e(TAG, "        ↳ ★★★ ANAHTAR UYUŞMUYOR ★★★ chain[0].identityPublicKey ≠ kayıtlı pubKeyB64")                        OverlayLogger.e(TAG, "          chain[0] : ${identityPubKey.take(40)}…")                        OverlayLogger.e(TAG, "          kayıtlı  : ${expectedPubKeyB64.take(40)}…")                    }                }            }            if (idx == chainJwts.lastIndex && hasExtraData) {                when {                    identityPubKey == null ->                        OverlayLogger.e(TAG, "        ↳ chain[SON].identityPublicKey YOK")                    identityPubKey == expectedPubKeyB64 ->                        OverlayLogger.i(TAG, "        ↳ chain[SON].identityPublicKey ✓ clientJwt'yi imzaladığımız pubKeyB64 ile eşleşiyor")                    else -> {                        OverlayLogger.e(TAG, "        ↳ ★★★★★ ASIL SORUN BURADA OLABİLİR ★★★★★")                        OverlayLogger.e(TAG, "          chain[SON].identityPublicKey ≠ resignClientJwt'de kullanılan pubKeyB64")                        OverlayLogger.e(TAG, "          chain[SON] : ${identityPubKey.take(40)}…")                        OverlayLogger.e(TAG, "          kullanılan : ${expectedPubKeyB64.take(40)}…")                    }                }            }        }    }    private fun logClientJwtFields(jwt: String) {        val parts = jwt.split(".")        if (parts.size != 3) {            OverlayLogger.e(TAG, "  clientJwt formatı geçersiz (${parts.size} parça)")            return        }        val header  = decodeJwtPart(parts[0])        val payload = decodeJwtPart(parts[1])        OverlayLogger.d(TAG, "  header.alg=${header?.optString("alg")} x5u=${header?.optString("x5u")?.take(28)}…")        if (payload == null) {            OverlayLogger.w(TAG, "  payload decode edilemedi")            return        }        listOf(            "ServerAddress", "DeviceId", "DeviceOS", "ClientRandomId", "SelfSignedId",            "GameVersion", "PlayFabId", "ThirdPartyName", "LanguageCode",            "CurrentInputMode", "DefaultInputMode", "UIProfile"        ).forEach { key ->            if (payload.has(key)) OverlayLogger.d(TAG, "  $key = ${payload.opt(key)}")        }        OverlayLogger.d(TAG, "  (payload toplam alan sayısı = ${payload.length()})")        if (payload.has("PlayFabId")) {            OverlayLogger.w(TAG, "  ↳ PlayFabId mevcut AMA hesabın gerçek kimliğine bağlı DEĞİL")        }    }    private fun parseSavedChain(json: String): List<String> = try {        when {            json.trimStart().startsWith("{") -> {                val arr = JSONObject(json).optJSONArray("chain")                if (arr != null) (0 until arr.length()).map { arr.getString(it) }                else emptyList()            }            json.trimStart().startsWith("[") -> {                val arr = JSONArray(json)                (0 until arr.length()).map { arr.getString(it) }            }            else -> listOf(json)        }    } catch (e: Exception) {        OverlayLogger.w(TAG, "Chain parse hatası: ${e.message}")        emptyList()    }    private fun buildDeviceJwt(priv: ECPrivateKey, pubB64: String): String {        val now     = System.currentTimeMillis() / 1000L        val header  = b64Url("""{"alg":"ES384","x5u":"$pubB64"}""".toByteArray())        val payload = b64Url(            ("""{"certificateAuthority":true,"identityPublicKey":"$pubB64",""" +             """"exp":${now + 86400},"nbf":${now - 1},"iat":$now,"iss":"Minecraft"}""")                .toByteArray()        )        val data = "$header.$payload"        val sig  = Signature.getInstance("SHA384withECDSA").apply {            initSign(priv)            update(data.toByteArray(Charsets.US_ASCII))        }.sign()        return "$data.${b64Url(derToRaw(sig))}"    }    private fun derToRaw(der: ByteArray): ByteArray {        var i = 2        i++        val rLen = der[i++].toInt() and 0xFF        val r = der.copyOfRange(i, i + rLen)        i += rLen        i++        val sLen = der[i++].toInt() and 0xFF        val s = der.copyOfRange(i, i + sLen)        return pad48(BigInteger(1, r).toByteArray()) + pad48(BigInteger(1, s).toByteArray())    }    private fun pad48(b: ByteArray): ByteArray = when {        b.size == 48 -> b        b.size >  48 -> b.copyOfRange(b.size - 48, b.size)        else         -> ByteArray(48 - b.size) + b    }    private fun resignClientJwt(originalClientJwt: String, privKeyB64: String, pubKeyB64: String, session: OxRelaySession): String? {        try {            val parts = originalClientJwt.split(".")            if (parts.size != 3) {                OverlayLogger.e(TAG, "clientJwt formatı geçersiz (3 parça bekleniyor, ${parts.size} bulundu)")                return null            }            val payloadJson = try {                val padded  = parts[1] + "=".repeat((4 - parts[1].length % 4) % 4)                val decoded = String(Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)                val obj = JSONObject(decoded)                val oldServerAddress = obj.optString("ServerAddress", "-")                val oldDeviceId      = obj.optString("DeviceId", "-")                val newServerAddress = "${session.remoteHost}:${session.remotePort}"                val newDeviceId      = java.util.UUID.randomUUID().toString()                obj.put("ServerAddress", newServerAddress)                obj.put("DeviceId", newDeviceId)                if (obj.has("PlayFabId")) {                    obj.remove("PlayFabId")                }                OverlayLogger.i(TAG, "  ServerAddress override: '$oldServerAddress' → '$newServerAddress'")                OverlayLogger.i(TAG, "  DeviceId override     : '$oldDeviceId' → '$newDeviceId'")                b64Url(obj.toString().toByteArray(Charsets.UTF_8))            } catch (e: Exception) {                OverlayLogger.w(TAG, "clientJwt payload override edilemedi, ORİJİNAL payload kullanılıyor: ${e.message}")                parts[1]            }            val keyBytes = Base64.decode(privKeyB64, Base64.NO_WRAP)            val privKey  = KeyFactory.getInstance("EC")                .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes)) as ECPrivateKey            val header = b64Url("""{"alg":"ES384","x5u":"$pubKeyB64"}""".toByteArray())            val data   = "$header.$payloadJson"            val sig    = Signature.getInstance("SHA384withECDSA").apply {                initSign(privKey)                update(data.toByteArray(Charsets.US_ASCII))            }.sign()            return "$data.${b64Url(derToRaw(sig))}"        } catch (e: Exception) {            OverlayLogger.e(TAG, "clientJwt yeniden imzalama hatası: ${e.message}", e)            return null        }    }    private fun b64Url(data: ByteArray) =        Base64.encodeToString(data, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)    private fun extractChainJson(packet: LoginPacket): String = try {        when (val auth = packet.authPayload) {            is CertificateChainPayload -> JSONObject().apply {                put("chain", JSONArray(auth.chain))            }.toString()            is TokenPayload -> JSONObject().apply {                put("token", auth.token)            }.toString()            else -> "{}"        }    } catch (_: Exception) { "{}" }    private fun extractExtraJson(packet: LoginPacket): String = try {        packet.clientJwt ?: ""    } catch (_: Exception) { "" }}
+package com.oxclient.core.relay.listener
+import android.util.Base64
+import com.oxclient.auth.MicrosoftAuthManager
+import com.oxclient.core.relay.ClientIdentification
+import com.oxclient.core.relay.ConnectionManager
+import com.oxclient.core.relay.OxRelaySession
+import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
+import org.cloudburstmc.protocol.bedrock.data.auth.AuthPayload
+import org.cloudburstmc.protocol.bedrock.data.auth.AuthType
+import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload
+import org.cloudburstmc.protocol.bedrock.data.auth.TokenPayload
+import org.cloudburstmc.protocol.bedrock.packet.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.math.BigInteger
+import java.security.*
+import java.security.interfaces.ECPrivateKey
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECGenParameterSpec
+
+class LoginPacketListener : OxPacketListener {
+
+    companion object {
+        private const val TAG = "LoginPacketListener"
+    }
+
+    override val priority: Int = 0
+
+    @Volatile var clientIdentification: ClientIdentification? = null
+        private set
+
+    @Volatile private var loginProcessed = false
+    @Volatile private var pendingLogin  : LoginPacket? = null
+    @Volatile private var loginSentAtMs : Long = 0L
+
+    private val resignClientJwtEnabled = true
+
+    override fun onSessionStart(session: OxRelaySession) {
+        ConnectionManager.onHandshaking()
+    }
+
+    override fun onSessionEnd(session: OxRelaySession) {
+        pendingLogin = null
+        loginSentAtMs = 0L
+        ConnectionManager.onDisconnected()
+    }
+
+    override fun onClientPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
+        when (packet) {
+            is RequestNetworkSettingsPacket -> {
+            }
+
+            is LoginPacket -> {
+                if (loginProcessed) {
+                    return false
+                }
+                loginProcessed = true
+
+                val chainJson = extractChainJson(packet)
+                val extraJson = extractExtraJson(packet)
+                try {
+                    clientIdentification = ClientIdentification.fromLogin(chainJson, extraJson)
+                } catch (e: Exception) {
+                }
+
+                injectAuthChain(packet, session)
+                pendingLogin = packet
+
+                session.connectToServer {
+                    val reqNet = RequestNetworkSettingsPacket().apply {
+                        protocolVersion = session.activeCodec.protocolVersion
+                    }
+                    session.sendToServer(reqNet)
+                }
+
+                return false
+            }
+
+            is ClientToServerHandshakePacket -> {
+                return false
+            }
+        }
+        return true
+    }
+
+    override fun onServerPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
+        when (packet) {
+            is NetworkSettingsPacket -> {
+                try {
+                    val algo = if (packet.compressionThreshold > 0)
+                        packet.compressionAlgorithm
+                    else
+                        PacketCompressionAlgorithm.NONE
+
+                    session.serverSession?.setCompression(algo)
+                } catch (e: Exception) {
+                }
+
+                val login = pendingLogin
+                if (login != null) {
+                    loginSentAtMs = System.currentTimeMillis()
+                    session.sendToServer(login)
+                    pendingLogin = null
+                } else {
+                    session.disconnect("Login paketi kayboldu")
+                }
+
+                return false
+            }
+
+            is ServerToClientHandshakePacket -> {
+                try {
+                    enableEncryption(packet, session)
+                } catch (e: Exception) {
+                    session.sendToServer(ClientToServerHandshakePacket())
+                }
+                return false
+            }
+
+            is PlayStatusPacket -> {
+                when (packet.status) {
+                    PlayStatusPacket.Status.LOGIN_SUCCESS -> {
+                        ConnectionManager.onHandshaking()
+                    }
+                    PlayStatusPacket.Status.PLAYER_SPAWN -> {
+                        ConnectionManager.onGameStarted()
+                    }
+                    else -> {
+                    }
+                }
+            }
+
+            is StartGamePacket -> {
+                ConnectionManager.onGameStarted()
+            }
+
+            is DisconnectPacket -> {
+                loginSentAtMs = 0L
+            }
+        }
+        return true
+    }
+
+    private fun enableEncryption(packet: ServerToClientHandshakePacket, session: OxRelaySession) {
+        val jwt    = packet.jwt ?: throw IllegalStateException("JWT null")
+        val parts  = jwt.split(".")
+        require(parts.size == 3) { "Geçersiz JWT format" }
+
+        val decoder     = java.util.Base64.getUrlDecoder()
+        val headerJson  = JSONObject(String(decoder.decode(parts[0])))
+        val payloadJson = JSONObject(String(decoder.decode(parts[1])))
+
+        val x5u  = headerJson.getString("x5u")
+        val salt = java.util.Base64.getDecoder().decode(payloadJson.getString("salt"))
+
+        val serverPubKey = org.cloudburstmc.protocol.bedrock.util.EncryptionUtils.parseKey(x5u)
+        val privateKey   = MicrosoftAuthManager.getPrivateKeyForEncryption()
+            ?: throw IllegalStateException("Encryption private key yok")
+
+        val secretKey = org.cloudburstmc.protocol.bedrock.util.EncryptionUtils
+            .getSecretKey(privateKey, serverPubKey, salt)
+
+        session.serverSession?.enableEncryption(secretKey)
+
+        session.sendToServer(ClientToServerHandshakePacket())
+    }
+
+    private fun injectAuthChain(packet: LoginPacket, session: OxRelaySession) {
+        val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
+        if (savedChain.isNullOrBlank()) {
+            return
+        }
+
+        val privKeyB64 = MicrosoftAuthManager.getActivePrivateKeyForRelay()
+        if (privKeyB64.isNullOrBlank()) {
+            return
+        }
+
+        val pubKeyB64 = MicrosoftAuthManager.getActivePublicKeyForRelay()
+        if (pubKeyB64.isNullOrBlank()) {
+            return
+        }
+
+        try {
+            val savedJwts = parseSavedChain(savedChain)
+            if (savedJwts.isEmpty()) {
+                return
+            }
+
+            packet.authPayload = CertificateChainPayload(savedJwts, AuthType.FULL)
+
+            val originalClientJwt = packet.clientJwt
+            if (!originalClientJwt.isNullOrBlank()) {
+                if (resignClientJwtEnabled) {
+                    val resigned = resignClientJwt(originalClientJwt, privKeyB64, pubKeyB64, session)
+                    if (resigned != null) {
+                        packet.clientJwt = resigned
+                    }
+                }
+            }
+
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun parseSavedChain(json: String): List<String> = try {
+        when {
+            json.trimStart().startsWith("{") -> {
+                val arr = JSONObject(json).optJSONArray("chain")
+                if (arr != null) (0 until arr.length()).map { arr.getString(it) }
+                else emptyList()
+            }
+            json.trimStart().startsWith("[") -> {
+                val arr = JSONArray(json)
+                (0 until arr.length()).map { arr.getString(it) }
+            }
+            else -> listOf(json)
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun buildDeviceJwt(priv: ECPrivateKey, pubB64: String): String {
+        val now     = System.currentTimeMillis() / 1000L
+        val header  = b64Url("""{"alg":"ES384","x5u":"$pubB64"}""".toByteArray())
+        val payload = b64Url(
+            ("""{"certificateAuthority":true,"identityPublicKey":"$pubB64",""" +
+             """"exp":${now + 86400},"nbf":${now - 1},"iat":$now,"iss":"Minecraft"}""")
+                .toByteArray()
+        )
+        val data = "$header.$payload"
+        val sig  = Signature.getInstance("SHA384withECDSA").apply {
+            initSign(priv)
+            update(data.toByteArray(Charsets.US_ASCII))
+        }.sign()
+
+        return "$data.${b64Url(derToRaw(sig))}"
+    }
+
+    private fun derToRaw(der: ByteArray): ByteArray {
+        var i = 2
+        i++
+        val rLen = der[i++].toInt() and 0xFF
+        val r = der.copyOfRange(i, i + rLen)
+        i += rLen
+        i++
+        val sLen = der[i++].toInt() and 0xFF
+        val s = der.copyOfRange(i, i + sLen)
+
+        return pad48(BigInteger(1, r).toByteArray()) + pad48(BigInteger(1, s).toByteArray())
+    }
+
+    private fun pad48(b: ByteArray): ByteArray = when {
+        b.size == 48 -> b
+        b.size >  48 -> b.copyOfRange(b.size - 48, b.size)
+        else         -> ByteArray(48 - b.size) + b
+    }
+
+    private fun resignClientJwt(originalClientJwt: String, privKeyB64: String, pubKeyB64: String, session: OxRelaySession): String? {
+        try {
+            val parts = originalClientJwt.split(".")
+            if (parts.size != 3) {
+                return null
+            }
+
+            val payloadJson = try {
+                val padded  = parts[1] + "=".repeat((4 - parts[1].length % 4) % 4)
+                val decoded = String(Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP), Charsets.UTF_8)
+                val obj = JSONObject(decoded)
+
+                val newServerAddress = "${session.remoteHost}:${session.remotePort}"
+                val newDeviceId      = java.util.UUID.randomUUID().toString()
+
+                obj.put("ServerAddress", newServerAddress)
+                obj.put("DeviceId", newDeviceId)
+
+                if (obj.has("PlayFabId")) {
+                    obj.remove("PlayFabId")
+                }
+
+                b64Url(obj.toString().toByteArray(Charsets.UTF_8))
+            } catch (e: Exception) {
+                parts[1]
+            }
+
+            val keyBytes = Base64.decode(privKeyB64, Base64.NO_WRAP)
+            val privKey  = KeyFactory.getInstance("EC")
+                .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes)) as ECPrivateKey
+
+            val header = b64Url("""{"alg":"ES384","x5u":"$pubKeyB64"}""".toByteArray())
+            val data   = "$header.$payloadJson"
+            val sig    = Signature.getInstance("SHA384withECDSA").apply {
+                initSign(privKey)
+                update(data.toByteArray(Charsets.US_ASCII))
+            }.sign()
+
+            return "$data.${b64Url(derToRaw(sig))}"
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
+    private fun b64Url(data: ByteArray) =
+        Base64.encodeToString(data, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+    private fun extractChainJson(packet: LoginPacket): String = try {
+        when (val auth = packet.authPayload) {
+            is CertificateChainPayload -> JSONObject().apply {
+                put("chain", JSONArray(auth.chain))
+            }.toString()
+            is TokenPayload -> JSONObject().apply {
+                put("token", auth.token)
+            }.toString()
+            else -> "{}"
+        }
+    } catch (_: Exception) { "{}" }
+
+    private fun extractExtraJson(packet: LoginPacket): String = try {
+        packet.clientJwt ?: ""
+    } catch (_: Exception) { "" }
+}

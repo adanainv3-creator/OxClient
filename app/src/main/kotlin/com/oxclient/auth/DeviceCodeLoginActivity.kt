@@ -1,9 +1,8 @@
-// auth/DeviceCodeLoginActivity.kt
+
 package com.oxclient.auth
 
 import android.annotation.SuppressLint
 import android.os.Bundle
-import android.util.Log
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
@@ -14,25 +13,11 @@ import android.widget.RelativeLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 
-/**
- * DeviceCodeLoginActivity — WebView tabanlı Microsoft OAuth giriş ekranı.
- *
- * Authorization Code Flow (PKCE'siz, klasik):
- *   1. WebView'da Microsoft login sayfası açılır
- *   2. Kullanıcı giriş yapar
- *   3. Redirect URL'den "code" parametresi yakalanır
- *   4. MicrosoftAuthManager.exchangeCodeForToken() çağrılır
- *   5. Activity kapatılır — auth akışı arka planda devam eder
- *
- * Kullanım: DashboardActivity'den startActivity() ile başlatılır.
- * Sonuç: MicrosoftAuthManager.authState üzerinden dinlenir.
- */
 class DeviceCodeLoginActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "WebViewLogin"
 
-        // Microsoft OAuth — aynı client_id, ama authorization code flow
         private const val CLIENT_ID    = "0000000048183522"
         private const val REDIRECT_URI = "https://login.live.com/oauth20_desktop.srf"
         private const val SCOPE        = "service::user.auth.xboxlive.com::MBI_SSL"
@@ -43,7 +28,7 @@ class DeviceCodeLoginActivity : ComponentActivity() {
             append("&response_type=code")
             append("&redirect_uri=${android.net.Uri.encode(REDIRECT_URI)}")
             append("&scope=${android.net.Uri.encode(SCOPE)}")
-            append("&display=touch")       // mobil görünüm
+            append("&display=touch")
             append("&locale=tr")
         }
     }
@@ -56,7 +41,6 @@ class DeviceCodeLoginActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ── Layout (kodla oluştur, xml gerektirmez) ────────────────────
         val root = RelativeLayout(this).apply {
             setBackgroundColor(0xFF0D0D14.toInt())
         }
@@ -108,7 +92,7 @@ class DeviceCodeLoginActivity : ComponentActivity() {
                 ): Boolean {
                     val url = request.url.toString()
                     interceptRedirect(url)
-                    return false   // WebView yüklemesine izin ver (redirect sayfası boş olabilir)
+                    return false
                 }
             }
         }
@@ -117,21 +101,14 @@ class DeviceCodeLoginActivity : ComponentActivity() {
         root.addView(webView)
         setContentView(root)
 
-        // ── Cookie temizle (önceki oturumun etkisini kaldır) ──────────
         CookieManager.getInstance().apply {
             removeAllCookies(null)
             flush()
         }
 
-        // ── Microsoft login sayfasını aç ──────────────────────────────
-        Log.d(TAG, "WebView açılıyor: $AUTH_URL")
         webView.loadUrl(AUTH_URL)
     }
 
-    /**
-     * URL'de "code=" parametresi varsa yakalar ve token exchange başlatır.
-     * Redirect URI: https://login.live.com/oauth20_desktop.srf?code=XXX
-     */
     private fun interceptRedirect(url: String) {
         if (codeExchanged) return
         if (!url.startsWith(REDIRECT_URI)) return
@@ -143,15 +120,12 @@ class DeviceCodeLoginActivity : ComponentActivity() {
         when {
             !code.isNullOrBlank() -> {
                 codeExchanged = true
-                Log.i(TAG, "Authorization code alındı ✓")
                 Toast.makeText(this, "Kod alındı, bağlanıyor…", Toast.LENGTH_SHORT).show()
 
-                // Auth Manager'a kodu ver — arka planda token exchange yapacak
                 MicrosoftAuthManager.exchangeCodeForToken(code)
                 finish()
             }
             !err.isNullOrBlank() -> {
-                Log.e(TAG, "OAuth hatası: $err — ${uri.getQueryParameter("error_description")}")
                 Toast.makeText(this, "Giriş başarısız: $err", Toast.LENGTH_LONG).show()
                 finish()
             }

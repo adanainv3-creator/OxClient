@@ -2,7 +2,6 @@ package com.oxclient.auth
 
 import android.content.Context
 import android.util.Base64
-import com.oxclient.ui.overlay.OverlayLogger
 import com.google.gson.Gson
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,20 +63,16 @@ object MicrosoftAuthManager {
         val saved = AccountManager.selectedAccount
         if (saved != null && saved.isRelayReady()) {
             _authState.value = AuthState.Success(saved.gamertag, saved.mcToken)
-            OverlayLogger.i(TAG, "Kaydedilen hesap yüklendi: ${saved.gamertag}")
-            // Kayıtlı private key'i hemen belleğe al — uygulama açılışında relay hazır olsun
+
             try {
                 if (saved.privateKeyB64.isNotBlank()) {
                     val keyBytes = android.util.Base64.decode(saved.privateKeyB64, android.util.Base64.NO_WRAP)
                     encryptionPrivateKey = java.security.KeyFactory.getInstance("EC")
                         .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
-                    OverlayLogger.d(TAG, "encryptionPrivateKey (kayıtlı hesaptan) set edildi ✓")
                 }
             } catch (e: Exception) {
-                OverlayLogger.e(TAG, "encryptionPrivateKey (kayıtlı) set edilemedi: ${e.message}")
             }
         } else if (saved != null && saved.isExpired()) {
-            OverlayLogger.w(TAG, "Token süresi dolmuş, yenileniyor: ${saved.gamertag}")
             scope.launch { refreshTokenSilently(saved) }
         }
     }
@@ -85,7 +80,6 @@ object MicrosoftAuthManager {
     fun startSignIn() {
         if (_authState.value.isLoading) return
         _authState.value = AuthState.WaitingForWebView
-        OverlayLogger.i(TAG, "WebView giriş bekleniyor")
     }
 
     fun exchangeCodeForToken(code: String) {
@@ -95,7 +89,6 @@ object MicrosoftAuthManager {
             runCatching { doTokenExchangeFlow(code) }
                 .onFailure { e ->
                     if (e !is CancellationException) {
-                        OverlayLogger.e(TAG, "Token exchange başarısız", e)
                         _authState.value = AuthState.Error(e.message ?: "Giriş başarısız")
                     } else {
                         _authState.value = AuthState.Idle
@@ -114,15 +107,8 @@ object MicrosoftAuthManager {
         AccountManager.selectedAccount?.let { AccountManager.removeAccount(it) }
         AccountManager.clearSelectedAccount()
         _authState.value = AuthState.Idle
-        OverlayLogger.i(TAG, "Çıkış yapıldı")
     }
 
-    /**
-     * Accounts sayfasında daha önce giriş yapılmış bir hesaba dokunulduğunda
-     * çağrılır. Yeniden Microsoft login akışına gitmeden, kayıtlı chain/key
-     * ile doğrudan o hesaba geçer. Token süresi dolmuşsa arka planda sessizce
-     * yenilenir (refreshTokenSilently) — kullanıcı bir şey yapmaz.
-     */
     fun switchAccount(account: SavedAccount) {
         if (activeJob?.isActive == true) return
         AccountManager.selectAccount(account)
@@ -136,17 +122,13 @@ object MicrosoftAuthManager {
                         .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
                 }
             } catch (e: Exception) {
-                OverlayLogger.e(TAG, "switchAccount: encryptionPrivateKey set edilemedi: ${e.message}")
             }
-            OverlayLogger.i(TAG, "Hesap değiştirildi: ${account.gamertag}")
         } else {
             _authState.value = AuthState.Loading
-            OverlayLogger.i(TAG, "Hesap değiştirildi (token yenileniyor): ${account.gamertag}")
             activeJob = scope.launch {
                 runCatching { refreshTokenSilently(account) }
                     .onFailure { e ->
                         if (e !is CancellationException) {
-                            OverlayLogger.e(TAG, "switchAccount token yenileme başarısız", e)
                             _authState.value = AuthState.Error(e.message ?: "Hesap yenilenemedi")
                         }
                     }
@@ -156,39 +138,26 @@ object MicrosoftAuthManager {
 
     fun getActiveChainForRelay(): String? {
         val account = AccountManager.selectedAccount ?: run {
-            OverlayLogger.w(TAG, "getActiveChainForRelay: seçili hesap yok")
             return null
         }
         val remainingMs = account.expireTimeMs - System.currentTimeMillis()
-        OverlayLogger.d(TAG, "getActiveChainForRelay: gamertag=${account.gamertag} " +
-            "kalan=${remainingMs / 1000}s pubKey(ilk32)=${account.publicKeyB64.take(32)}…")
         if (account.isExpired()) {
-            OverlayLogger.w(TAG, "Token süresi dolmuş, arka planda yenileniyor")
             scope.launch { refreshTokenSilently(account) }
         }
         return account.mcToken.takeIf { it.isNotBlank() }
     }
 
-    /**
-     * Chain'in ilk linkini (deviceJwt) imzalayan EC private key — PKCS8 Base64.
-     * LoginPacketListener bunu, client'ın orijinal clientJwt'sini (skin/client
-     * data) AYNI key ile yeniden imzalamak için kullanır. Bu olmadan sunucu
-     * "Invalid login data (identifier)" ile bağlantıyı reddeder, çünkü chain'in
-     * public key'i ile clientJwt'nin imzalayanı eşleşmez.
-     */
     fun getActivePrivateKeyForRelay(): String? {
         val account = AccountManager.selectedAccount ?: return null
         return account.privateKeyB64.takeIf { it.isNotBlank() }
     }
 
-    /** Aynı keypair'in public key'i — clientJwt yeniden imzalanırken JWT header'ı için. */
     fun getActivePublicKeyForRelay(): String? {
         val account = AccountManager.selectedAccount ?: return null
         return account.publicKeyB64.takeIf { it.isNotBlank() }
     }
 
     private suspend fun doTokenExchangeFlow(code: String) {
-        OverlayLogger.d(TAG, "Authorization code ile token alınıyor...")
 
         val tokenResp = postForm(TOKEN_URL, mapOf(
             "client_id"    to CLIENT_ID,
@@ -201,15 +170,12 @@ object MicrosoftAuthManager {
         val accessToken  = tokenResp.str("access_token")
         val refreshToken = tokenResp["refresh_token"] as? String ?: ""
         currentCoroutineContext().ensureActive()
-        OverlayLogger.d(TAG, "Access token alındı ✓")
 
         val xblResult = fetchXblToken(accessToken)
         currentCoroutineContext().ensureActive()
-        OverlayLogger.d(TAG, "XBL token alındı ✓  uhs=${xblResult.userHash}  gtg=${xblResult.gamertag}")
 
         val xstsResult = fetchXsts(xblResult.token, "https://multiplayer.minecraft.net/")
         currentCoroutineContext().ensureActive()
-        OverlayLogger.d(TAG, "XSTS token alındı ✓  uhs=${xstsResult.userHash}  gtg=${xstsResult.gamertag}")
 
         val mcResult = fetchMinecraftChain(xstsResult.token, xstsResult.userHash)
         currentCoroutineContext().ensureActive()
@@ -220,7 +186,6 @@ object MicrosoftAuthManager {
             xblGamertag  = xblResult.gamertag,
             xblToken     = xblResult.token
         )
-        OverlayLogger.i(TAG, "Giriş tamamlandı: $gamertag")
 
         val account = SavedAccount(
             gamertag     = gamertag,
@@ -233,19 +198,14 @@ object MicrosoftAuthManager {
         AccountManager.addAccount(account)
         AccountManager.selectAccount(account)
 
-        // Handshake encryption için private key'i belleğe al
-        // (AccountManager'daki Base64 string'i her bağlantıda decode etmek yerine
-        // hazır ECPrivateKey olarak tutuyoruz — getPrivateKeyForEncryption() bunu döner)
         try {
             if (mcResult.privateKeyB64.isNotBlank()) {
                 val keyBytes = android.util.Base64.decode(mcResult.privateKeyB64, android.util.Base64.NO_WRAP)
                 val privKey  = java.security.KeyFactory.getInstance("EC")
                     .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
                 encryptionPrivateKey = privKey
-                OverlayLogger.d(TAG, "encryptionPrivateKey set edildi ✓")
             }
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "encryptionPrivateKey set edilemedi: ${e.message}")
         }
 
         withContext(Dispatchers.Main) {
@@ -255,13 +215,11 @@ object MicrosoftAuthManager {
 
     private suspend fun refreshTokenSilently(account: SavedAccount) {
         if (account.refreshToken.isBlank()) {
-            OverlayLogger.w(TAG, "Refresh token yok, manuel giriş gerekli")
             _authState.value = AuthState.Idle
             return
         }
 
         try {
-            OverlayLogger.d(TAG, "Token yenileniyor: ${account.gamertag}")
             val tokenResp = postForm(TOKEN_URL, mapOf(
                 "client_id"     to CLIENT_ID,
                 "grant_type"    to "refresh_token",
@@ -282,7 +240,6 @@ object MicrosoftAuthManager {
                 AccountManager.addAccount(updated.copy(refreshToken = refreshToken))
             }
 
-            // Yeni key'i belleğe al
             try {
                 if (mcResult.privateKeyB64.isNotBlank()) {
                     val keyBytes = android.util.Base64.decode(mcResult.privateKeyB64, android.util.Base64.NO_WRAP)
@@ -292,10 +249,8 @@ object MicrosoftAuthManager {
             } catch (_: Exception) {}
 
             _authState.value = AuthState.Success(account.gamertag, mcResult.chainJson)
-            OverlayLogger.i(TAG, "Token yenilendi: ${account.gamertag}")
 
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Token yenileme başarısız: ${e.message}", e)
             _authState.value = AuthState.Error("Token yenileme başarısız: ${e.message}")
         }
     }
@@ -312,7 +267,6 @@ object MicrosoftAuthManager {
         }.toString()
 
         val respText = postJsonRaw(XBL_URL, bodyJson)
-        OverlayLogger.d(TAG, "XBL yanıt (ilk 300): ${respText.take(300)}")
 
         val resp = JSONObject(respText)
 
@@ -332,7 +286,6 @@ object MicrosoftAuthManager {
         val uhs      = xui?.optString("uhs") ?: ""
         val gamertag = xui?.optString("gtg") ?: ""
 
-        OverlayLogger.d(TAG, "XBL XUI: uhs=$uhs  gtg=$gamertag")
         return XblAuthResult(token, uhs, gamertag)
     }
 
@@ -347,7 +300,6 @@ object MicrosoftAuthManager {
         }.toString()
 
         val respText = postJsonRaw(XSTS_URL, bodyJson)
-        OverlayLogger.d(TAG, "XSTS yanıt (ilk 300): ${respText.take(300)}")
 
         val resp = JSONObject(respText)
 
@@ -373,16 +325,9 @@ object MicrosoftAuthManager {
             ?: error("XSTS uhs boş")
         val gamertag = xui.optString("gtg") ?: ""
 
-        OverlayLogger.d(TAG, "XSTS XUI: uhs=$uhs  gtg=$gamertag")
         return XblAuthResult(token, uhs, gamertag)
     }
 
-    /**
-     * Login anında alınan chain'in exp/nbf/identityPublicKey özetini loglar.
-     * Bu log, LoginPacketListener'daki "Chain diagnostiği" logu ile birebir
-     * karşılaştırılabilir — eğer buradaki pubKeyB64, relay bağlantısı sırasında
-     * loglanan pubKeyB64 ile FARKLIYSA, hesap arada yenilenmiş/bozulmuş demektir.
-     */
     private fun logFetchedChainSummary(chain: List<String>, expectedPubKeyB64: String) {
         val nowSec = System.currentTimeMillis() / 1000L
         chain.forEachIndexed { idx, jwt ->
@@ -396,12 +341,10 @@ object MicrosoftAuthManager {
             val exp = payload.optLong("exp", -1L)
             val nbf = payload.optLong("nbf", -1L)
             val expIn = if (exp > 0) exp - nowSec else null
-            OverlayLogger.d(TAG, "  chain[$idx] exp=${expIn?.let { "${it}s kaldı" } ?: "-"} nbf=$nbf")
 
             if (idx == 0) {
                 val idKey = payload.optString("identityPublicKey", "")
                 if (idKey.isNotBlank() && idKey != expectedPubKeyB64) {
-                    OverlayLogger.e(TAG, "  ★ chain[0].identityPublicKey üretilen pubKeyB64 ile eşleşmiyor — bu login akışında bir tutarsızlık var!")
                 }
             }
         }
@@ -414,10 +357,8 @@ object MicrosoftAuthManager {
         val pubKey  = keyPair.public  as ECPublicKey
         val privKey = keyPair.private as ECPrivateKey
         val pubKeyB64 = Base64.encodeToString(pubKey.encoded, Base64.NO_WRAP)
-        // PKCS8 — Base64.DEFAULT (standart, URL-safe değil) olarak saklıyoruz,
-        // LoginPacketListener bunu PKCS8EncodedKeySpec ile geri okuyacak.
+
         val privKeyB64 = Base64.encodeToString(privKey.encoded, Base64.NO_WRAP)
-        OverlayLogger.d(TAG, "fetchMinecraftChain: yeni keypair üretildi — pubKeyB64 (ilk 32)=${pubKeyB64.take(32)}…")
 
         val deviceJwt = buildDeviceJwt(privKey, pubKeyB64)
 
@@ -426,11 +367,6 @@ object MicrosoftAuthManager {
             put("chain", JSONArray().apply { put(deviceJwt) })
         }.toString()
 
-        // NOT: client-version sabit "1.21.80" — gerçek bağlanan protokol/versiyon
-        // (örn. 898 / 1.21.132) ile TUTARSIZ olabilir. Bazı sıkı sunucular login
-        // sırasında GameVersion ile bu header'ı çapraz kontrol edebilir. Şu an
-        // relay'in gerçek protokol versiyonuna erişimi bu aşamada olmadığı için
-        // sabit bırakıldı — sorun devam ederse burası bir sonraki şüphelidir.
         val req = Request.Builder()
             .url(MC_BEDROCK_URL)
             .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -449,34 +385,11 @@ object MicrosoftAuthManager {
             body.ifBlank { error("MC /authentication yanıtı boş") }
         }
 
-        OverlayLogger.d(TAG, "MC /authentication yanıtı: ${responseText.take(200)}…")
-
         val json             = JSONObject(responseText)
         val serverChainArray = json.optJSONArray("chain")
 
         if (serverChainArray != null && serverChainArray.length() > 0) {
-            // ═══════════════════════════════════════════════════════════
-            // KRİTİK DÜZELTME (wclient AuthUtils.fetchOnlineChain ile
-            // birebir hizalama):
-            //
-            // Önceki kod chain[0]'ın payload'ındaki "identityPublicKey"
-            // alanını bizim GÖNDERDİĞİMİZ pubKeyB64 olarak varsayıyordu.
-            // Ama zincirin kriptografik olarak GEÇERLİ olması için bu alan
-            // chain[1]'i (Mojang'ın döndürdüğü ilk link) İMZALAMAK İÇİN
-            // GERÇEKTEN KULLANILAN key'e (yani chain[1]'in KENDİ x5u
-            // header'ına) birebir eşit olmalı. Mojang'ın /authentication
-            // yanıtı bunu bize aynen geri yansıtıyor OLABİLİR ama byte-byte
-            // aynı olduğunu VARSAYMAK yerine chain[1]'in header'ından
-            // OKUYUP kullanıyoruz — wclient tam olarak bunu yapıyor:
-            //   claimsSet.setClaim("identityPublicKey", mojangJws.getHeader("x5u"))
-            //
-            // Mojang'ın kendi /authentication doğrulaması bu tutarsızlığı
-            // yakalamıyor (o sadece bizim gönderdiğimiz self-signed JWT'yi
-            // kabul ediyor), ama sıkı bir sunucu (2b2tpe.org gibi) chain[0]
-            // ile chain[1] arasındaki imza zincirini GERÇEKTEN doğruluyorsa
-            // bu fark tam olarak "Invalid login data (identifier)" sebebi
-            // olabilir.
-            // ═══════════════════════════════════════════════════════════
+
             val firstServerJwt = serverChainArray.getString(0)
             val actualSigningKey = try {
                 val parts = firstServerJwt.split(".")
@@ -488,14 +401,10 @@ object MicrosoftAuthManager {
                 )
                 JSONObject(headerJson).optString("x5u").takeIf { it.isNotBlank() }
             } catch (e: Exception) {
-                OverlayLogger.w(TAG, "chain[1].x5u okunamadı, pubKeyB64 fallback kullanılacak: ${e.message}")
                 null
             }
 
             val finalDeviceJwt = if (actualSigningKey != null && actualSigningKey != pubKeyB64) {
-                OverlayLogger.w(TAG, "★ chain[1].x5u ≠ gönderdiğimiz pubKeyB64 — chain[0] GERÇEK key ile yeniden kuruluyor")
-                OverlayLogger.w(TAG, "  gönderilen : ${pubKeyB64.take(40)}…")
-                OverlayLogger.w(TAG, "  chain[1].x5u: ${actualSigningKey.take(40)}…")
                 buildDeviceJwt(privKey, pubKeyB64, identityPublicKeyClaim = actualSigningKey)
             } else {
                 deviceJwt
@@ -510,7 +419,6 @@ object MicrosoftAuthManager {
             }.toString()
 
             val gamertag = extractGamertagFromJwtList(fullChain)
-            OverlayLogger.i(TAG, "MC chain alındı: ${fullChain.size} JWT, gamertag=$gamertag")
             logFetchedChainSummary(fullChain, pubKeyB64)
             return McAuthResult(chainWrapper, gamertag, privKeyB64, pubKeyB64)
         }
@@ -518,7 +426,6 @@ object MicrosoftAuthManager {
         val token = json.optString("token").takeIf { it.isNotBlank() }
             ?: error("MC token alınamadı: $responseText")
 
-        OverlayLogger.w(TAG, "MC yanıtında chain yok, ham token kullanılıyor")
         val fallbackChain = JSONObject().apply {
             put("chain", JSONArray().apply { put(deviceJwt); put(token) })
         }.toString()
@@ -532,15 +439,12 @@ object MicrosoftAuthManager {
         xblToken: String
     ): String {
         if (chainResult.gamertag.isNotBlank()) {
-            OverlayLogger.d(TAG, "Gamertag kaynağı: MC chain → ${chainResult.gamertag}")
             return chainResult.gamertag
         }
         if (xstsGamertag.isNotBlank()) {
-            OverlayLogger.d(TAG, "Gamertag kaynağı: XSTS gtg → $xstsGamertag")
             return xstsGamertag
         }
         if (xblGamertag.isNotBlank()) {
-            OverlayLogger.d(TAG, "Gamertag kaynağı: XBL gtg → $xblGamertag")
             return xblGamertag
         }
 
@@ -562,15 +466,12 @@ object MicrosoftAuthManager {
                     val s = settings.getJSONObject(i)
                     if (s.optString("id") == "Gamertag") {
                         val gt = s.optString("value")
-                        OverlayLogger.d(TAG, "Gamertag kaynağı: Profile API → $gt")
                         return gt
                     }
                 }
             }
-            OverlayLogger.w(TAG, "Profile API'den gamertag alınamadı")
             "OxPlayer"
         } catch (e: Exception) {
-            OverlayLogger.w(TAG, "Profile API hatası: ${e.message}")
             "OxPlayer"
         }
     }
@@ -581,16 +482,7 @@ object MicrosoftAuthManager {
         identityPublicKeyClaim: String = pubKeyB64
     ): String {
         val now     = System.currentTimeMillis() / 1000L
-        // Mojang Bedrock auth secp384r1 (P-384) + ES384 kullanır — secp256r1/ES256
-        // İLE imzalanan zincirler sunucu tarafında "Invalid login data" ile reddedilir.
-        //
-        // NOT: header.x5u = BU JWT'yi kimin imzaladığı (bizim key'imiz, pubKeyB64).
-        //      payload.identityPublicKey = zincirdeki BİR SONRAKİ linki imzalaması
-        //      gereken key. Normalde bunlar aynıdır (kendi key'imizi bir sonraki
-        //      adıma da yetkilendiriyoruz), ama Mojang'ın döndürdüğü chain[1]
-        //      GERÇEKTE farklı bir key ile imzalanmışsa (identityPublicKeyClaim
-        //      parametresiyle override edilir), zincirin geçerli olması için
-        //      payload'da O GERÇEK key'in yazması gerekir.
+
         val header  = b64Url("""{"alg":"ES384","x5u":"$pubKeyB64"}""".toByteArray())
         val payload = b64Url(
             ("""{"certificateAuthority":true,"identityPublicKey":"$identityPublicKeyClaim",""" +
@@ -615,7 +507,7 @@ object MicrosoftAuthManager {
         i++
         val sLen = der[i++].toInt() and 0xFF
         val s    = der.copyOfRange(i, i + sLen)
-        // P-384 imza bileşenleri 48 byte'tır (P-256'da olduğu gibi 32 değil)
+
         return padOrTrim(BigInteger(1, r).toByteArray(), 48) +
                padOrTrim(BigInteger(1, s).toByteArray(), 48)
     }
@@ -655,7 +547,6 @@ object MicrosoftAuthManager {
             .execute().use { resp ->
                 val b = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
-                    OverlayLogger.e(TAG, "postForm HTTP ${resp.code} [$url]: $b")
                     error("HTTP ${resp.code}: $b")
                 }
                 b
@@ -671,10 +562,8 @@ object MicrosoftAuthManager {
             .build()
         return http.newCall(req).execute().use { resp ->
             val text = resp.body?.string() ?: ""
-            OverlayLogger.d(TAG, "postJsonRaw HTTP ${resp.code} [$url]")
             val isXstsError = text.contains("XErr")
             if (!resp.isSuccessful && !isXstsError) {
-                OverlayLogger.e(TAG, "postJsonRaw HTTP ${resp.code} [$url]: ${text.take(400)}")
                 error("HTTP ${resp.code}: ${text.take(300)}")
             }
             text

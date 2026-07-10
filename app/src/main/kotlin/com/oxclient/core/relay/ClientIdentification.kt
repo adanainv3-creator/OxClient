@@ -1,7 +1,6 @@
 package com.oxclient.core.relay
 
 import android.util.Base64
-import com.oxclient.ui.overlay.OverlayLogger
 import org.json.JSONObject
 
 data class ClientIdentification(
@@ -22,15 +21,12 @@ data class ClientIdentification(
             return try {
                 parseChain(chainJson, extraJson)
             } catch (e: Exception) {
-                OverlayLogger.e(TAG, "Login parse hatası: ${e.message}", e)
                 null
             }
         }
 
         private fun parseChain(chainJson: String, extraJson: String): ClientIdentification {
             val root  = JSONObject(chainJson)
-            // "chain" yoksa client TokenPayload (yeni v818+ auth tipi) gönderiyor —
-            // crash olmadan devam et, kimlik bilgisi sadece bu durumda eksik kalır.
             val chain = root.optJSONArray("chain")
 
             var displayName : String = if (chain == null) "Token-based" else "Unknown"
@@ -51,11 +47,8 @@ data class ClientIdentification(
                         displayName = extra.optString("displayName", "Unknown")
                         xuid        = extra.optString("XUID", "")
                         identity    = extra.optString("identity", "")
-                        OverlayLogger.d(TAG, "extraData → name=$displayName xuid=$xuid")
                     }
                 }
-            } else {
-                OverlayLogger.d(TAG, "Client TokenPayload gönderdi — chain JWT yok, kimlik bilgisi sınırlı")
             }
 
             var deviceOs      = 0
@@ -67,7 +60,6 @@ data class ClientIdentification(
                 deviceOs      = skinPayload.optInt("DeviceOS", 0)
                 languageCode  = skinPayload.optString("LanguageCode", "en_US")
                 clientVersion = skinPayload.optString("GameVersion", "")
-                OverlayLogger.d(TAG, "SkinJWT → OS=$deviceOs lang=$languageCode ver=$clientVersion")
             }
 
             return ClientIdentification(
@@ -93,7 +85,6 @@ data class ClientIdentification(
                 val bytes = Base64.decode(padded, Base64.DEFAULT)
                 JSONObject(String(bytes, Charsets.UTF_8))
             } catch (e: Exception) {
-                OverlayLogger.w(TAG, "JWT payload parse hatası: ${e.message}")
                 null
             }
         }

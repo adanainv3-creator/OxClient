@@ -1,8 +1,6 @@
 
-
 package com.oxclient.core.proxy
 
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.utils.MathUtil
@@ -71,11 +69,6 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
     private val playerNames     = ConcurrentHashMap<Long, String>()
 
-    // ✅ FIX: Kendi envanterimizin sürekli/oturum-boyunca önbelleği. InventoryContentPacket
-    // sadece bağlantı başında/envanter açıldığında gelir; AutoTotem gibi modüller oyuna
-    // girdikten SONRA enable edilirse bu paketi bir daha hiç göremiyordu (BlockTracker'daki
-    // palet sorununun envanter karşılığı). EntityTracker zaten her zaman aktif olduğu için
-    // envanter durumu burada tutulup modüller enable anında buradan "yakalanabiliyor".
     private val selfInventory = ConcurrentHashMap<Int, ItemData>()
 
     @Volatile var selfRuntimeId  : Long    = 0L
@@ -95,11 +88,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     @Volatile var selfGameMode   : Int     = 0
     @Volatile var selfDimension  : Int     = 0
     @Volatile var selfSpeedXZ    : Float   = 0f
-    // ✅ FIX: gerçek seçili hotbar slotu. Eskiden hiçbir yerde tutulmuyordu,
-    // bu yüzden sendAttack/CrystalAura place hep sabit "slot 0"u itemInHand
-    // olarak yolluyordu — kılıç başka slottaysa server yumruk hasarı uyguluyordu.
-    // Client hotbar değiştirdiğinde MobEquipmentPacket(containerId=INVENTORY,
-    // hotbarSlot=X) gönderir; burada onu yakalayıp gerçek slotu tutuyoruz.
+
     @Volatile var selfHotbarSlot : Int     = 0
 
     @Volatile var inventoriesServerAuthoritative: Boolean = true
@@ -113,7 +102,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val _entityUpdateFlow = MutableStateFlow(0L)
     val entityUpdateFlow: StateFlow<Long>  = _entityUpdateFlow.asStateFlow()
 
-    fun init()  { PacketEventBus.register(this);   OverlayLogger.i(TAG, "EntityTracker başlatıldı") }
+    fun init()  { PacketEventBus.register(this) }
 
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
@@ -126,22 +115,13 @@ object EntityTracker : PacketEventBus.PacketListener {
         prevSelfX = 0f; prevSelfZ = 0f
         inventoriesServerAuthoritative = true
         _entityCountFlow.value = 0; _selfHealthFlow.value = 20f
-        OverlayLogger.i(TAG, "EntityTracker sıfırlandı")
     }
 
-    // ✅ DEBUG: Bir sürüm boyunca görülen HER FARKLI paket tipini bir KEZ loglar.
-    // Spam yapmaz (her tip için sadece ilk görülüşte yazar). AutoTotem envanteri
-    // hâlâ boş görüyorsa, bu logu arayıp "Inventory" geçen satır var mı diye bak:
-    //  - Hiç "InventoryContentPacket" görünmüyorsa   → paket server'dan hiç gelmiyor/routing sorunu
-    //  - Sadece "UnknownPacket" görünüyorsa (sık sık) → codec bu protokol sürümünde paketi tanımıyor, decode edemiyor
-    //  - "InventoryContentPacket" görünüyor ama envanter boşsa → containerId beklenenden farklı, aşağıdaki log'a bak
     private val seenPacketTypes = ConcurrentHashMap<String, Boolean>()
 
     override fun onPacket(event: PacketEvent) {
         val typeName = event.packetName
-        if (seenPacketTypes.putIfAbsent(typeName, true) == null) {
-            OverlayLogger.d(TAG, "İlk kez görülen paket tipi: $typeName (dir=${event.direction})")
-        }
+        seenPacketTypes.putIfAbsent(typeName, true)
 
         when (val p = event.packet) {
             is StartGamePacket          -> handleStartGame(p)
@@ -163,20 +143,12 @@ object EntityTracker : PacketEventBus.PacketListener {
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
             is MobEquipmentPacket       -> handleMobEquipment(p, event.direction)
             is InventoryContentPacket   -> {
-                // ✅ DEBUG: containerId'yi filtre uygulamadan ÖNCE logla — beklenen 0 mı değil mi görelim.
-                OverlayLogger.d(TAG, "InventoryContentPacket alındı: containerId=${p.containerId} itemCount=${p.contents?.size}")
                 handleInventoryContent(p)
             }
             is InventorySlotPacket      -> {
-                OverlayLogger.d(TAG, "InventorySlotPacket alındı: containerId=${p.containerId} slot=${p.slot}")
                 handleInventorySlot(p)
             }
             is org.cloudburstmc.protocol.bedrock.packet.UnknownPacket -> {
-                // ✅ DEBUG: codec bu paketi decode edemedi (bilinmeyen/versiyon uyumsuz paket).
-                // Eğer envanter hâlâ boş geliyorsa ve burada sık sık log görülüyorsa,
-                // InventoryContentPacket'in bu protokol sürümünde (975) decode edilemediği
-                // ihtimali güçlenir — CloudburstMC codec'i bu paket ID'sini tanımıyor demektir.
-                OverlayLogger.v(TAG, "UnknownPacket alındı: packetId=${p.packetId}")
             }
             else -> {}
         }
@@ -188,7 +160,6 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
         selfGameMode = p.playerGameType.ordinal
         inventoriesServerAuthoritative = p.isInventoriesServerAuthoritative
-        OverlayLogger.i(TAG, "StartGame id=$selfRuntimeId pos=($selfX,$selfY,$selfZ) inventoriesServerAuthoritative=$inventoriesServerAuthoritative")
     }
 
     private fun handleAddEntity(p: AddEntityPacket) {
@@ -299,9 +270,6 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfSpeedXZ = MathUtil.dist2(selfX, selfZ, prevSelfX, prevSelfZ)
     }
 
-    // ✅ FIX: hem gerçek oyuncunun scroll/1-9 tuşuyla slot değiştirmesi hem de
-    // bizim modüllerimizin InventoryUtil.sendHotbarSelect() ile gönderdiği paket
-    // buradan yakalanır — ikisi de containerId=INVENTORY ile client->server gider.
     private fun handleMobEquipment(p: MobEquipmentPacket, dir: PacketEvent.Direction) {
         if (dir != PacketEvent.Direction.CLIENT_TO_SERVER) return
         if (p.runtimeEntityId != selfRuntimeId && p.runtimeEntityId != 0L) return
@@ -350,8 +318,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             playerNames[entry.entityId] = name
             if (rid != null) {
                 entities[rid]?.name = name
-                // FIX: latencyMs ve latency alanları yeni Cloudburst API'sinde kaldırıldı.
-                // Reflection ile güvenli okuma; yoksa 0 döner.
+
                 val ping = runCatching {
                     entry.javaClass.getDeclaredField("latencyMs")
                         .also { it.isAccessible = true }
@@ -382,8 +349,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     private fun handleDimension(p: ChangeDimensionPacket) {
         selfDimension = p.dimension
         selfX = p.position.x; selfY = p.position.y; selfZ = p.position.z
-        val old = entities.size; entities.clear(); uniqueToRuntime.clear()
-        OverlayLogger.i(TAG, "Boyut değişti dim=$selfDimension $old entity temizlendi")
+        entities.clear(); uniqueToRuntime.clear()
         notifyUpdate()
     }
 
@@ -404,15 +370,9 @@ object EntityTracker : PacketEventBus.PacketListener {
                     rider.isRiding = false; rider.ridingId = 0L
                 }
             }
-        } catch (e: Exception) { OverlayLogger.v(TAG, "EntityLink hatası: ${e.message}") }
+        } catch (e: Exception) { }
     }
 
-    // Item boş mu? count <= 0 VE netId <= 0 ise boş sayılır.
-    // Sadece count kontrolü yapmak yetmiyordu: bazı sunucularda decode
-    // başarısız olduğunda count=0 ama netId>0 gelebiliyor (stack var ama
-    // tip çözülemedi). Bu durumda item'ı yine de sakla — isTotem() runtime'da
-    // codec helper üzerinden identifier çözmeyi dener.
-    // Sadece ikisi de 0/negatifse gerçekten boş slot.
     private fun isEmptyItem(item: ItemData?): Boolean {
         if (item == null) return true
         if (item.count > 0) return false
@@ -431,13 +391,11 @@ object EntityTracker : PacketEventBus.PacketListener {
                         storedCount++
                     }
                 }
-                OverlayLogger.d(TAG, "handleInventoryContent(0): ${p.contents.size} item geldi, $storedCount slot saklandı")
             }
             119 -> {
                 val item = p.contents.firstOrNull()
                 if (item == null || isEmptyItem(item)) selfInventory.remove(119)
                 else selfInventory[119] = item
-                OverlayLogger.d(TAG, "handleInventoryContent(119): item=${item != null} empty=${item == null || isEmptyItem(item)} netId=${item?.netId} count=${item?.count}")
             }
             else -> return
         }
@@ -454,15 +412,10 @@ object EntityTracker : PacketEventBus.PacketListener {
         }
     }
 
-    /** Ana envanterdeki (containerId=0, offhand=119 dahil) verilen slotun son bilinen içeriği. */
     fun getInventoryItem(slot: Int): ItemData? = selfInventory[slot]
 
-    /** Şu an elde (seçili hotbar slotunda) tutulan item. Attack/place paketlerinde
-     *  hep bunu kullan, sabit slot=0 kullanma — aksi halde server yanlış item görür. */
     fun getHeldItem(): ItemData? = selfInventory[selfHotbarSlot]
 
-    /** Ana envanterin anlık kopyası — slot -> ItemData. Modüller geç enable olsa bile
-     *  buradan mevcut durumu okuyabilir (bkz. selfInventory üstteki not). */
     fun getInventorySnapshot(): Map<Int, ItemData> = selfInventory.toMap()
 
     private fun applyMetadata(entity: TrackedEntity, metadata: Map<*, *>?) {
@@ -478,7 +431,7 @@ object EntityTracker : PacketEventBus.PacketListener {
                     keyStr == "7" || keyStr.contains("HEALTH")  -> entity.health = (value as? Float) ?: entity.health
                 }
             }
-        } catch (e: Exception) { OverlayLogger.v(TAG, "Metadata hatası (${entity.identifier}): ${e.message}") }
+        } catch (e: Exception) { }
     }
 
     private fun resolveType(id: String): EntityType {
@@ -558,7 +511,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         val cutoff = System.currentTimeMillis() - maxAgeMs
         val stale  = entities.entries.filter { it.value.lastUpdateMs < cutoff }
         stale.forEach { (rid, e) -> entities.remove(rid); uniqueToRuntime.remove(e.uniqueId) }
-        if (stale.isNotEmpty()) { OverlayLogger.d(TAG, "${stale.size} stale entity temizlendi"); notifyUpdate() }
+        if (stale.isNotEmpty()) { notifyUpdate() }
     }
 
     private fun notifyUpdate() {

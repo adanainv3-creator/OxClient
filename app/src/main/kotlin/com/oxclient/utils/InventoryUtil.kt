@@ -3,7 +3,6 @@ package com.oxclient.utils
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEventBus
-import com.oxclient.ui.overlay.OverlayLogger
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
@@ -40,7 +39,6 @@ object InventoryUtil {
         hotbarSlot : Int,
         item       : ItemData
     ) {
-        OverlayLogger.d(TAG, "sendEquip: runtimeId=$runtimeId containerId=$containerId slot=$slot hotbarSlot=$hotbarSlot netId=${item.netId} count=${item.count}")
         val packet = MobEquipmentPacket().apply {
             this.runtimeEntityId = runtimeId
             this.containerId = containerId
@@ -49,11 +47,9 @@ object InventoryUtil {
             this.item = item
         }
         session.serverBound(packet)
-        OverlayLogger.d(TAG, "sendEquip: MobEquipmentPacket gönderildi")
     }
 
     fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, itemData: ItemData) {
-        OverlayLogger.d(TAG, "sendOffhandEquip: fromSlot=$fromSlot containerId=OFFHAND(${ContainerId.OFFHAND}) netId=${itemData.netId} count=${itemData.count} defId=${runCatching { itemData.definition?.identifier }.getOrElse { "ERR" }}")
         sendEquip(
             session     = session,
             runtimeId   = EntityTracker.selfRuntimeId,
@@ -65,7 +61,6 @@ object InventoryUtil {
     }
 
     fun sendOffhandEquip(session: OxRelaySession, fromSlot: Int, netId: Int, definition: ItemDefinition) {
-        OverlayLogger.d(TAG, "sendOffhandEquip(def): fromSlot=$fromSlot netId=$netId defId=${runCatching { definition.identifier }.getOrElse { "ERR" }}")
         val item = ItemData.builder()
             .definition(definition)
             .netId(netId)
@@ -77,7 +72,6 @@ object InventoryUtil {
     }
 
     fun sendHotbarSelect(session: OxRelaySession, slot: Int) {
-        OverlayLogger.d(TAG, "sendHotbarSelect: slot=$slot")
         session.serverBound(MobEquipmentPacket().apply {
             runtimeEntityId = EntityTracker.selfRuntimeId
             containerId     = ContainerId.INVENTORY
@@ -99,14 +93,12 @@ object InventoryUtil {
 
         if (identifier != null) {
             val result = identifier == "minecraft:totem_of_undying"
-            OverlayLogger.v(TAG, "isTotem check: identifier=$identifier runtimeId=${runCatching { item.definition?.runtimeId }.getOrElse { -1 }} netId=${item.netId} count=${item.count} sonuc=$result")
             return result
         }
 
         val runtimeId = runCatching { item.definition?.runtimeId }.getOrElse { null } ?: -1
         val totemRuntimeId = resolveTotemRuntimeIdFromCodec()
         val result = totemRuntimeId > 0 && runtimeId == totemRuntimeId
-        OverlayLogger.v(TAG, "isTotem fallback: runtimeId=$runtimeId totemRuntimeId=$totemRuntimeId netId=${item.netId} count=${item.count} sonuc=$result")
         return result
     }
 
@@ -181,7 +173,6 @@ object InventoryUtil {
 
         val request = ItemStackRequest(nextStackRequestId(), arrayOf(action), arrayOf())
         session.serverBound(ItemStackRequestPacket().apply { requests.add(request) })
-        OverlayLogger.d(TAG, "ItemStackRequest (${action::class.simpleName}) gönderildi: $sourceContainer[$sourceSlot] netId=${sourceItem.netId} -> $destContainer[$destSlot] destNetId=${destItem.netId}")
     }
 
     private fun sendLegacyMove(
@@ -199,7 +190,6 @@ object InventoryUtil {
             actions.add(InventoryActionData(InventorySource.fromContainerWindowId(destContainerId), destSlot, destItem, sourceItem))
         }
         session.serverBound(packet)
-        OverlayLogger.d(TAG, "InventoryTransactionPacket (legacy) gönderildi: container=$sourceContainerId slot=$sourceSlot -> container=$destContainerId slot=$destSlot")
     }
 
     fun sendSlotSwap(
@@ -228,7 +218,6 @@ object InventoryUtil {
             arrayOf<String>()
         )
         session.serverBound(ItemStackRequestPacket().apply { requests.add(request) })
-        OverlayLogger.d(TAG, "ItemStackRequest (Swap) gönderildi: srcSlot=$sourceSlot srcNetId=$sourceNetId -> $destContainer[$destSlot] destNetId=$destNetId")
     }
 
     private fun resolveIdentifier(item: ItemData): String? {

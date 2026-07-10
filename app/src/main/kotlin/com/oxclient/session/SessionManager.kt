@@ -1,6 +1,5 @@
 package com.oxclient.session
 
-import android.util.Log
 import com.oxclient.auth.AccountManager
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.proxy.EntityTracker
@@ -10,7 +9,6 @@ import com.oxclient.core.relay.OxRelay
 import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.ModuleManager
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.BlockTracker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,14 +38,11 @@ object SessionManager {
 
     private var relay: OxRelay? = null
 
-    // ── Başlat ────────────────────────────────────────────────────────────
-
     fun start() {
-        if (_isActive.value) { Log.w(TAG, "Relay zaten çalışıyor"); return }
+        if (_isActive.value) { return }
 
         val account = AccountManager.getRelayReadyAccount()
         if (account == null) {
-            OverlayLogger.w(TAG, "Relay başlatılamadı: geçerli hesap yok")
             _statusMessage.value = "Hesap bulunamadı"
             return
         }
@@ -56,7 +51,6 @@ object SessionManager {
         val port      = ServerConfig.getPortBlocking()
         val localPort = ServerConfig.LOCAL_PROXY_PORT
 
-        OverlayLogger.i(TAG, "Relay başlatılıyor: ${account.gamertag} → $host:$port")
         _statusMessage.value = "Bağlanıyor..."
 
         try {
@@ -65,8 +59,6 @@ object SessionManager {
 
             val r = OxRelay(localPort = localPort)
 
-            // OxRelay.capture() içinde ConnectionManager.setupSession() zaten çağrılıyor.
-            // Burada sadece session callback'i alıyoruz — ikinci kez setupSession ÇAĞIRMIYORUZ.
             r.capture(remoteHost = host, remotePort = port) { session ->
                 onSessionCreated(session)
             }
@@ -78,26 +70,19 @@ object SessionManager {
             _statusMessage.value = "Aktif — $host:$port"
             _sessionCount.value  = 0
 
-            OverlayLogger.i(TAG, "Relay aktif: ${account.gamertag} → $host:$port")
-
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Relay başlatılamadı: ${e.message}", e)
             _isActive.value      = false
             _statusMessage.value = "Hata: ${e.message}"
             relay                = null
         }
     }
 
-    // ── Durdur ────────────────────────────────────────────────────────────
-
     fun stop() {
         if (!_isActive.value) return
-        OverlayLogger.i(TAG, "Relay durduruluyor")
         try {
             ModuleManager.disableAll()
-            relay?.stop()   // OxRelay.stop() → LanBroadcaster.stop() + session disconnect
+            relay?.stop()
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Relay durdurma hatası: ${e.message}", e)
         } finally {
             relay                = null
             _isActive.value      = false
@@ -112,18 +97,10 @@ object SessionManager {
         }
     }
 
-    // ── Session callback'leri ─────────────────────────────────────────────
-
     private fun onSessionCreated(session: OxRelaySession) {
         _sessionCount.value++
-        OverlayLogger.i(TAG, "Yeni session #${_sessionCount.value}: ${session.clientAddress}")
         _statusMessage.value = "Session #${_sessionCount.value} — ${session.clientAddress}"
 
-        // NOT: ConnectionManager.setupSession() buraya ÇAĞRILMAZ.
-        //      OxRelay.capture() içinde zaten çağrıldı.
-        //      Burada ikinci kez çağırmak listener'ları çift ekler → her paket 2x işlenir.
-
-        // LAN listesinde playerCount = 0 (büyük sunucularda sorun çıkarmaz)
         LanBroadcaster.updateInfo(
             protocolVersion = OxRelay.RELAY_CODEC.protocolVersion,
             mcVersion       = OxRelay.RELAY_CODEC.minecraftVersion ?: "1.21.60",
@@ -139,12 +116,10 @@ object SessionManager {
                 .closeFuture()
                 .addListener { onSessionEnded(session, "channel closed") }
         } catch (e: Exception) {
-            Log.w(TAG, "Close listener eklenemedi: ${e.message}")
         }
     }
 
     private fun onSessionEnded(session: OxRelaySession, reason: String) {
-        OverlayLogger.i(TAG, "Session kapandı: ${session.clientAddress} — $reason")
         PacketEventBus.setSession(null)
         EntityTracker.reset()
         BlockTracker.clear()

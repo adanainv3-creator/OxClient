@@ -1,6 +1,5 @@
 package com.oxclient.events
 
-import android.util.Log
 import com.oxclient.core.relay.OxRelaySession
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -19,26 +18,22 @@ object PacketEventBus {
 
     fun setSession(session: OxRelaySession?) {
         currentSession = session
-        Log.d(TAG, if (session != null) "Session set: ${session.clientAddress}" else "Session cleared")
     }
 
     fun register(l: PacketListener) {
         if (listeners.contains(l)) return
         listeners.add(l)
         listeners.sortBy { it.priority }
-        Log.d(TAG, "Registered: ${l.javaClass.simpleName} (priority=${l.priority})")
     }
 
     fun unregister(l: PacketListener) {
         listeners.remove(l)
-        Log.d(TAG, "Unregistered: ${l.javaClass.simpleName}")
     }
 
     fun clear() {
         listeners.clear()
         currentSession = null
         _stats.reset()
-        Log.d(TAG, "EventBus temizlendi")
     }
 
     fun publish(event: PacketEvent) {
@@ -47,7 +42,6 @@ object PacketEventBus {
             try {
                 l.onPacket(event)
             } catch (e: Exception) {
-                Log.e(TAG, "${l.javaClass.simpleName} hata: ${e.message}", e)
             }
             if (event.isCancelled) {
                 _stats.recordCancelled()

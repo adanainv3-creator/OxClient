@@ -18,22 +18,14 @@ object PacketUtil {
         })
     }
 
-    // ✅ FIX: eskiden hotbarSlot varsayılanı sabit 0'dı — kılıç başka bir hotbar
-    // slotundaysa server itemInHand'i slot 0'dan okuyup "elde silah yok" sanıyor
-    // ve yumruk hasarı uyguluyordu. Artık EntityTracker'ın gerçekten takip ettiği
-    // seçili slotu kullanıyoruz (bkz. EntityTracker.selfHotbarSlot / handleMobEquipment).
     fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = EntityTracker.selfHotbarSlot) {
-        // ── FIX: InventoryTransactionSerializer.writeItemUseOnEntity() bu üç alanı
-        // KOŞULSUZ okuyor (bkz. CloudburstMC/Protocol v291→v1001, hiç değişmemiş).
-        // null bırakılırsa helper.writeVector3f(null)/writeItem(null) encode
-        // aşamasında NPE atıyor — paket ağa hiç çıkmadan sessizce kayboluyor.
-        // Bu yüzden KillAura/CrystalAura/AutoTotem'in saldırıları hiç işlemiyordu.
+
         val heldItem = EntityTracker.getInventoryItem(hotbarSlot) ?: ItemData.AIR
         val target   = EntityTracker.getById(targetRid)
 
         val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
         val clickPos  = if (target != null) {
-            // Hedefin yaklaşık gövde-orta yüksekliğine tıklamış gibi davran.
+
             Vector3f.from(target.x, target.y + 1.0f, target.z)
         } else {
             playerPos
@@ -42,7 +34,7 @@ object PacketUtil {
         session.serverBound(InventoryTransactionPacket().apply {
             transactionType = InventoryTransactionType.ITEM_USE_ON_ENTITY
             runtimeEntityId = targetRid
-            actionType      = 1   // 1 = ATTACK
+            actionType      = 1
             this.hotbarSlot = hotbarSlot
             itemInHand      = heldItem
             playerPosition  = playerPos
