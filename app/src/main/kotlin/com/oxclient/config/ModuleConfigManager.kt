@@ -55,13 +55,14 @@ object ModuleConfigManager {
                         is StringSetting -> setting.value = moduleObj.getString(key)
                         is EnumSetting<*> -> {
                             val enumName = moduleObj.getString(key)
-                            val enumClass = setting.value::class.java
+                            val enumClass = setting.value?.javaClass
+                            if (enumClass == null) continue
                             @Suppress("UNCHECKED_CAST")
                             val enumValue = enumClass.enumConstants
-                                .find { (it as Enum<*>).name == enumName } as? Enum<*>
+                                ?.find { (it as Enum<*>).name == enumName } as Enum<*>?
                             if (enumValue != null) {
                                 @Suppress("UNCHECKED_CAST")
-                                setting.value = enumValue as Enum<*>
+                                (setting as EnumSetting<Enum<*>>).value = enumValue
                             }
                         }
                         else -> { /* desteklenmeyen tipler */ }

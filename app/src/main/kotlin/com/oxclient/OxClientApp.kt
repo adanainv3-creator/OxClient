@@ -23,6 +23,7 @@ import com.oxclient.module.visual.FOVChanger
 import com.oxclient.module.visual.FullBright
 import com.oxclient.module.visual.EnemyESP
 import com.oxclient.module.combat.AirFight
+import com.oxclient.config.ModuleConfigManager
 import com.oxclient.module.combat.HeadTrack
 import com.oxclient.utils.WorldBlockTracker
 
