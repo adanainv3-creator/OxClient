@@ -29,7 +29,7 @@ class TPAura : BaseModule(
     private val range            = float("Range",             2.5f, 1f,   8f)
     private val horizontalSpeed  = float("Horizontal Speed",  4f,   0.5f, 10f)
     private val verticalSpeed    = float("Vertical Speed",    1.5f, 0.1f, 5f)
-    private val strafeSpeed      = float("Strafe Speed",      2.5f, 0.1f, 5f)
+    private val strafeSpeed      = float("Strafe Speed",      2.5f, 0.1f, 20f)
     private val yOffset          = float("Y Offset",          0.8f, -2f,   2f)
     private val pvpDepth         = float("PVP Depth",         2.5f, 2f,   3f)
     private val pvpRadius        = float("PVP Radius",        1.2f, 0.5f, 2.5f)

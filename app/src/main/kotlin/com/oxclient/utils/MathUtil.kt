@@ -62,7 +62,7 @@ object MathUtil {
         val ry = dx * sinY * sinP + dy * cosP + dz * cosY * sinP
         val rz = dx * sinY * cosP - dy * sinP + dz * cosY * cosP
 
-        if (rz <= 0.05f) return null
+        if (rz <= 0.5f) return null
 
         val aspect = screenW.toFloat() / screenH.toFloat()
         val tanHalfFovY = tan(Math.toRadians(fov / 2.0))
