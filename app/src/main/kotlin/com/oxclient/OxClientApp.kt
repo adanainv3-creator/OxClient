@@ -39,6 +39,7 @@ class OxClientApp : Application() {
         instance = this
 
         ServerConfig.init(applicationContext)
+        ModuleConfigManager.init(applicationContext)
         AccountManager.init(applicationContext)
         MicrosoftAuthManager.init(applicationContext)
 

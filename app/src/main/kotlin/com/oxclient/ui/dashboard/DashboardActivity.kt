@@ -54,12 +54,15 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import com.oxclient.auth.AccountManager
 import com.oxclient.auth.AuthState
 import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.auth.SavedAccount
 import com.oxclient.config.ServerConfig
+import com.oxclient.config.ModuleConfigManager
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.ModuleManager
@@ -453,11 +456,151 @@ private fun AccountRow(
 
 @Composable
 private fun ConfigTab() {
+    // Profil listesini state'te tut
+    var profiles by remember { mutableStateOf(ModuleConfigManager.listProfiles()) }
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var newProfileName by remember { mutableStateOf("") }
+
+    // Listeyi güncellemek için yardımcı
+    fun refreshList() {
+        profiles = ModuleConfigManager.listProfiles()
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Configs") {
-            AddIconButton(onClick = { /* config import/add flow is not wired yet */ })
+            AddIconButton(onClick = { showSaveDialog = true })
         }
-        InactiveNotice()
+
+        if (profiles.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "No saved profiles.\nTap + to save current settings.",
+                    color = OxOnSurfaceDim,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth().weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                profiles.forEach { profileName ->
+                    ProfileRow(
+                        name = profileName,
+                        onLoad = {
+                            ModuleConfigManager.loadProfile(profileName)
+                            // Ayarlar değişti, UI'ı yenilemek için version'ı artır
+                            // (modüllerin UI'da güncellenmesi için ModuleManager.version artırılabilir)
+                        },
+                        onDelete = {
+                            ModuleConfigManager.deleteProfile(profileName)
+                            refreshList()
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    // Yeni profil kaydetme dialog'u
+    if (showSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("Save Profile", fontFamily = FontFamily.Monospace) },
+            text = {
+                OutlinedTextField(
+                    value = newProfileName,
+                    onValueChange = { newProfileName = it },
+                    label = { Text("Profile Name", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(6.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = OxAccent,
+                        unfocusedBorderColor = OxOutlineStrong,
+                        focusedLabelColor = OxAccentLight,
+                        cursorColor = OxAccentLight
+                    ),
+                    textStyle = LocalTextStyle.current.copy(
+                        fontFamily = FontFamily.Monospace,
+                        color = OxOnBackground
+                    )
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (ModuleConfigManager.isValidProfileName(newProfileName)) {
+                            ModuleConfigManager.saveProfile(newProfileName.trim())
+                            newProfileName = ""
+                            showSaveDialog = false
+                            refreshList()
+                        }
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = OxAccent)
+                ) {
+                    Text("Save", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveDialog = false; newProfileName = "" }) {
+                    Text("Cancel", color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
+                }
+            },
+            containerColor = OxSurface,
+            shape = RoundedCornerShape(10.dp)
+        )
+    }
+}
+
+@Composable
+private fun ProfileRow(
+    name: String,
+    onLoad: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(OxSurface)
+            .border(1.dp, OxOutline, RoundedCornerShape(10.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            name,
+            color = OxOnBackground,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = onLoad,
+                shape = RoundedCornerShape(6.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = OxAccentLight)
+            ) {
+                Text("Load", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+            TextButton(
+                onClick = onDelete,
+                shape = RoundedCornerShape(6.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = OxError)
+            ) {
+                Text("Delete", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+        }
     }
 }
 
