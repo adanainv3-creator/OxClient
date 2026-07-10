@@ -8,7 +8,6 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.BlockTracker
 import com.oxclient.utils.BlockTracker.TrackedBlockType
 import com.oxclient.utils.GameFov
@@ -28,14 +27,7 @@ class ESP : BaseModule(
 
     private val renderMode    = enum ("Render Mode",   RenderMode.Both)
     private val sortMode      = enum ("Sort Mode",     SortMode.Distance)
-    // ✅ Menzil 512'ye çıkarıldı (500x500 alan isteği) — varsayılan hâlâ 64f, düşük
-    // menzilde performanslı; kullanıcı slider'ı istediği kadar (max 512) açabilir.
     private val scanRange     = float("Scan Range",    64f,  8f, 512f)
-    // ✅ FIX: Varsayılan 70f (Java FOV'u) yanlıştı — Bedrock'ta varsayılan FOV 110°.
-    // Bu yanlış varsayım, gerçek render FOV'uyla ESP'nin projeksiyon hesabı arasında
-    // sistematik bir uyuşmazlık yaratıyordu: ekran merkezine yakın bloklar kabaca
-    // doğru görünse de, kenarlara/köşelere gittikçe hata katlanarak büyüyor ve
-    // tracer/box'lar gerçek blok konumundan bağımsız, rastgele dağılmış görünüyordu.
     private val autoFovSync    = bool ("Auto FOV Sync",  true)
     private val fov            = float("Manual FOV",    110f,  30f, 130f)
     private val maxDisplay    = int  ("Max Display",   150,  10, 800)
@@ -64,7 +56,6 @@ class ESP : BaseModule(
     private val renderList = CopyOnWriteArrayList<RenderEntry>()
     private var updateJob: Job? = null
 
-    // Ekran koordinatlarında yumuşatma (jitter azaltma) için önceki pozisyon önbelleği
     private val smoothedScreenPos = ConcurrentHashMap<Long, FloatArray>()
 
     data class RenderEntry(
@@ -76,10 +67,6 @@ class ESP : BaseModule(
 
     override fun onEnable() {
         super.onEnable()
-        // ✅ FIX: BlockTracker.clear() artık BURADA çağrılmıyor. BlockTracker, EntityTracker
-        // gibi oturum boyunca her zaman aktif (bkz. GamingPacketListener) — modül enable/disable
-        // durumundan bağımsız veri topluyor. ESP burada temizlerse, ESP kapalıyken toplanmış
-        // tüm bloklar (chunk yüklenmesi vb.) enable anında silinip render için hiç kalmıyordu.
         smoothedScreenPos.clear()
         updateJob = launchTickLoop(updateRateMs.value.toLong()) { updateTick() }
     }
@@ -89,8 +76,6 @@ class ESP : BaseModule(
         super.onDisable()
         renderList.clear()
         smoothedScreenPos.clear()
-        // NOT: BlockTracker.clear() burada da çağrılmıyor — veri kaynağı artık ESP'nin
-        // enable durumuna bağlı değil, session sonlanana kadar (SessionManager) kalıcı.
     }
 
     private fun updateTick() {
@@ -99,12 +84,6 @@ class ESP : BaseModule(
 
     private fun rebuildRenderList() {
         val cx = EntityTracker.selfX
-        // ⚠️ FIX: Bedrock'ta PlayerAuthInputPacket.position kendi oyuncumuz için
-        // zaten göz seviyesinde geliyor (Java'daki gibi ayak pozisyonu DEĞİL).
-        // Önceden buraya ayrıca +1.62f eklenince sanal ESP kamerası gerçek oyun
-        // kamerasından ~1 blok daha yukarıda hesaplanıyordu — bu da her ESP
-        // kutusunun/tracer'ının gerçek blok konumuna göre bir alt bloğu
-        // gösteriyormuş gibi görünmesine sebep oluyordu.
         val cy = EntityTracker.selfY
         val cz = EntityTracker.selfZ
         val range = scanRange.value
@@ -131,7 +110,6 @@ class ESP : BaseModule(
         renderList.clear()
         renderList.addAll(trimmed)
 
-        // Görünürlüğü kalmayan bloklar için smoothing önbelleğini temizle (bellek sızıntısını önler)
         val activeKeys = trimmed.mapTo(HashSet()) { it.key }
         smoothedScreenPos.keys.retainAll(activeKeys)
     }
@@ -139,7 +117,7 @@ class ESP : BaseModule(
     fun render(canvas: Canvas, screenW: Int, screenH: Int) {
         if (!isEnabled) return
         val cx = EntityTracker.selfX
-        val cy = EntityTracker.selfY // bkz. rebuildRenderList() — göz yüksekliği zaten dahil
+        val cy = EntityTracker.selfY
         val cz = EntityTracker.selfZ
         val yaw   = EntityTracker.selfYaw
         val pitch = EntityTracker.selfPitch
@@ -175,12 +153,6 @@ class ESP : BaseModule(
         val centerY = screenH / 2f
         val maxRange = scanRange.value
         val nearest = if (nearestGlow.value) renderList.minByOrNull { it.distance } else null
-        // ✅ FIX: Sabit ESP-fov yerine gerçekte render edilen FOV kullanılıyor.
-        // FOVChanger walkSpeed tuzağıyla gerçek FOV'u değiştirdiğinde GameFov.current
-        // güncellenir; ESP burada onu okuyarak projeksiyonun her zaman ekranda
-        // GERÇEKTEN görünenle birebir eşleşmesini sağlar. Auto FOV Sync kapatılırsa
-        // "Manual FOV" slider'ı kullanılır (örn. FOVChanger kullanılmıyorsa ve
-        // Minecraft ayarlarındaki FOV 110'dan farklıysa).
         val effectiveFov = if (autoFovSync.value) GameFov.current else fov.value
 
         for (entry in renderList) {
@@ -193,7 +165,6 @@ class ESP : BaseModule(
                 effectiveFov
             )
 
-            // Mesafeye göre saydamlık: yakın bloklar tam opak, uzak bloklar (minAlpha'ya kadar) sönük
             val alphaScale = if (fadeByDistance.value) {
                 val t = (1f - (entry.distance / maxRange)).coerceIn(0f, 1f)
                 (minAlpha.value + (255 - minAlpha.value) * t) / 255f
@@ -206,8 +177,6 @@ class ESP : BaseModule(
             val isNearest = nearestGlow.value && entry === nearest
 
             if (screenPos != null) {
-                // rawPos != null burada garanti (screenPos != null ise rawPos da != null'dır,
-                // çünkü screenPos ya rawPos'un smooth'lanmış hali ya da rawPos'un kendisidir).
                 val deltaX = screenPos.first  - rawPos!!.first
                 val deltaY = screenPos.second - rawPos.second
 
@@ -223,8 +192,6 @@ class ESP : BaseModule(
 
                 when (renderMode.value) {
                     RenderMode.Box, RenderMode.Both -> {
-                        // ✅ Artık gerçek 3D wireframe küp: bloğun 8 köşesi ayrı ayrı izdüşürülüyor.
-                        // deltaX/deltaY, tracer'ın bittiği smooth'lanmış noktayla kutuyu hizalar.
                         drawBox3D(
                             canvas,
                             entry.x, entry.y, entry.z,
@@ -255,7 +222,6 @@ class ESP : BaseModule(
         if (showSummary.value) drawSummaryPanel(canvas, screenW)
     }
 
-    /** Ekran koordinatlarını üstel yumuşatma ile titremeyi (jitter) azaltır. */
     private fun smooth(key: Long, x: Float, y: Float): Pair<Float, Float> {
         val f = smoothFactor.value
         val prev = smoothedScreenPos[key]
@@ -270,7 +236,6 @@ class ESP : BaseModule(
         }
     }
 
-    /** Görüş alanı dışındaki bloklar için ekran kenarında yön oku çizer (radar tarzı). */
     private fun drawRadarArrow(
         canvas: Canvas, entry: RenderEntry,
         centerX: Float, centerY: Float,
@@ -279,7 +244,7 @@ class ESP : BaseModule(
     ) {
         val angleToTarget = Math.toDegrees(
             atan2(
-                (EntityTracker.selfX - entry.x).toDouble(),   // ⚠️ FIX: dx ters çevrildi
+                (EntityTracker.selfX - entry.x).toDouble(),
                 (entry.z - EntityTracker.selfZ).toDouble()
             )
         ).toFloat()
@@ -319,7 +284,6 @@ class ESP : BaseModule(
         canvas.drawPath(path, paint)
     }
 
-    /** Ekranın köşesinde bulunan blokların türe göre sayısını gösteren özet panel. */
     private fun drawSummaryPanel(canvas: Canvas, screenW: Int) {
         val counts = renderList.groupingBy { it.type }.eachCount()
         if (counts.isEmpty()) return
@@ -357,26 +321,6 @@ class ESP : BaseModule(
         }
     }
 
-    /**
-     * ═══════════════════════════════════════════════════════════════════
-     * GERÇEK 3D KUTU (wireframe cube) — eskiden burada ekran-uzayında SABİT
-     * boyutlu, düz bir kare + köşe parantezleri çiziliyordu. Bu, kameranın
-     * açısından bağımsız her zaman aynı "kare" göründüğü için özellikle yan
-     * açılardan bakınca gerçek bloğun perspektifiyle uyuşmuyor, "yamuk"/
-     * yanlış hizalı görünüyordu.
-     *
-     * Bunun yerine artık bloğun 8 gerçek dünya köşesi (x-0.5..x+0.5 vb.)
-     * tek tek worldToScreen ile ekrana izdüşürülüyor ve 12 kenar çizgiyle
-     * birleştiriliyor — yani kamera açısına göre doğru şekilde küçülüp
-     * büyüyen, eğilen gerçek bir 3D küp.
-     *
-     * deltaX/deltaY: tracer çizgisinin bittiği (yumuşatılmış) merkez nokta
-     * ile bloğun ham (yumuşatılmamış) merkez izdüşümü arasındaki fark.
-     * Bunu her köşeye aynen uygulayarak kutu her zaman tracer'ın bittiği
-     * noktayla TAM hizalı kalıyor — aksi halde tracer smoothing'li, kutu
-     * ham konumda olur ve ikisi birbirinden kopuk görünürdü.
-     * ═══════════════════════════════════════════════════════════════════
-     */
     private fun drawBox3D(
         canvas: Canvas,
         wx: Float, wy: Float, wz: Float,
@@ -392,16 +336,15 @@ class ESP : BaseModule(
         fov: Float = GameFov.VANILLA_DEFAULT
     ) {
         val half = 0.5f
-        // Bloğun 8 köşesi (dünya koordinatı) — alt yüz 0-3, üst yüz 4-7
         val worldCorners = arrayOf(
-            floatArrayOf(wx - half, wy - half, wz - half), // 0
-            floatArrayOf(wx + half, wy - half, wz - half), // 1
-            floatArrayOf(wx + half, wy - half, wz + half), // 2
-            floatArrayOf(wx - half, wy - half, wz + half), // 3
-            floatArrayOf(wx - half, wy + half, wz - half), // 4
-            floatArrayOf(wx + half, wy + half, wz - half), // 5
-            floatArrayOf(wx + half, wy + half, wz + half), // 6
-            floatArrayOf(wx - half, wy + half, wz + half)  // 7
+            floatArrayOf(wx - half, wy - half, wz - half),
+            floatArrayOf(wx + half, wy - half, wz - half),
+            floatArrayOf(wx + half, wy - half, wz + half),
+            floatArrayOf(wx - half, wy - half, wz + half),
+            floatArrayOf(wx - half, wy + half, wz - half),
+            floatArrayOf(wx + half, wy + half, wz - half),
+            floatArrayOf(wx + half, wy + half, wz + half),
+            floatArrayOf(wx - half, wy + half, wz + half)
         )
 
         val screenCorners = arrayOfNulls<FloatArray>(8)
@@ -409,7 +352,7 @@ class ESP : BaseModule(
             val c = worldCorners[i]
             val p = MathUtil.worldToScreen(
                 c[0], c[1], c[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH, fov
-            ) ?: return // köşelerden biri kameranın arkasındaysa (rz<=0) bu blok için 3D kutu atlanır
+            ) ?: return
             screenCorners[i] = floatArrayOf(p.first + deltaX, p.second + deltaY)
         }
 
@@ -417,7 +360,6 @@ class ESP : BaseModule(
         strokePaint.alpha = (220 * alphaScale).toInt().coerceIn(0, 255)
         strokePaint.strokeWidth = if (isNearest) tracerWidth.value + 1.5f else tracerWidth.value
 
-        // 12 kenar: alt yüz (4) + üst yüz (4) + dikey kenarlar (4)
         val edges = intArrayOf(
             0, 1,  1, 2,  2, 3,  3, 0,
             4, 5,  5, 6,  6, 7,  7, 4,
@@ -425,7 +367,6 @@ class ESP : BaseModule(
         )
         drawEdges(canvas, screenCorners, edges, strokePaint)
 
-        // Üst yüzü hafif dolgu ile vurgulayarak bloğun okunurluğunu artır
         fillPaint.color = colorArgb
         fillPaint.alpha = (boxAlpha.value * alphaScale).toInt().coerceIn(0, 255)
         val topPath = Path().apply {

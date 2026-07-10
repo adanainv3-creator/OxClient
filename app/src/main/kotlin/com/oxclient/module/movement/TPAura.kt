@@ -4,7 +4,6 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -46,21 +45,17 @@ class TPAura : BaseModule(
     private var attackCount  = 0L
     @Volatile private var lastAttackMs = 0L
 
-    private companion object { const val TAG = "TPAura" }
-
     override fun onEnable() {
         super.onEnable()
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
         attackCount = 0L
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} range=${range.value} attackRange=${attackRange.value} cps=${cpsMin.value}-${cpsMax.value} doubleAttack=${doubleAttack.value}")
     }
 
     override fun onDisable() {
         PacketEventBus.unregister(this)
         super.onDisable()
-        OverlayLogger.d(TAG, "Disabled (moves=$moveAttempts attacks=$attackCount)")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -76,13 +71,7 @@ class TPAura : BaseModule(
     private fun findTarget(): EntityTracker.TrackedEntity? {
         val candidates = EntityTracker.getEntitiesInRange(detectRange.value)
             .filter { it.runtimeId != EntityTracker.selfRuntimeId && it.isPlayer }
-        val target = candidates.minByOrNull { EntityTracker.distanceTo(it) }
-        if (target == null) {
-            OverlayLogger.v(TAG, "findTarget: aday yok")
-        } else {
-            OverlayLogger.v(TAG, "findTarget: ${target.name.ifEmpty { target.runtimeId }} - ${"%.1f".format(EntityTracker.distanceTo(target))}m")
-        }
-        return target
+        return candidates.minByOrNull { EntityTracker.distanceTo(it) }
     }
 
     private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
@@ -92,7 +81,6 @@ class TPAura : BaseModule(
         val selfY = EntityTracker.selfY
         val selfZ = EntityTracker.selfZ
 
-        // Y Offset ile head positioning
         val targetPos = Vector3f.from(target.x, target.y + yOffset.value, target.z)
         val dist = MathUtil.dist3(selfX, selfY, selfZ, target.x, target.y, target.z)
 
@@ -102,7 +90,6 @@ class TPAura : BaseModule(
             calculatePosition(selfX, selfZ, targetPos, target)
         }
 
-        // ⚡ Rotation: direct aim (predictive aim RotationUtil'de yok)
         val rot = RotationUtil.toEntity(target)
 
         try {
@@ -115,11 +102,7 @@ class TPAura : BaseModule(
                 ridingRuntimeEntityId = 0L
             })
             moveAttempts++
-            if (moveAttempts % 15 == 0L) {
-                OverlayLogger.d(TAG, "move: #$moveAttempts | dist=${"%.1f".format(dist)} | mode=${moveMode.value}")
-            }
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Paket hatası: ${e.message}")
         }
     }
 
@@ -150,28 +133,22 @@ class TPAura : BaseModule(
         val session = PacketEventBus.currentSession ?: return
         attackCount++
 
-        // PVP modunda hedefin altındayız — kritik şartı (fallDistance>0 && !onGround)
-        // Criticals.injectMovePacket ile aynı kanıtlanmış teknikle sağlanıyor
         if (moveMode.value == MoveMode.PVP && pvpCrit.value) {
             PacketUtil.sendMoveAtSelf(session, dyOffset = 0.11f, onGround = false)
             PacketUtil.sendMoveAtSelf(session, dyOffset = 0f,    onGround = false)
         }
 
-        // ⚡ Double attack: swing + attack x2
         PacketUtil.sendSwing(session)
         PacketUtil.sendAttack(session, target.runtimeId)
         if (doubleAttack.value) {
             PacketUtil.sendAttack(session, target.runtimeId)
         }
-
-        OverlayLogger.v(TAG, "attack: #$attackCount | ${target.name.ifEmpty { target.runtimeId }} | ${"%.1f".format(dist)}m")
     }
 
     private fun calculatePosition(selfX: Float, selfZ: Float, targetPos: Vector3f, target: EntityTracker.TrackedEntity): Vector3f {
         val radius = range.value
 
         return when (moveMode.value) {
-            // ⚡ AGGRESSIVE: Tight circle, hızlı dönüş, hareket halindeki rakibe karşı
             MoveMode.Aggressive -> {
                 strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.05
                 val verticalWave = sin(strafeAngle * 0.7f).toFloat() * 0.25f * verticalSpeed.value
@@ -183,7 +160,6 @@ class TPAura : BaseModule(
                 )
             }
 
-            // Klasik strafe: daha geniş radius, dengeli hareket
             MoveMode.Strafe -> {
                 strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.03
                 val verticalWave = sin(strafeAngle * 0.5f).toFloat() * 0.3f * verticalSpeed.value
@@ -195,7 +171,6 @@ class TPAura : BaseModule(
                 )
             }
 
-            // Behind: Rakinin arkasına konumlan, defensive strat
             MoveMode.Behind -> {
                 val dx = targetPos.x - selfX
                 val dz = targetPos.z - selfZ
@@ -209,7 +184,6 @@ class TPAura : BaseModule(
                 )
             }
 
-            // Random: Unpredictable, chaos atak
             MoveMode.Random -> {
                 val angle            = Random.nextDouble(0.0, Math.PI * 2)
                 val horizontalOffset = radius * (0.7f + Random.nextFloat() * 0.3f)
@@ -222,8 +196,6 @@ class TPAura : BaseModule(
                 )
             }
 
-            // PVP: hedefin 2-3 blok altına geçip yukarı bakarak dar çemberde strafe —
-            // her vuruş öncesi crit enjeksiyonuyla birleştirilir (tryAttack'te)
             MoveMode.PVP -> {
                 strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.045
 

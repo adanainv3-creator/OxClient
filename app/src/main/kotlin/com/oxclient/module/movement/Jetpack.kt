@@ -31,13 +31,11 @@ class Jetpack : BaseModule(
 
         if (requireJump.value && !jumping) return
 
-        // rotation.x = pitch (yukarı/aşağı bakış), rotation.y = yaw (sağ/sol bakış)
         val pitch = Math.toRadians(pkt.rotation.x.toDouble()).toFloat()
         val yaw   = Math.toRadians(pkt.rotation.y.toDouble()).toFloat()
 
         val cosPitch = cos(pitch)
 
-        // Baktığın yöne dönük birim vektör (forward direction)
         val dirX = -sin(yaw) * cosPitch
         val dirY = -sin(pitch)
         val dirZ = cos(yaw) * cosPitch

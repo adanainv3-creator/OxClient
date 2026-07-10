@@ -11,17 +11,6 @@ import org.cloudburstmc.protocol.bedrock.data.command.CommandPermission
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateAbilitiesPacket
 
-/**
- * FOV değişimi CameraInstructionPacket ile yapılmıyor; çoğu sunucu/anticheat bu paketi
- * yok sayıyor ya da engelliyor. Bunun yerine Zoom modüllerindeki teknik uygulanıyor:
- * istemciye sahte bir walkSpeed değeri gönderip Bedrock'un "dynamic FOV" davranışını
- * (hız arttıkça görüş açısının otomatik genişlemesi) tetikliyoruz.
- *
- * ÖNEMLİ: Gerçek görünen FOV değiştiği için bunu GameFov.current'a yazıyoruz.
- * Aksi halde ESP gibi worldToScreen() kullanan modüller eski/varsayılan FOV'a göre
- * hesap yapmaya devam eder ve ekran projeksiyonu (tracer/box konumları) kenarlara
- * doğru gittikçe katlanarak yanlış çıkar.
- */
 class FOVChanger : BaseModule(
     name        = "FOVChanger",
     category    = ModuleCategory.VISUAL,

@@ -4,7 +4,6 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import kotlinx.coroutines.*
 import org.cloudburstmc.protocol.bedrock.packet.MobEffectPacket
 import org.cloudburstmc.protocol.bedrock.packet.SetTimePacket
@@ -23,12 +22,10 @@ class FullBright : BaseModule(
     private val refreshSec  = int  ("Refresh (s)",   8,     1,  60)
     private val shortcut    = bool ("Shortcut",      false)
 
-    private val TAG = "FullBright"
     private var loop: Job? = null
 
     override fun onEnable() {
         super.onEnable()
-        OverlayLogger.d(TAG, "Açıldı (${mode.value})")
         loop = scope.launch {
             var attempts = 0
             while (currentCoroutineContext().isActive && isEnabled) {
@@ -51,7 +48,6 @@ class FullBright : BaseModule(
         val needsNv = mode.value == FbMode.NightVision || mode.value == FbMode.Both
         if (needsNv) removeNightVision()
         super.onDisable()
-        OverlayLogger.d(TAG, "Kapandı")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -73,13 +69,9 @@ class FullBright : BaseModule(
     }
 
     private fun injectNightVision() {
-        // ✅ FIX: MobEffectPacket.runtimeEntityId RUNTIME id bekliyor, UNIQUE id değil.
-        // selfUniqueId kullanıldığı için istemci paketi kendi oyuncusuna ait tanımıyordu
-        // ve efekt hiçbir zaman görünmüyordu.
         val rid = EntityTracker.selfRuntimeId
-        if (rid == 0L) { OverlayLogger.w(TAG, "NV atlandı: selfRuntimeId=0"); return }
-        val session = PacketEventBus.currentSession
-            ?: run { OverlayLogger.w(TAG, "NV atlandı: session yok"); return }
+        if (rid == 0L) return
+        val session = PacketEventBus.currentSession ?: return
         session.clientBound(MobEffectPacket().apply {
             runtimeEntityId = rid
             event           = MobEffectPacket.Event.ADD
@@ -88,7 +80,6 @@ class FullBright : BaseModule(
             isParticles     = false
             duration        = 2_000_000
         })
-        OverlayLogger.i(TAG, "NV enjekte edildi (rid=$rid)")
     }
 
     private fun removeNightVision() {

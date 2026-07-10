@@ -1,4 +1,3 @@
-// EnemyESP.kt
 package com.oxclient.module.visual
 
 import android.graphics.Canvas
