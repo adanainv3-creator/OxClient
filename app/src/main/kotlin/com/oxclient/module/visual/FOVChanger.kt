@@ -3,62 +3,78 @@ package com.oxclient.module.visual
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
-import kotlinx.coroutines.*
-import org.cloudburstmc.protocol.bedrock.data.camera.CameraEase
-import org.cloudburstmc.protocol.bedrock.data.camera.CameraFovInstruction
-import org.cloudburstmc.protocol.bedrock.packet.CameraInstructionPacket
-import org.cloudburstmc.protocol.bedrock.packet.StartGamePacket
+import org.cloudburstmc.protocol.bedrock.data.Ability
+import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
+import org.cloudburstmc.protocol.bedrock.data.PlayerPermission
+import org.cloudburstmc.protocol.bedrock.data.command.CommandPermission
+import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
+import org.cloudburstmc.protocol.bedrock.packet.UpdateAbilitiesPacket
 
+/**
+ * FOV değişimi CameraInstructionPacket ile yapılmıyor; çoğu sunucu/anticheat bu paketi
+ * yok sayıyor ya da engelliyor. Bunun yerine Zoom modüllerindeki teknik uygulanıyor:
+ * istemciye sahte bir walkSpeed değeri gönderip Bedrock'un "dynamic FOV" davranışını
+ * (hız arttıkça görüş açısının otomatik genişlemesi) tetikliyoruz. Bu paket tamamen
+ * client-bound enjekte edildiği için sunucu hızın değiştiğinden haberdar olmuyor,
+ * sadece istemcinin görsel FOV'u değişiyor.
+ */
 class FOVChanger : BaseModule(
     name        = "FOVChanger",
     category    = ModuleCategory.VISUAL,
-    description = "Oyuncunun görüş açısını (FOV) değiştirir"
+    description = "walkSpeed değerini sahteleyerek görüş açısını (FOV) değiştirir"
 ) {
-    private val fov         = float("FOV",          110f, 30f, 300f)
-    private val easeTime    = float("Ease Time",     0f,   0f,  5f)
-    private val refreshSec  = int  ("Refresh (s)",   5,    1,   30)
-    private val shortcut    = bool ("Shortcut",      false)
+    private val fov = float("FOV", 110f, 30f, 300f)
 
-    private val TAG = "FOVChanger"
-    private var loop: Job? = null
+    private val DEFAULT_FOV   = 110f
+    private val DEFAULT_SPEED = 0.1f
 
-    override fun onEnable() {
-        super.onEnable()
-        loop = scope.launch {
-            while (currentCoroutineContext().isActive && isEnabled) {
-                applyFov()
-                delay(refreshSec.value * 1000L)
-            }
-        }
-    }
-
-    override fun onDisable() {
-        loop?.cancel()
-        loop = null
-        super.onDisable()
-        resetFov()
-    }
+    private var isFovApplied  = false
+    private var appliedSpeed  = DEFAULT_SPEED
 
     override fun onPacket(event: PacketEvent) {
-        if (!isEnabled) return
-        if (event.packet is StartGamePacket) {
-            scope.launch { delay(200); if (isEnabled) applyFov() }
+        val packet = event.packet
+        if (packet !is PlayerAuthInputPacket) return
+
+        if (isEnabled) {
+            val targetSpeed = DEFAULT_SPEED * (fov.value / DEFAULT_FOV)
+            if (!isFovApplied || appliedSpeed != targetSpeed) {
+                applySpeed(targetSpeed)
+                appliedSpeed = targetSpeed
+                isFovApplied = true
+            }
+        } else if (isFovApplied) {
+            applySpeed(DEFAULT_SPEED)
+            appliedSpeed = DEFAULT_SPEED
+            isFovApplied = false
         }
     }
 
-    private fun applyFov() {
-        val session = PacketEventBus.currentSession
-            ?: run { OverlayLogger.w(TAG, "FOV atlandı: session yok"); return }
-        session.clientBound(CameraInstructionPacket().apply {
-            fovInstruction = CameraFovInstruction(fov.value, easeTime.value, CameraEase.LINEAR, false)
-        })
+    private fun applySpeed(speedValue: Float) {
+        val session = PacketEventBus.currentSession ?: return
+        session.clientBound(buildAbilitiesPacket(session.localPlayer.uniqueEntityId, speedValue))
     }
 
-    private fun resetFov() {
-        val session = PacketEventBus.currentSession ?: return
-        session.clientBound(CameraInstructionPacket().apply {
-            fovInstruction = CameraFovInstruction(0f, 0f, CameraEase.LINEAR, true)
-        })
+    private fun buildAbilitiesPacket(entityId: Long, speedValue: Float): UpdateAbilitiesPacket {
+        return UpdateAbilitiesPacket().apply {
+            uniqueEntityId     = entityId
+            playerPermission   = PlayerPermission.OPERATOR
+            commandPermission  = CommandPermission.OWNER
+            abilityLayers.add(AbilityLayer().apply {
+                layerType = AbilityLayer.Type.BASE
+                abilitiesSet.addAll(Ability.entries.toTypedArray())
+                abilityValues.addAll(
+                    arrayOf(
+                        Ability.BUILD,
+                        Ability.MINE,
+                        Ability.DOORS_AND_SWITCHES,
+                        Ability.OPEN_CONTAINERS,
+                        Ability.ATTACK_PLAYERS,
+                        Ability.ATTACK_MOBS,
+                        Ability.OPERATOR_COMMANDS
+                    )
+                )
+                this.walkSpeed = speedValue
+            })
+        }
     }
 }
