@@ -5,7 +5,6 @@ import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
@@ -15,10 +14,9 @@ import org.cloudburstmc.protocol.bedrock.packet.*
 class AutoTotem : BaseModule(
     name        = "AutoTotem",
     category    = ModuleCategory.COMBAT,
-    description = "Totemi sürekli sol ele takaar"
+    description = "Totemi sürekli sol ele takar"
 ) {
     companion object {
-        private const val TAG = "AutoTotem"
         private const val RESEND_COOLDOWN_MS = 150L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
@@ -34,7 +32,6 @@ class AutoTotem : BaseModule(
         totemSlot = -1
         offhandHasTotem = false
         consecutiveSendsWithoutChange = 0
-        OverlayLogger.i(TAG, "=== AutoTotem ENABLE === inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
         refreshFromSnapshot()
         if (!offhandHasTotem && totemSlot >= 0) {
             equipTotem()
@@ -46,7 +43,6 @@ class AutoTotem : BaseModule(
         super.onDisable()
         tickJob?.cancel()
         tickJob = null
-        OverlayLogger.i(TAG, "=== AutoTotem DISABLE === (totemSlot=$totemSlot offhandHasTotem=$offhandHasTotem)")
     }
 
     private fun refreshFromSnapshot() {
@@ -123,11 +119,10 @@ class AutoTotem : BaseModule(
                 if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
                 val type = runCatching { pkt.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (type.contains("CONSUME") || type.contains("TOTEM")) {
-                    OverlayLogger.i(TAG, "Totem tüketildi (event=$type)")
                     offhandHasTotem = false
                     totemSlot = -1
                     refreshFromSnapshot()
-                    if (totemSlot >= 0) equipTotem() else OverlayLogger.w(TAG, "Totem tüketildi ama envanterde yedek yok")
+                    if (totemSlot >= 0) equipTotem()
                 }
             }
         }
@@ -144,11 +139,7 @@ class AutoTotem : BaseModule(
             return
         }
 
-        val session = PacketEventBus.currentSession
-        if (session == null) {
-            OverlayLogger.e(TAG, "equipTotem: currentSession NULL")
-            return
-        }
+        val session = PacketEventBus.currentSession ?: return
 
         val offhandItem = EntityTracker.getInventoryItem(InventoryUtil.OFFHAND_SLOT) ?: ItemData.AIR
 
@@ -166,10 +157,5 @@ class AutoTotem : BaseModule(
         )
 
         consecutiveSendsWithoutChange++
-        if (consecutiveSendsWithoutChange == NO_RESPONSE_WARN_AFTER) {
-            OverlayLogger.w(TAG, "$NO_RESPONSE_WARN_AFTER kez gönderildi ama offhand hala doğrulanmadı - inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
-        }
     }
 }
-
-

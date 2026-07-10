@@ -4,7 +4,6 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.InventoryUtil
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
@@ -18,7 +17,6 @@ class AutoArmor : BaseModule(
     description = "En iyi zırhı otomatik giyer"
 ) {
     companion object {
-        private const val TAG = "AutoArmor"
         private const val RESEND_COOLDOWN_MS = 250L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
@@ -33,7 +31,6 @@ class AutoArmor : BaseModule(
         armorSlots.clear()
         lastSendMs.clear()
         consecutiveSendsWithoutChange.clear()
-        OverlayLogger.i(TAG, "=== AutoArmor ENABLE === inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
         tickJob = launchTickLoop(300L) { checkAndEquipBestArmor() }
     }
 
@@ -41,7 +38,6 @@ class AutoArmor : BaseModule(
         super.onDisable()
         tickJob?.cancel()
         tickJob = null
-        OverlayLogger.i(TAG, "=== AutoArmor DISABLE ===")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -109,9 +105,6 @@ class AutoArmor : BaseModule(
 
             val count = (consecutiveSendsWithoutChange[armorType.slotIndex] ?: 0) + 1
             consecutiveSendsWithoutChange[armorType.slotIndex] = count
-            if (count == NO_RESPONSE_WARN_AFTER) {
-                OverlayLogger.w(TAG, "$armorType için $NO_RESPONSE_WARN_AFTER kez gönderildi ama slot doğrulanmadı - inventoriesServerAuthoritative=${EntityTracker.inventoriesServerAuthoritative}")
-            }
         }
     }
 }

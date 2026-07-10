@@ -6,7 +6,6 @@ import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -18,7 +17,7 @@ import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction  // TriggerType + PredictedResult enum'ları için
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
 import org.cloudburstmc.protocol.bedrock.packet.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.floor
@@ -30,17 +29,17 @@ class CrystalAura : BaseModule(
 ) {
     enum class Mode { Single, Full5x5 }
 
-    private val range           = float("Range", 5f, 3f, 10f)
-    private val placeRange      = float("Place Range", 4.5f, 2f, 8f)
-    private val breakRange      = float("Break Range", 6f, 3f, 10f)
-    private val suicide         = bool ("Suicide", false)
-    private val place           = bool ("Place", true)
-    private val breakCrystals   = bool ("Break", true)
-    private val delay           = int  ("Delay", 100, 50, 500)
-    private val removeParticles = bool ("RemoveParticles", true)
-    private val placeMode       = enum ("Place Mode", Mode.Single)
-    private val breakMode       = enum ("Break Mode", Mode.Single)
-    private val targetMode      = enum ("Target Mode", Mode.Single)
+    private val range           = float("Range",          5f,   3f,  10f)
+    private val placeRange      = float("Place Range",    4.5f, 2f,   8f)
+    private val breakRange      = float("Break Range",    6f,   3f,  10f)
+    private val suicide         = bool ("Suicide",        false)
+    private val place           = bool ("Place",          true)
+    private val breakCrystals   = bool ("Break",          true)
+    private val delay           = int  ("Delay",          100,  50,  500)
+    private val removeParticles = bool ("RemoveParticles",true)
+    private val placeMode       = enum ("Place Mode",     Mode.Single)
+    private val breakMode       = enum ("Break Mode",     Mode.Single)
+    private val targetMode      = enum ("Target Mode",    Mode.Single)
 
     private val activeCrystals  = ConcurrentHashMap<Long, Vector3f>()
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
@@ -53,20 +52,16 @@ class CrystalAura : BaseModule(
     private var cachedObsidianDef: BlockDefinition? = null
     private var cachedBedrockDef: BlockDefinition? = null
 
-    private companion object { const val TAG = "CrystalAura" }
-
     override fun onEnable() {
         super.onEnable()
         activeCrystals.clear(); uniqueToRuntime.clear(); placedPositions.clear()
         cachedObsidianDef = null; cachedBedrockDef = null
-        OverlayLogger.d(TAG, "Enabled: place=${place.value} break=${breakCrystals.value} target=${targetMode.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
         super.onDisable()
-        OverlayLogger.d(TAG, "Disabled")
         activeCrystals.clear(); uniqueToRuntime.clear(); placedPositions.clear()
     }
 
@@ -77,22 +72,15 @@ class CrystalAura : BaseModule(
                 if (pkt.identifier.contains("crystal", ignoreCase = true)) {
                     activeCrystals[pkt.runtimeEntityId] = pkt.position
                     uniqueToRuntime[pkt.uniqueEntityId] = pkt.runtimeEntityId
-                    OverlayLogger.v(TAG, "Crystal eklendi: rid=${pkt.runtimeEntityId} pos=${pkt.position}")
                 }
             }
             is RemoveEntityPacket -> {
                 val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
                 if (rid != null) {
                     activeCrystals.remove(rid)
-                    OverlayLogger.v(TAG, "Crystal kaldırıldı: rid=$rid")
                 }
             }
             is LevelEventPacket -> {
-                // FIX #1: String karşılaştırması yerine LevelEvent enum'u doğrudan karşılaştır.
-                // Eski kod: pkt.type?.toString()?.uppercase() ile "PARTICLE"/"EXPLOSION" string arama →
-                //   yanlış: ses efektleri de (SOUND_GHAST_FIREBALL gibi) "EXPLOSION" içerdiği için
-                //   cancel ediliyordu. Ayrıca toString() implementasyona göre değişebilir.
-                // ModuleCrystalAura_kt.txt referansı: `packet.type == LevelEvent.PARTICLE_EXPLOSION`
                 if (removeParticles.value) {
                     val type = pkt.type
                     if (type == LevelEvent.PARTICLE_EXPLOSION || type == LevelEvent.PARTICLE_BLOCK_EXPLOSION) {
@@ -151,7 +139,6 @@ class CrystalAura : BaseModule(
                     if (id == targetId) {
                         val result = def
                         if (isBedrock) cachedBedrockDef = result else cachedObsidianDef = result
-                        OverlayLogger.d(TAG, "Block definition bulundu: $targetId runtimeId=$i")
                         return result
                     }
                 }
@@ -167,11 +154,9 @@ class CrystalAura : BaseModule(
                 if (id == targetId) {
                     val result = def
                     if (isBedrock) cachedBedrockDef = result else cachedObsidianDef = result
-                    OverlayLogger.d(TAG, "Block definition bulundu (Definitions): $targetId runtimeId=$i")
                     return result
                 }
             }
-            OverlayLogger.w(TAG, "Block definition bulunamadı, fallback oluşturuluyor: $targetId")
             val fallback = SimpleBlockDefinition(
                 targetId,
                 if (isBedrock) 7 else 49,
@@ -183,7 +168,6 @@ class CrystalAura : BaseModule(
             if (isBedrock) cachedBedrockDef = fallback else cachedObsidianDef = fallback
             return fallback
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Block definition hatası: ${e.message}", e)
             return null
         }
     }
@@ -196,29 +180,12 @@ class CrystalAura : BaseModule(
         val session = PacketEventBus.currentSession ?: return
 
         val heldItem = EntityTracker.getHeldItem()
-        if (heldItem == null || heldItem.count <= 0) {
-            OverlayLogger.d(TAG, "Elinde item yok")
-            return
-        }
+        if (heldItem == null || heldItem.count <= 0) return
         val itemId = runCatching { heldItem.definition?.identifier }.getOrElse { null }
-        if (itemId != "minecraft:end_crystal") {
-            OverlayLogger.d(TAG, "Elindeki item crystal değil: $itemId")
-            return
-        }
+        if (itemId != "minecraft:end_crystal") return
 
         val positions = getPlacePositions(target)
-        if (positions.isEmpty()) {
-            // ✅ TANI: "chunk verisi hiç yok" ile "chunk verisi var ama yakında
-            // obsidian/bedrock yok" durumlarını ayırt et — WorldBlockTracker'ın
-            // hiç terrain almadığı (ör. LevelChunkPacket/SubChunkPacket akışı
-            // uyuşmazlığı) durumda pozisyon bulunamaz ve bunu bilmek gerekir.
-            val terrainKnown = WorldBlockTracker.hasAnyTerrainData()
-            OverlayLogger.d(
-                TAG,
-                "Uygun yerleştirme pozisyonu bulunamadı (terrain verisi ${if (terrainKnown) "MEVCUT ama yakında obsidian/bedrock yok" else "HİÇ YOK — WorldBlockTracker henüz bir chunk decode edemedi"})"
-            )
-            return
-        }
+        if (positions.isEmpty()) return
 
         val blockDef = getBlockDefinition(session, false) ?: return
 
@@ -253,20 +220,14 @@ class CrystalAura : BaseModule(
             }
 
             try {
-                // Bu versiyonda (InventoryTransactionPacket__5_.java) tüm ITEM_USE alanları
-                // doğrudan InventoryTransactionPacket üzerinde — ayrı bir alt obje yok.
                 val packet = InventoryTransactionPacket().apply {
                     transactionType          = InventoryTransactionType.ITEM_USE
-                    actionType               = 0  // 0 = INTERACT (block'a tıkla/place)
+                    actionType               = 0
                     blockPosition            = Vector3i.from(bx, by, bz)
-                    blockFace                = 1  // 1 = UP yüzü
+                    blockFace                = 1
                     hotbarSlot               = EntityTracker.selfHotbarSlot
                     itemInHand               = heldItem
                     playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                    // ✅ FIX: blockFace=UP iken clickPosition'ın y bileşeni o yüzün
-                    // düzlemine (y=1.0) denk gelmeli. Eskiden y=0.0 veriliyordu —
-                    // face/clickPos tutarsızlığı bazı sunucularda (ör. anti-cheat/
-                    // vanilla place-validation) paketin sessizce reddedilmesine yol açar.
                     clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
                     blockDefinition          = blockDef
                     triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
@@ -275,9 +236,7 @@ class CrystalAura : BaseModule(
                 }
                 session.serverBound(packet)
                 placedPositions[bKey] = System.currentTimeMillis()
-                OverlayLogger.d(TAG, "Crystal yerleştirildi: ($bx,$by,$bz) hedef=${target.name}")
             } catch (e: Exception) {
-                OverlayLogger.w(TAG, "Crystal yerleştirme hatası: ${e.message}")
             }
         }
     }
@@ -290,7 +249,7 @@ class CrystalAura : BaseModule(
         val tz = floor(target.z).toInt()
 
         val searchRadius = when (placeMode.value) {
-            Mode.Single -> 1
+            Mode.Single  -> 1
             Mode.Full5x5 -> 2
         }
 
@@ -353,7 +312,6 @@ class CrystalAura : BaseModule(
         val r = RotationUtil.toPoint(pos.x, pos.y, pos.z)
         PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
         PacketUtil.sendSwingAndAttack(session, rid)
-        OverlayLogger.v(TAG, "Crystal patlatıldı: rid=$rid pos=${pos}")
     }
 
     private fun packKey(x: Int, y: Int, z: Int): Long =

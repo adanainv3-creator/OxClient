@@ -23,6 +23,7 @@ import com.oxclient.module.visual.FOVChanger
 import com.oxclient.module.visual.FullBright
 import com.oxclient.module.visual.EnemyESP
 import com.oxclient.module.combat.AirFight
+import com.oxclient.module.combat.HeadTrack
 import com.oxclient.utils.WorldBlockTracker
 
 class OxClientApp : Application() {
@@ -70,6 +71,7 @@ class OxClientApp : Application() {
             ESP(),
             EnemyESP(),
             AirFight(),
+            HeadTrack(),
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),

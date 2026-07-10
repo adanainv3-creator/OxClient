@@ -1,5 +1,6 @@
 package com.oxclient.module.visual
 
+import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
@@ -46,7 +47,7 @@ class FOVChanger : BaseModule(
 
     private fun applySpeed(speedValue: Float) {
         val session = PacketEventBus.currentSession ?: return
-        session.clientBound(buildAbilitiesPacket(session.localPlayer.uniqueEntityId, speedValue))
+        session.clientBound(buildAbilitiesPacket(EntityTracker.selfUniqueId, speedValue))
     }
 
     private fun buildAbilitiesPacket(entityId: Long, speedValue: Float): UpdateAbilitiesPacket {

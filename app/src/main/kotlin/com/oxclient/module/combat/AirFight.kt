@@ -21,16 +21,16 @@ class AirFight : BaseModule(
     description = "."
 ), PacketEventBus.PacketListener {
 
-    private val orbitRadius      = float("Orbit Radius",      2.8f,  1.0f,  5.0f)
-    private val orbitSpeed       = float("Orbit Speed",       8.0f,  2.0f,  20.0f)
-    private val verticalAmplitude = float("Vertical Amplitude", 0.8f, 0.0f,  2.5f)
-    private val verticalSpeed    = float("Vertical Speed",    3.0f,  0.5f,  8.0f)
-    private val approachSpeed    = float("Approach Speed",    8.0f,  2.0f,  15.0f)
-    private val attackRange      = float("Attack Range",      4.2f,  1.0f,  6.0f)
-    private val cpsMin           = int("CPS Min",             24,    1,     30)
-    private val cpsMax           = int("CPS Max",             28,    1,     30)
-    private val doubleAttack     = bool("Double Attack",      true)
-    private val antiStuck        = bool("Anti Stuck",         true)
+    private val orbitRadius       = float("Orbit Radius",       2.8f, 1.0f, 5.0f)
+    private val orbitSpeed        = float("Orbit Speed",        8.0f, 2.0f, 20.0f)
+    private val verticalAmplitude = float("Vertical Amplitude", 0.8f, 0.0f, 2.5f)
+    private val verticalSpeed     = float("Vertical Speed",     3.0f, 0.5f, 8.0f)
+    private val approachSpeed     = float("Approach Speed",     8.0f, 2.0f, 15.0f)
+    private val attackRange       = float("Attack Range",       4.2f, 1.0f, 6.0f)
+    private val cpsMin            = int("CPS Min",              24,   1,    30)
+    private val cpsMax            = int("CPS Max",              28,   1,    30)
+    private val doubleAttack      = bool("Double Attack",       true)
+    private val antiStuck         = bool("Anti Stuck",          true)
 
     private var orbitAngle = 0.0
     private var targetId = 0L
@@ -40,8 +40,6 @@ class AirFight : BaseModule(
     private var stuckCounter = 0
     private var job: Job? = null
     private val airFightScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    private companion object { const val TAG = "AirFight" }
 
     override fun onEnable() {
         super.onEnable()
