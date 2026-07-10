@@ -6,26 +6,8 @@ import android.view.View
 import com.oxclient.module.ModuleManager
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
+import com.oxclient.module.visual.EnemyESP
 
-/**
- * ESPOverlayView — ESP modülünün tracer/box/label/radar çizimlerini oyunun
- * ÜZERİNE basan, tam ekran, şeffaf, DOKUNULAMAZ (touch-through) Canvas view'ı.
- *
- * ═══════════════════════════════════════════════════════════════════════
- * NEDEN BU DOSYA GEREKLİYDİ:
- * ESP.render(canvas, w, h) fonksiyonu tam ve doğru yazılmıştı ama OverlayService
- * içinde bunu çağıran hiçbir yer YOKTU — servis sadece Compose tabanlı FAB/menü/
- * shortcut view'larını WindowManager'a ekliyordu. Yani BlockTracker veri
- * topluyordu, ESP renderList'i dolduruyordu, ama hiçbir View bu veriyi
- * gerçek bir Canvas'a çizip ekrana basmıyordu. Bu view tam olarak o eksik
- * halkayı tamamlıyor.
- *
- * touch-through: WindowManager tarafında FLAG_NOT_TOUCHABLE ile eklenmesi
- * gerekiyor (bkz. OverlayService.overlayParams(touchable = false)) — aksi
- * halde tam ekranı kaplayan bu view, altındaki Minecraft istemcisine giden
- * tüm dokunuşları yutar.
- * ═══════════════════════════════════════════════════════════════════════
- */
 class ESPOverlayView(context: Context) : View(context) {
 
     companion object {
@@ -33,23 +15,15 @@ class ESPOverlayView(context: Context) : View(context) {
     }
 
     init {
-        // Sık invalidate edilen bir çizim yüzeyi için donanım katmanı,
-        // yazılım katmanına göre belirgin şekilde daha az frame düşürüyor.
         setLayerType(LAYER_TYPE_HARDWARE, null)
     }
 
-    // Modül referansını her seferinde ModuleManager'dan tazeler — ESP instance'ı
-    // OxClientApp.registerModules() içinde bir kere yaratılıp her zaman aynı
-    // kalır, bu yüzden burada cache'lemek de güvenli olurdu ama byName() lookup'ı
-    // ihmal edilebilir maliyette ve modül yeniden yaratılırsa (örn. test) hata
-    // vermeyi engelliyor.
     private val espModule: ESP?
         get() = ModuleManager.byName("ESP") as? ESP
 
-    // ✅ Mod List (ArrayList) burada ESP ile AYNI Canvas yüzeyine, ESP'den SONRA
-    // çiziliyor — böylece z-sırasında her zaman ESP tracer/box'larının üstünde
-    // kalıyor. Ayrı bir WindowManager view'ı eklemeye gerek yok: bu view zaten
-    // tam ekranı kaplıyor, touch-through ve her frame invalidate ediliyor.
+    private val enemyEspModule: EnemyESP?
+        get() = ModuleManager.byName("EnemyESP") as? EnemyESP
+
     private val arrayListModule: ArrayListModule?
         get() = ModuleManager.byName("Mod List") as? ArrayListModule
 
@@ -61,9 +35,16 @@ class ESPOverlayView(context: Context) : View(context) {
             try {
                 esp.render(canvas, width, height)
             } catch (e: Exception) {
-                // ESP render hatası servisi/relay'i asla düşürmemeli — sessizce logla,
-                // bir sonraki frame'de tekrar denenir.
-                OverlayLogger.v(TAG, "Render hatası: ${e.message}")
+                // silent
+            }
+        }
+
+        val enemyEsp = enemyEspModule
+        if (enemyEsp != null && enemyEsp.isEnabled) {
+            try {
+                enemyEsp.render(canvas, width, height)
+            } catch (e: Exception) {
+                // silent
             }
         }
 
@@ -72,16 +53,13 @@ class ESPOverlayView(context: Context) : View(context) {
             try {
                 arrayList.render(canvas, width, height)
             } catch (e: Exception) {
-                OverlayLogger.v(TAG, "ArrayList render hatası: ${e.message}")
+                // silent
             }
         }
 
-        // Sürekli render loop: ESP kapalıyken de düşük maliyetli invalidate
-        // döngüsü devam eder, kullanıcı modülü açtığı an ekstra gecikme olmaz.
         postInvalidateOnAnimation()
     }
 
-    /** Servis view'ı WindowManager'a eklerken ilk çizim döngüsünü başlatmak için çağırır. */
     fun startRenderLoop() {
         postInvalidateOnAnimation()
     }

@@ -21,6 +21,7 @@ import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
 import com.oxclient.module.visual.FOVChanger
 import com.oxclient.module.visual.FullBright
+import com.oxclient.module.visual.EnemyESP
 import com.oxclient.utils.WorldBlockTracker
 
 class OxClientApp : Application() {
@@ -66,6 +67,7 @@ class OxClientApp : Application() {
             AntiKnockback(),
             FullBright(),
             ESP(),
+            EnemyESP(),
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),

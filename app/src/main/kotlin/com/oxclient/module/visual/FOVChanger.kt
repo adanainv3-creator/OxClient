@@ -15,7 +15,7 @@ class FOVChanger : BaseModule(
     category    = ModuleCategory.VISUAL,
     description = "Oyuncunun görüş açısını (FOV) değiştirir"
 ) {
-    private val fov         = float("FOV",          110f, 30f, 170f)
+    private val fov         = float("FOV",          110f, 30f, 300f)
     private val easeTime    = float("Ease Time",     0f,   0f,  5f)
     private val refreshSec  = int  ("Refresh (s)",   5,    1,   30)
     private val shortcut    = bool ("Shortcut",      false)
