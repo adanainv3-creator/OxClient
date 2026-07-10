@@ -321,7 +321,7 @@ private fun DashboardTab(
     onDismissServerPanel : () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(title = "OxClient V1") {
+        ScreenHeader(title = "OxClient V1.1") {
             IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
                 MoreVertGlyph(tint = if (showServerPanel) OxAccentLight else OxOnSurfaceDim)
             }
@@ -457,11 +457,6 @@ private fun ConfigTab() {
         ScreenHeader(title = "Configs") {
             AddIconButton(onClick = { /* config import/add flow is not wired yet */ })
         }
-        PlaceholderValueRow("Packet Size Limit", "8192 B")
-        PlaceholderValueRow("Connection Timeout", "30 sec")
-        PlaceholderValueRow("Log Level", "INFO")
-        PlaceholderValueRow("Compression", "Zlib")
-        Spacer(Modifier.height(16.dp))
         InactiveNotice()
     }
 }
@@ -476,23 +471,6 @@ private fun InactiveNotice() {
         Text("This section is not active yet.", fontSize = 11.sp,
             color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
     }
-}
-
-@Composable
-private fun PlaceholderValueRow(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth()
-        .clip(RoundedCornerShape(8.dp))
-        .background(OxSurface)
-        .border(1.dp, OxOutline, RoundedCornerShape(8.dp))
-        .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, fontSize = 13.sp, color = OxOnBackground, fontFamily = FontFamily.Monospace)
-        Text(value, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-            color = OxAccentLight, fontFamily = FontFamily.Monospace)
-    }
-    Spacer(Modifier.height(8.dp))
 }
 
 // ---------------------------------------------------------------------
