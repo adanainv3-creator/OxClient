@@ -69,7 +69,7 @@ class OxClientApp : Application() {
             FullBright(),
             ESP(),
             EnemyESP(),
-            AirFight()
+            AirFight(),
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),

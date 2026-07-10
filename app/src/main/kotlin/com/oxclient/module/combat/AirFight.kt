@@ -1,6 +1,7 @@
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
+import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
@@ -38,7 +39,7 @@ class AirFight : BaseModule(
     private var moveAttempts = 0L
     private var stuckCounter = 0
     private var job: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val airFightScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private companion object { const val TAG = "AirFight" }
 
@@ -62,7 +63,7 @@ class AirFight : BaseModule(
 
     private fun startMovementLoop() {
         job?.cancel()
-        job = scope.launch {
+        job = airFightScope.launch {
             while (isEnabled && job?.isActive == true) {
                 try {
                     val session = PacketEventBus.currentSession
@@ -75,9 +76,9 @@ class AirFight : BaseModule(
                         }
                     }
                     delay(20L)
-                } catch (_: CancellationException) {
-                    throw _
-                } catch (_: Exception) {
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     delay(50L)
                 }
             }
@@ -97,14 +98,14 @@ class AirFight : BaseModule(
         return target
     }
 
-    private fun executeAirFight(session: PacketEventBus.Session, target: EntityTracker.TrackedEntity) {
+    private fun executeAirFight(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
         val selfX = EntityTracker.selfX
         val selfY = EntityTracker.selfY
         val selfZ = EntityTracker.selfZ
         val distance = MathUtil.dist3(selfX, selfY, selfZ, target.x, target.y, target.z)
 
         val newPos = calculateOrbitPosition(target, distance)
-        val rotation = RotationUtil.toEntity(target)
+        val rot = RotationUtil.toEntity(target)
 
         var finalPos = newPos
         if (antiStuck.value && isStuck(selfX, selfY, selfZ, newPos)) {
@@ -118,16 +119,16 @@ class AirFight : BaseModule(
         }
 
         try {
-            session.clientBound(MovePlayerPacket().apply {
+            session.sendToClient(MovePlayerPacket().apply {
                 runtimeEntityId = EntityTracker.selfRuntimeId
                 position = finalPos
-                rotation = Vector3f.from(rotation.pitch, rotation.yaw, rotation.yaw)
+                rotation = Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
                 mode = MovePlayerPacket.Mode.NORMAL
                 isOnGround = false
                 ridingRuntimeEntityId = 0L
             })
             moveAttempts++
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
 
         if (distance <= attackRange.value) {
             tryAttack(session, target)
@@ -162,7 +163,7 @@ class AirFight : BaseModule(
         return Vector3f.from(targetX, targetY, targetZ)
     }
 
-    private fun tryAttack(session: PacketEventBus.Session, target: EntityTracker.TrackedEntity) {
+    private fun tryAttack(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
         if (now - lastAttackMs < delayMs) return
@@ -172,7 +173,7 @@ class AirFight : BaseModule(
         PacketUtil.sendSwing(session)
         PacketUtil.sendAttack(session, target.runtimeId)
         if (doubleAttack.value) {
-            session.clientBound(MovePlayerPacket().apply {
+            session.sendToClient(MovePlayerPacket().apply {
                 runtimeEntityId = EntityTracker.selfRuntimeId
                 position = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY + 0.1f, EntityTracker.selfZ)
                 rotation = Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, EntityTracker.selfYaw)
@@ -191,10 +192,10 @@ class AirFight : BaseModule(
         return (dx * dx + dy * dy + dz * dz) < 0.01f
     }
 
-    private fun resetToNormal(session: PacketEventBus.Session) {
+    private fun resetToNormal(session: OxRelaySession) {
         try {
             PacketUtil.sendMoveAtSelf(session, EntityTracker.selfYaw, EntityTracker.selfPitch, onGround = true)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
     }
 
     override fun onPacket(event: PacketEvent) {
