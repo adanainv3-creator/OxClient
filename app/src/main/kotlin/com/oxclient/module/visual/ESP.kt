@@ -11,6 +11,7 @@ import com.oxclient.module.*
 import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.BlockTracker
 import com.oxclient.utils.BlockTracker.TrackedBlockType
+import com.oxclient.utils.GameFov
 import com.oxclient.utils.MathUtil
 import kotlinx.coroutines.*
 import java.util.concurrent.CopyOnWriteArrayList
@@ -30,7 +31,13 @@ class ESP : BaseModule(
     // ✅ Menzil 512'ye çıkarıldı (500x500 alan isteği) — varsayılan hâlâ 64f, düşük
     // menzilde performanslı; kullanıcı slider'ı istediği kadar (max 512) açabilir.
     private val scanRange     = float("Scan Range",    64f,  8f, 512f)
-    private val fov            = float("FOV",           70f,  30f, 130f)
+    // ✅ FIX: Varsayılan 70f (Java FOV'u) yanlıştı — Bedrock'ta varsayılan FOV 110°.
+    // Bu yanlış varsayım, gerçek render FOV'uyla ESP'nin projeksiyon hesabı arasında
+    // sistematik bir uyuşmazlık yaratıyordu: ekran merkezine yakın bloklar kabaca
+    // doğru görünse de, kenarlara/köşelere gittikçe hata katlanarak büyüyor ve
+    // tracer/box'lar gerçek blok konumundan bağımsız, rastgele dağılmış görünüyordu.
+    private val autoFovSync    = bool ("Auto FOV Sync",  true)
+    private val fov            = float("Manual FOV",    110f,  30f, 130f)
     private val maxDisplay    = int  ("Max Display",   150,  10, 800)
     private val tracerWidth   = float("Tracer Width",  2f,   0.5f, 8f)
     private val boxAlpha      = int  ("Box Alpha",     80,   10,  200)
@@ -168,6 +175,13 @@ class ESP : BaseModule(
         val centerY = screenH / 2f
         val maxRange = scanRange.value
         val nearest = if (nearestGlow.value) renderList.minByOrNull { it.distance } else null
+        // ✅ FIX: Sabit ESP-fov yerine gerçekte render edilen FOV kullanılıyor.
+        // FOVChanger walkSpeed tuzağıyla gerçek FOV'u değiştirdiğinde GameFov.current
+        // güncellenir; ESP burada onu okuyarak projeksiyonun her zaman ekranda
+        // GERÇEKTEN görünenle birebir eşleşmesini sağlar. Auto FOV Sync kapatılırsa
+        // "Manual FOV" slider'ı kullanılır (örn. FOVChanger kullanılmıyorsa ve
+        // Minecraft ayarlarındaki FOV 110'dan farklıysa).
+        val effectiveFov = if (autoFovSync.value) GameFov.current else fov.value
 
         for (entry in renderList) {
             val color = entry.type.colorArgb
@@ -176,7 +190,7 @@ class ESP : BaseModule(
                 cx, cy, cz,
                 yaw, pitch,
                 screenW, screenH,
-                fov.value
+                effectiveFov
             )
 
             // Mesafeye göre saydamlık: yakın bloklar tam opak, uzak bloklar (minAlpha'ya kadar) sönük
@@ -219,7 +233,7 @@ class ESP : BaseModule(
                             screenW, screenH,
                             deltaX, deltaY,
                             color, boxPaint, fillPaint, alphaScale, isNearest,
-                            fov.value
+                            effectiveFov
                         )
                     }
                     else -> {}
@@ -375,7 +389,7 @@ class ESP : BaseModule(
         fillPaint: Paint,
         alphaScale: Float = 1f,
         isNearest: Boolean = false,
-        fov: Float = 70f
+        fov: Float = GameFov.VANILLA_DEFAULT
     ) {
         val half = 0.5f
         // Bloğun 8 köşesi (dünya koordinatı) — alt yüz 0-3, üst yüz 4-7

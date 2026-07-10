@@ -3,6 +3,7 @@ package com.oxclient.module.visual
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.utils.GameFov
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
 import org.cloudburstmc.protocol.bedrock.data.PlayerPermission
@@ -14,9 +15,12 @@ import org.cloudburstmc.protocol.bedrock.packet.UpdateAbilitiesPacket
  * FOV değişimi CameraInstructionPacket ile yapılmıyor; çoğu sunucu/anticheat bu paketi
  * yok sayıyor ya da engelliyor. Bunun yerine Zoom modüllerindeki teknik uygulanıyor:
  * istemciye sahte bir walkSpeed değeri gönderip Bedrock'un "dynamic FOV" davranışını
- * (hız arttıkça görüş açısının otomatik genişlemesi) tetikliyoruz. Bu paket tamamen
- * client-bound enjekte edildiği için sunucu hızın değiştiğinden haberdar olmuyor,
- * sadece istemcinin görsel FOV'u değişiyor.
+ * (hız arttıkça görüş açısının otomatik genişlemesi) tetikliyoruz.
+ *
+ * ÖNEMLİ: Gerçek görünen FOV değiştiği için bunu GameFov.current'a yazıyoruz.
+ * Aksi halde ESP gibi worldToScreen() kullanan modüller eski/varsayılan FOV'a göre
+ * hesap yapmaya devam eder ve ekran projeksiyonu (tracer/box konumları) kenarlara
+ * doğru gittikçe katlanarak yanlış çıkar.
  */
 class FOVChanger : BaseModule(
     name        = "FOVChanger",
@@ -25,7 +29,7 @@ class FOVChanger : BaseModule(
 ) {
     private val fov = float("FOV", 110f, 30f, 300f)
 
-    private val DEFAULT_FOV   = 110f
+    private val DEFAULT_FOV   = GameFov.VANILLA_DEFAULT
     private val DEFAULT_SPEED = 0.1f
 
     private var isFovApplied  = false
@@ -41,11 +45,13 @@ class FOVChanger : BaseModule(
                 applySpeed(targetSpeed)
                 appliedSpeed = targetSpeed
                 isFovApplied = true
+                GameFov.set(fov.value)
             }
         } else if (isFovApplied) {
             applySpeed(DEFAULT_SPEED)
             appliedSpeed = DEFAULT_SPEED
             isFovApplied = false
+            GameFov.reset()
         }
     }
 
