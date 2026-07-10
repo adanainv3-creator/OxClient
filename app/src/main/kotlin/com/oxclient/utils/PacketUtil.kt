@@ -25,8 +25,13 @@ object PacketUtil {
 
         val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
         val clickPos  = if (target != null) {
-
-            Vector3f.from(target.x, target.y + 1.0f, target.z)
+            val heightDiff = EntityTracker.selfY - target.y
+            val clickY = when {
+                heightDiff < -0.5f -> target.y + 0.1f
+                heightDiff > 1.8f  -> target.y + 1.7f
+                else               -> target.y + 1.0f
+            }
+            Vector3f.from(target.x, clickY, target.z)
         } else {
             playerPos
         }

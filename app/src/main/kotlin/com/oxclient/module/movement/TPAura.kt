@@ -22,15 +22,18 @@ class TPAura : BaseModule(
     description = "Güçlü rakibi çevreleyerek saldır"
 ), PacketEventBus.PacketListener {
 
-    enum class MoveMode { Strafe, Aggressive, Behind, Random }
+    enum class MoveMode { Strafe, Aggressive, Behind, Random, PVP }
 
     private val moveMode         = enum ("Mode",              MoveMode.Aggressive)
-    private val detectRange      = float("Detect Range",      100f, 10f,  100f)
+    private val detectRange      = float("Detect Range",      500f, 10f,  500f)
     private val range            = float("Range",             2.5f, 1f,   8f)
     private val horizontalSpeed  = float("Horizontal Speed",  4f,   0.5f, 10f)
     private val verticalSpeed    = float("Vertical Speed",    1.5f, 0.1f, 5f)
     private val strafeSpeed      = float("Strafe Speed",      2.5f, 0.1f, 5f)
     private val yOffset          = float("Y Offset",          0.8f, -2f,   2f)
+    private val pvpDepth         = float("PVP Depth",         2.5f, 2f,   3f)
+    private val pvpRadius        = float("PVP Radius",        1.2f, 0.5f, 2.5f)
+    private val pvpCrit          = bool ("PVP Crit",          true)
     private val attack           = bool ("Attack",            true)
     private val attackRange      = float("Attack Range",      4.2f, 1f,   6f)
     private val cpsMin           = int  ("CPS Min",           18,   1,    30)
@@ -147,6 +150,13 @@ class TPAura : BaseModule(
         val session = PacketEventBus.currentSession ?: return
         attackCount++
 
+        // PVP modunda hedefin altındayız — kritik şartı (fallDistance>0 && !onGround)
+        // Criticals.injectMovePacket ile aynı kanıtlanmış teknikle sağlanıyor
+        if (moveMode.value == MoveMode.PVP && pvpCrit.value) {
+            PacketUtil.sendMoveAtSelf(session, dyOffset = 0.11f, onGround = false)
+            PacketUtil.sendMoveAtSelf(session, dyOffset = 0f,    onGround = false)
+        }
+
         // ⚡ Double attack: swing + attack x2
         PacketUtil.sendSwing(session)
         PacketUtil.sendAttack(session, target.runtimeId)
@@ -209,6 +219,18 @@ class TPAura : BaseModule(
                     targetPos.x + (cos(angle) * horizontalOffset).toFloat(),
                     targetPos.y + verticalOffset,
                     targetPos.z + (sin(angle) * horizontalOffset).toFloat()
+                )
+            }
+
+            // PVP: hedefin 2-3 blok altına geçip yukarı bakarak dar çemberde strafe —
+            // her vuruş öncesi crit enjeksiyonuyla birleştirilir (tryAttack'te)
+            MoveMode.PVP -> {
+                strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.045
+
+                Vector3f.from(
+                    target.x + (cos(strafeAngle) * pvpRadius.value).toFloat(),
+                    target.y - pvpDepth.value,
+                    target.z + (sin(strafeAngle) * pvpRadius.value).toFloat()
                 )
             }
         }

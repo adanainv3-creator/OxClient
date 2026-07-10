@@ -1,3 +1,4 @@
+
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
@@ -13,26 +14,31 @@ import kotlinx.coroutines.*
 class KillAura : BaseModule(
     name        = "KillAura",
     category    = ModuleCategory.COMBAT,
-    description = "Otomatik saldırı - maksimum hasar"
-) {
+    description = "Otomatik saldırı"
+), PacketEventBus.PacketListener {
+    
     enum class AttackMode   { Single, Multi, Switch, Closest }
     enum class RotationMode { Lock, Approximate, Silent, None }
     enum class SwingMode    { Client, Server, Both, None }
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
 
-    // ⚡ ANARŞI OPTİMİZE: CPS strictly 20, double attack her vuruş
-    private val cpsMin          = int  ("CPS Min",          20,   20, 20)
-    private val cpsMax          = int  ("CPS Max",          20,   20, 20)
+    private val cpsMin          = int  ("CPS Min",          15,   1,  30)
+    private val cpsMax          = int  ("CPS Max",          18,   1,  30)
     private val range           = float("Range",            6.0f, 1f,  10f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
-    private val maxTargets      = int  ("Max Targets",      8,    1,  10)
+    private val maxTargets      = int  ("Max Targets",      3,    1,  10)
     private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
-    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Silent)
+    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
+    
+    // ✅ YENİ: Head lock ayarları
+    private val headLock        = bool ("Head Lock",        true)
+    private val headLockSmooth  = float("Head Lock Smooth", 0.2f, 0.01f, 1f)  // 0-1 arası interpolation
+    
     private val shortcut        = bool ("Shortcut",         false)
 
     private companion object { 
@@ -42,9 +48,13 @@ class KillAura : BaseModule(
     @Volatile private var currentTargetId   = 0L
     @Volatile private var lastSwitchMs      = 0L
     @Volatile private var lastAttackMs      = 0L
-    @Volatile private var lastCritMs        = 0L
+    @Volatile private var lastRotationSendMs = 0L
     @Volatile private var consecutiveMisses = 0
     @Volatile private var attackCount       = 0L
+    
+    // ✅ Head lock state
+    @Volatile private var headLockYaw       = 0f
+    @Volatile private var headLockPitch     = 0f
     
     private var tickJob: Job? = null
 
@@ -53,15 +63,31 @@ class KillAura : BaseModule(
         currentTargetId = 0L
         consecutiveMisses = 0
         attackCount = 0L
+        headLockYaw = EntityTracker.selfYaw
+        headLockPitch = EntityTracker.selfPitch
         
-        OverlayLogger.d(TAG, "Enabled: 20 CPS (hard limit) | Multi=8targets | Silent Rotation | Double Attack EVERY swing")
+        PacketEventBus.register(this)
+        OverlayLogger.d(TAG, "Enabled: CPS=${cpsMin.value}-${cpsMax.value} Range=${range.value} FOV=${fov.value} HeadLock=${headLock.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
+        PacketEventBus.unregister(this)
         super.onDisable()
-        OverlayLogger.d(TAG, "Disabled")
+        OverlayLogger.d(TAG, "Disabled (attacks=$attackCount)")
+    }
+
+    /**
+     * ✅ PacketListener — her PlayerAuthInputPacket'te headeyi güncelle
+     * Bu sayede baş sırasında hareket paketini takip eder
+     */
+    override fun onPacket(event: PacketEvent) {
+        if (!isEnabled || !headLock.value) return
+        if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+        if (event.packet !is org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) return
+
+        updateHeadLock()
     }
 
     private suspend fun tickLoop() {
@@ -73,8 +99,7 @@ class KillAura : BaseModule(
 
     private suspend fun tick() {
         val now = System.currentTimeMillis()
-        // 20 CPS = 50ms per attack — sıkı tutma
-        val delayMs = 50L
+        val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
         
         if (now - lastAttackMs < delayMs) return
 
@@ -115,6 +140,73 @@ class KillAura : BaseModule(
         }
     }
 
+    /**
+     * ✅ Baş kilidi güncelle — hedefi takip et
+     * Smooth interpolation ile sudden turn'ü avoid et
+     */
+    private fun updateHeadLock() {
+        val session = PacketEventBus.currentSession ?: return
+        val target = findHeadLockTarget() ?: return
+
+        val now = System.currentTimeMillis()
+        if (now - lastRotationSendMs < 50L) return // Her 50ms'de bir (client 20 tick/s)
+        lastRotationSendMs = now
+
+        val targetRot = RotationUtil.toEntity(target)
+        
+        // ✅ Smooth interpolation — headLockSmooth oranında hedefe doğru yaklaş
+        val smoothFactor = headLockSmooth.value.coerceIn(0.01f, 1f)
+        
+        val newYaw = smoothYaw(headLockYaw, targetRot.yaw, smoothFactor)
+        val newPitch = smoothPitch(headLockPitch, targetRot.pitch, smoothFactor)
+
+        headLockYaw = newYaw
+        headLockPitch = newPitch
+
+        try {
+            PacketUtil.sendMoveAtSelf(session, newYaw, newPitch, onGround = true)
+            OverlayLogger.v(TAG, "HeadLock: yaw=${"%.1f".format(newYaw)} pitch=${"%.1f".format(newPitch)} target=${target.name}")
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "HeadLock packet error: ${e.message}", e)
+        }
+    }
+
+    /**
+     * ✅ Yaw smoothing — açısal fark en kısayı seç
+     * 0°-360° arasında doğru interpolation
+     */
+    private fun smoothYaw(current: Float, target: Float, factor: Float): Float {
+        var diff = target - current
+        
+        // 180°'den fazla fark varsa diğer yolu seç
+        if (diff > 180f) diff -= 360f
+        if (diff < -180f) diff += 360f
+        
+        val result = current + (diff * factor)
+        
+        // Normalize to -180..180
+        var normalized = result % 360f
+        if (normalized > 180f) normalized -= 360f
+        if (normalized < -180f) normalized += 360f
+        
+        return normalized
+    }
+
+    /**
+     * ✅ Pitch smoothing — -90 ile 90 arasında
+     */
+    private fun smoothPitch(current: Float, target: Float, factor: Float): Float {
+        val diff = target - current
+        return (current + (diff * factor)).coerceIn(-90f, 90f)
+    }
+
+    private fun findHeadLockTarget(): EntityTracker.TrackedEntity? {
+        val candidates = EntityTracker.getEntitiesInRange(range.value * 1.5f)  // Biraz daha geniş range
+            .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
+        
+        return selectTarget(candidates)
+    }
+
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
         val candidates = EntityTracker.getEntitiesInRange(range.value)
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
@@ -151,22 +243,16 @@ class KillAura : BaseModule(
         return result
     }
 
-    // ⚡ doAttack anında dönüyor, gerçek attack sequence arka planda coroutine'de.
     private fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
         scope.launch { performAttackSequence(e) }
     }
 
-    // ⚡ OPTİMİZE: 
-    // 1. Rotation delay'i kaldır (Silent Rotation hızlı)
-    // 2. Crit delay'leri 30ms'ye düşür (60->30ms, 50->20ms)
-    // 3. HER saldırıda DOUBLE ATTACK yap (şu an her 2'de 1)
-    // 4. Swing'i server+client çift gönder
     private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
         
         OverlayLogger.v(TAG, "Attack #${attackCount}: dist=${"%.2f".format(EntityTracker.distanceTo(e))}")
 
-        // Silent rotation — rotation packet'ini doğrudan gönder ama doğru timing'de
+        // ✅ Rotation: hedefte bakmaya zaten kilitlendik (HeadLock) ama explicit attack için de gönder
         if (rotationMode.value != RotationMode.None) {
             val r = RotationUtil.toEntity(e)
             when (rotationMode.value) {
@@ -175,39 +261,34 @@ class KillAura : BaseModule(
                     val approx = RotationUtil.approximate(r)
                     PacketUtil.sendMoveAtSelf(session, approx.yaw, approx.pitch)
                 }
-                RotationMode.Silent -> PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch, teleport = false)
+                RotationMode.Silent -> {}
                 RotationMode.None -> {}
             }
         }
 
-        // ⚡ OPTİMİZE: Crit delay'leri minimize et
-        // Sunucu fallDistance hesaplaması için ~30ms yeterli (hızlı tick rate)
-        injectCritOptimized(session)
-        kotlinx.coroutines.delay(30L)
+        injectCrit(session)
+        kotlinx.coroutines.delay(50L)
 
-        // İlk attack
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
             else -> {}
         }
-        PacketUtil.sendAttack(session, e.runtimeId)
 
-        // ⚡ OPTİMİZE: Her saldırıda double attack (şu an her 2'de 1 idi)
-        // Minimal delay, aynı tick'te işlenmesi için
-        delay(1L)
         PacketUtil.sendAttack(session, e.runtimeId)
+        
+        if (attackCount % 2 == 0L) {
+            kotlinx.coroutines.delay(1)
+            PacketUtil.sendAttack(session, e.runtimeId)
+        }
     }
 
-    // ⚡ Crit injection delay'leri minimize, fallDistance hesaplaması için yeterli
-    private suspend fun injectCritOptimized(session: com.oxclient.core.relay.OxRelaySession) {
+    private suspend fun injectCrit(session: com.oxclient.core.relay.OxRelaySession) {
         val now = System.currentTimeMillis()
-        if (now - lastCritMs < 5) return
-        lastCritMs = now
+        if (now - lastAttackMs < 5) return
 
-        // Hızlı crit: up + delay + down
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.08f, onGround = false)
-        kotlinx.coroutines.delay(20L)
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.032f, onGround = false)
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
+        kotlinx.coroutines.delay(50L)
+        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.042f, onGround = false)
     }
 
     private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value
