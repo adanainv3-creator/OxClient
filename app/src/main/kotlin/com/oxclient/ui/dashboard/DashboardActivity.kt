@@ -1,12 +1,7 @@
 package com.oxclient.ui.dashboard
 
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -48,8 +43,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -84,8 +77,8 @@ val SUPPORTED_PACKAGES = listOf(
 )
 
 // SETTINGS was removed as a standalone tab - server configuration now lives
-// behind the gear icon under the top bar instead.
-private enum class DashTab { RELAY, ACCOUNTS, CONFIG }
+// behind the top-right overflow menu on the Dashboard tab instead.
+private enum class DashTab { RELAY, CONFIG, ACCOUNTS }
 
 class DashboardActivity : ComponentActivity() {
 
@@ -202,7 +195,6 @@ fun DashboardScreen(
     val serverHost    by ServerConfig.host.collectAsState(initial = ServerConfig.DEFAULT_HOST)
     val serverPort    by ServerConfig.port.collectAsState(initial = ServerConfig.DEFAULT_PORT)
     val recentServers by ServerConfig.recents.collectAsState(initial = emptyList())
-    val isOnline      by rememberIsOnline()
     val savedAccounts     by AccountManager.accountsFlow.collectAsStateWithLifecycle()
     val selectedGamertag  by AccountManager.selectedGamertagFlow.collectAsStateWithLifecycle()
 
@@ -239,59 +231,29 @@ fun DashboardScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp)
             ) {
                 Spacer(Modifier.height(28.dp))
-                TopBar(authState = authState, onAvatarClick = { showSignIn = true })
-                Spacer(Modifier.height(14.dp))
-
-                // Settings gear (opens the target-server panel) + icon-only
-                // network status indicator, right below the login section.
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { showServerPanel = !showServerPanel },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        GearGlyph(tint = if (showServerPanel) OxAccentLight else OxOnSurfaceDim)
-                    }
-                    WifiStatusGlyph(online = isOnline)
-                }
-
-                AnimatedVisibility(
-                    visible = showServerPanel,
-                    enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
-                    exit    = fadeOut(tween(150)) + shrinkVertically(tween(200))
-                ) {
-                    Column {
-                        Spacer(Modifier.height(10.dp))
-                        ServerSettingsPanel(
-                            currentHost   = serverHost,
-                            currentPort   = serverPort,
-                            recentServers = recentServers,
-                            onSave        = { h, p -> scope.launch { ServerConfig.save(h, p) }; showServerPanel = false },
-                            onReset       = { scope.launch { ServerConfig.reset() } },
-                            onDismiss     = { showServerPanel = false }
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(20.dp))
 
                 HorizontalPager(
                     state    = pagerState,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 ) { page ->
                     when (DashTab.values()[page]) {
-                        DashTab.RELAY -> RelayTab(
-                            relayActive = relayActive,
-                            onToggle    = { if (relayActive) onDisconnect() else onConnect(targetApp.first) }
+                        DashTab.RELAY -> DashboardTab(
+                            relayActive          = relayActive,
+                            onToggle             = { if (relayActive) onDisconnect() else onConnect(targetApp.first) },
+                            showServerPanel      = showServerPanel,
+                            onToggleServerPanel  = { showServerPanel = !showServerPanel },
+                            serverHost           = serverHost,
+                            serverPort           = serverPort,
+                            recentServers        = recentServers,
+                            onSaveServer         = { h, p -> scope.launch { ServerConfig.save(h, p) }; showServerPanel = false },
+                            onResetServer        = { scope.launch { ServerConfig.reset() } },
+                            onDismissServerPanel = { showServerPanel = false }
                         )
                         DashTab.ACCOUNTS -> AccountsTab(
                             accounts         = savedAccounts,
                             selectedGamertag = selectedGamertag,
                             onSelectAccount  = onSelectAccount,
-                            onAddAccount     = onSignIn
+                            onAddAccount     = { showSignIn = true }
                         )
                         DashTab.CONFIG -> ConfigTab()
                     }
@@ -305,25 +267,99 @@ fun DashboardScreen(
     }
 }
 
+// ---------------------------------------------------------------------
+// Shared screen header - identical title style/spacing on every tab so
+// Dashboard, Accounts and Configs all read as one consistent surface.
+// ---------------------------------------------------------------------
+
 @Composable
-private fun RelayTab(
-    relayActive : Boolean,
-    onToggle    : () -> Unit
+private fun ScreenHeader(
+    title: String,
+    trailing: @Composable RowScope.() -> Unit = {}
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+        content = trailing
+    )
+    Spacer(Modifier.height(18.dp))
+    Text(
+        title,
+        fontSize = 28.sp,
+        fontWeight = FontWeight.Bold,
+        color = OxOnBackground,
+        fontFamily = FontFamily.Monospace
+    )
+    Spacer(Modifier.height(20.dp))
+}
+
+@Composable
+private fun AddIconButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
+            .background(OxSurface)
+            .border(1.dp, OxOutlineStrong, RoundedCornerShape(8.dp))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
     ) {
-        Spacer(Modifier.weight(1f))
-        if (relayActive) {
-            LiveStatsCard()
-            Spacer(Modifier.height(16.dp))
+        Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = OxAccentLight)
+    }
+}
+
+@Composable
+private fun DashboardTab(
+    relayActive          : Boolean,
+    onToggle             : () -> Unit,
+    showServerPanel      : Boolean,
+    onToggleServerPanel  : () -> Unit,
+    serverHost           : String,
+    serverPort           : Int,
+    recentServers        : List<Pair<String, Int>>,
+    onSaveServer         : (String, Int) -> Unit,
+    onResetServer        : () -> Unit,
+    onDismissServerPanel : () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(title = "Dashboard") {
+            IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
+                MoreVertGlyph(tint = if (showServerPanel) OxAccentLight else OxOnSurfaceDim)
+            }
         }
-        Spacer(Modifier.weight(1f))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            ConnectButton(running = relayActive, onToggle = onToggle)
+
+        AnimatedVisibility(
+            visible = showServerPanel,
+            enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
+            exit    = fadeOut(tween(150)) + shrinkVertically(tween(200))
+        ) {
+            Column {
+                ServerSettingsPanel(
+                    currentHost   = serverHost,
+                    currentPort   = serverPort,
+                    recentServers = recentServers,
+                    onSave        = onSaveServer,
+                    onReset       = onResetServer,
+                    onDismiss     = onDismissServerPanel
+                )
+                Spacer(Modifier.height(16.dp))
+            }
         }
-        Spacer(Modifier.height(12.dp))
+
+        Column(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.weight(1f))
+            if (relayActive) {
+                LiveStatsCard()
+                Spacer(Modifier.height(16.dp))
+            }
+            Spacer(Modifier.weight(1f))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                ConnectButton(running = relayActive, onToggle = onToggle)
+            }
+            Spacer(Modifier.height(12.dp))
+        }
     }
 }
 
@@ -335,30 +371,9 @@ private fun AccountsTab(
     onAddAccount     : () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        // Başlık + sağ üstte "+" (referans görseldeki gibi)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Accounts",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = OxOnBackground,
-                fontFamily = FontFamily.Monospace
-            )
-            Box(
-                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
-                    .background(OxSurface)
-                    .border(1.dp, OxOutlineStrong, RoundedCornerShape(8.dp))
-                    .clickable { onAddAccount() },
-                contentAlignment = Alignment.Center
-            ) {
-                Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = OxAccentLight)
-            }
+        ScreenHeader(title = "Accounts") {
+            AddIconButton(onClick = onAddAccount)
         }
-        Spacer(Modifier.height(20.dp))
 
         if (accounts.isEmpty()) {
             Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -439,8 +454,9 @@ private fun AccountRow(
 @Composable
 private fun ConfigTab() {
     Column(modifier = Modifier.fillMaxSize()) {
-        SectionHeader("CONFIGURATION")
-        Spacer(Modifier.height(16.dp))
+        ScreenHeader(title = "Configs") {
+            AddIconButton(onClick = { /* config import/add flow is not wired yet */ })
+        }
         PlaceholderValueRow("Packet Size Limit", "8192 B")
         PlaceholderValueRow("Connection Timeout", "30 sec")
         PlaceholderValueRow("Log Level", "INFO")
@@ -448,15 +464,6 @@ private fun ConfigTab() {
         Spacer(Modifier.height(16.dp))
         InactiveNotice()
     }
-}
-
-@Composable
-private fun SectionHeader(title: String) {
-    Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-        color = OxOnBackground, fontFamily = FontFamily.Monospace,
-        modifier = Modifier.fillMaxWidth())
-    Spacer(Modifier.height(8.dp))
-    HorizontalDivider(color = OxOutline)
 }
 
 @Composable
@@ -488,6 +495,11 @@ private fun PlaceholderValueRow(label: String, value: String) {
     Spacer(Modifier.height(8.dp))
 }
 
+// ---------------------------------------------------------------------
+// Bottom navigation - icon-only for inactive tabs, a highlighted pill
+// with a label for the active tab. Same three destinations everywhere.
+// ---------------------------------------------------------------------
+
 @Composable
 private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
     Column {
@@ -496,29 +508,58 @@ private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
             modifier = Modifier.fillMaxWidth().background(OxSurface)
                 .navigationBarsPadding()
                 .padding(vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            TabItem("RELAY", current == DashTab.RELAY) { onSelect(DashTab.RELAY) }
-            TabItem("ACCOUNTS", current == DashTab.ACCOUNTS) { onSelect(DashTab.ACCOUNTS) }
-            TabItem("CONFIG", current == DashTab.CONFIG) { onSelect(DashTab.CONFIG) }
+            TabItem(
+                icon     = { tint -> HomeGlyph(tint = tint) },
+                label    = "Dashboard",
+                selected = current == DashTab.RELAY,
+                onClick  = { onSelect(DashTab.RELAY) }
+            )
+            TabItem(
+                icon     = { tint -> DocumentGlyph(tint = tint) },
+                label    = "Configs",
+                selected = current == DashTab.CONFIG,
+                onClick  = { onSelect(DashTab.CONFIG) }
+            )
+            TabItem(
+                icon     = { tint -> PersonGlyph(tint = tint) },
+                label    = "Accounts",
+                selected = current == DashTab.ACCOUNTS,
+                onClick  = { onSelect(DashTab.ACCOUNTS) }
+            )
         }
     }
 }
 
 @Composable
-private fun TabItem(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun TabItem(
+    icon     : @Composable (Color) -> Unit,
+    label    : String,
+    selected : Boolean,
+    onClick  : () -> Unit
+) {
     Column(
-        modifier = Modifier.clickable { onClick() }.padding(horizontal = 18.dp, vertical = 4.dp),
+        modifier = Modifier.clickable { onClick() }.padding(horizontal = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(label, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            color = if (selected) OxAccentLight else OxOnSurfaceDim)
-        Spacer(Modifier.height(4.dp))
         Box(
-            modifier = Modifier.width(20.dp).height(2.dp)
-                .background(if (selected) OxAccentLight else Color.Transparent)
-        )
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(if (selected) OxSurfaceVar else Color.Transparent)
+                .padding(horizontal = if (selected) 18.dp else 10.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            icon(if (selected) OxAccentLight else OxOnSurfaceDim)
+        }
+        if (selected) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                label, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold, color = OxAccentLight
+            )
+        }
     }
 }
 
@@ -566,35 +607,6 @@ private fun LiveStatChip(label: String, value: String, color: Color) {
         Spacer(Modifier.height(2.dp))
         Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold,
             color = color, fontFamily = FontFamily.Monospace)
-    }
-}
-
-@Composable
-private fun TopBar(authState: AuthState, onAvatarClick: () -> Unit) {
-    val isLoggedIn = authState is AuthState.Success
-    Row(modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("OXCLIENT", fontSize = 21.sp, fontWeight = FontWeight.ExtraBold,
-            color = OxOnBackground, fontFamily = FontFamily.Monospace)
-        Row(verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (isLoggedIn) {
-                Text((authState as AuthState.Success).gamertag, fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold, color = OxAccentLight,
-                    fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Box(
-                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(6.dp))
-                    .background(if (isLoggedIn) OxAccentDark else OxSurface)
-                    .border(1.dp, if (isLoggedIn) OxAccent else OxOutlineStrong, RoundedCornerShape(6.dp))
-                    .clickable { onAvatarClick() },
-                contentAlignment = Alignment.Center
-            ) {
-                PersonGlyph(tint = if (isLoggedIn) OxAccentLight else OxOnSurfaceDim)
-            }
-        }
     }
 }
 
@@ -802,42 +814,6 @@ private fun AuthDialog(
 }
 
 // ---------------------------------------------------------------------
-// Network connectivity observation (icon-only status indicator)
-// ---------------------------------------------------------------------
-
-@Composable
-private fun rememberIsOnline(): State<Boolean> {
-    val context = LocalContext.current
-    val state = remember { mutableStateOf(currentlyOnline(context)) }
-
-    DisposableEffect(Unit) {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { state.value = true }
-            override fun onLost(network: Network) { state.value = currentlyOnline(context) }
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                state.value = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            }
-        }
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        cm.registerNetworkCallback(request, callback)
-        onDispose { cm.unregisterNetworkCallback(callback) }
-    }
-    return state
-}
-
-private fun currentlyOnline(context: Context): Boolean {
-    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    val network = cm.activeNetwork ?: return false
-    val caps = cm.getNetworkCapabilities(network) ?: return false
-    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-}
-
-// ---------------------------------------------------------------------
 // Hand-drawn glyphs (Canvas) - avoids depending on the material-icons-
 // extended artifact, which may not be pulled in by the CI build.
 // ---------------------------------------------------------------------
@@ -879,30 +855,6 @@ private fun RouterGlyph(modifier: Modifier = Modifier, tint: Color = Color.White
 }
 
 @Composable
-private fun GearGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-        val outerR = size.minDimension * 0.46f
-        val innerR = size.minDimension * 0.28f
-        val toothW = size.minDimension * 0.16f
-        val toothLen = size.minDimension * 0.14f
-        for (i in 0 until 8) {
-            rotate(degrees = i * 45f, pivot = Offset(cx, cy)) {
-                drawRoundRect(
-                    color = tint,
-                    topLeft = Offset(cx - toothW / 2f, cy - outerR - toothLen / 2f),
-                    size = Size(toothW, toothLen),
-                    cornerRadius = CornerRadius(toothW * 0.3f)
-                )
-            }
-        }
-        drawCircle(color = tint, radius = outerR * 0.72f, center = Offset(cx, cy))
-        drawCircle(color = OxBackground, radius = innerR * 0.55f, center = Offset(cx, cy))
-    }
-}
-
-@Composable
 private fun PersonGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
     Canvas(modifier = modifier.size(20.dp)) {
         val w = size.width
@@ -919,29 +871,59 @@ private fun PersonGlyph(modifier: Modifier = Modifier, tint: Color = Color.White
 }
 
 @Composable
-private fun WifiStatusGlyph(online: Boolean, modifier: Modifier = Modifier) {
-    val color by animateColorAsState(
-        targetValue = if (online) OxSuccess else OxOnSurfaceDim,
-        animationSpec = tween(400), label = "wifiStatus"
-    )
-    Canvas(modifier = modifier.size(18.dp)) {
+private fun HomeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(20.dp)) {
         val w = size.width
         val h = size.height
-        val cx = w / 2f
-        val baseY = h * 0.85f
-        drawCircle(color = color, radius = h * 0.06f, center = Offset(cx, baseY))
-        for (i in 0..2) {
-            val r = h * (0.18f + i * 0.20f)
-            val fade = if (!online && i > 0) 0.35f else 1f
-            drawArc(
-                color = color.copy(alpha = color.alpha * fade),
-                startAngle = 210f,
-                sweepAngle = 120f,
-                useCenter = false,
-                topLeft = Offset(cx - r, baseY - r * 1.15f),
-                size = Size(r * 2, r * 2),
-                style = Stroke(width = h * 0.065f, cap = StrokeCap.Round)
+        val path = Path().apply {
+            moveTo(w * 0.5f, h * 0.08f)
+            lineTo(w * 0.90f, h * 0.42f)
+            lineTo(w * 0.90f, h * 0.90f)
+            lineTo(w * 0.58f, h * 0.90f)
+            lineTo(w * 0.58f, h * 0.60f)
+            lineTo(w * 0.42f, h * 0.60f)
+            lineTo(w * 0.42f, h * 0.90f)
+            lineTo(w * 0.10f, h * 0.90f)
+            lineTo(w * 0.10f, h * 0.42f)
+            close()
+        }
+        drawPath(path = path, color = tint, style = Stroke(width = h * 0.09f, cap = StrokeCap.Round))
+    }
+}
+
+@Composable
+private fun DocumentGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(w * 0.18f, h * 0.08f),
+            size = Size(w * 0.64f, h * 0.84f),
+            cornerRadius = CornerRadius(w * 0.06f),
+            style = Stroke(width = h * 0.07f)
+        )
+        listOf(0.34f, 0.52f, 0.70f).forEach { fy ->
+            drawLine(
+                color = tint,
+                start = Offset(w * 0.30f, h * fy),
+                end   = Offset(w * 0.70f, h * fy),
+                strokeWidth = h * 0.06f,
+                cap = StrokeCap.Round
             )
+        }
+    }
+}
+
+@Composable
+private fun MoreVertGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val r = size.minDimension * 0.09f
+        val spacing = size.height * 0.32f
+        listOf(-1, 0, 1).forEach { i ->
+            drawCircle(color = tint, radius = r, center = Offset(cx, cy + i * spacing))
         }
     }
 }
