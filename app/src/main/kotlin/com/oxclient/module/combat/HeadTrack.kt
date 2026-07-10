@@ -23,7 +23,7 @@ class HeadTrack : BaseModule(
 
     private val detectRange    = float("Detect Range",    100f, 10f, 150f)
     private val smooth         = float("Smoothness",      0.15f, 0.01f, 1f)   // 0-1: daha düşük = daha smooth
-    private val priority       = enum ("Priority",        Priority.Distance)
+    private val targetPriority = enum ("Priority",        Priority.Distance)
     private val shortcut       = bool ("Shortcut",        false)
 
     enum class Priority { Distance, Health, LowestHealth }
@@ -42,7 +42,7 @@ class HeadTrack : BaseModule(
         currentTargetId = 0L
         
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: detectRange=${detectRange.value} smooth=${smooth.value} priority=${priority.value}")
+        OverlayLogger.d(TAG, "Enabled: detectRange=${detectRange.value} smooth=${smooth.value} priority=${targetPriority.value}")
     }
 
     override fun onDisable() {
@@ -76,9 +76,9 @@ class HeadTrack : BaseModule(
             return null
         }
 
-        val sorted = when (priority.value) {
+        val sorted = when (targetPriority.value) {
             Priority.Distance -> candidates.sortedBy { EntityTracker.distanceTo(it) }
-            Priority.Health -> candidates.sortedBy { it.health }
+            Priority.Health -> candidates.sortedByDescending { it.health }
             Priority.LowestHealth -> candidates.sortedBy { it.health }
         }
 
