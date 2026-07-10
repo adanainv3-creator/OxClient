@@ -321,7 +321,7 @@ private fun DashboardTab(
     onDismissServerPanel : () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(title = "Dashboard") {
+        ScreenHeader(title = "OxClient V1") {
             IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
                 MoreVertGlyph(tint = if (showServerPanel) OxAccentLight else OxOnSurfaceDim)
             }
