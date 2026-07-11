@@ -28,7 +28,7 @@ class CrystalAura : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "Rakip oyuncunun etrafına otomatik kristal yerleştirir ve patlatır"
 ) {
-    enum class Mode { Single, Full5x5 }
+    enum class Mode { Single, Full5x5, Nuke }
 
     private val range           = float("Range",          5f,   3f,  10f)
     private val placeRange      = float("Place Range",    4.5f, 2f,   8f)
@@ -51,8 +51,7 @@ class CrystalAura : BaseModule(
     @Volatile private var lastBreakMs = 0L
     private var tickJob: Job? = null
 
-    private var cachedObsidianDef: BlockDefinition? = null
-    private var cachedBedrockDef:  BlockDefinition? = null
+    private val blockDefCache = ConcurrentHashMap<String, BlockDefinition>()
 
     private val shortcut = bool("Shortcut", false)
 
@@ -61,7 +60,7 @@ class CrystalAura : BaseModule(
     override fun onEnable() {
         super.onEnable()
         activeCrystals.clear(); uniqueToRuntime.clear(); pendingPositions.clear()
-        cachedObsidianDef = null; cachedBedrockDef = null
+        blockDefCache.clear()
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -112,8 +111,12 @@ class CrystalAura : BaseModule(
             if (isEnabled) {
                 val target = selectTarget()
                 if (target != null) {
-                    if (breakCrystals.value) doBreak(target)
-                    if (place.value)         doPlace(target)
+                    if (placeMode.value == Mode.Nuke) {
+                        doNuke(target)
+                    } else {
+                        if (breakCrystals.value) doBreak(target)
+                        if (place.value)         doPlace(target)
+                    }
                 }
             }
             delay(1L)
@@ -153,14 +156,13 @@ class CrystalAura : BaseModule(
         val itemId   = runCatching { heldItem.definition?.identifier }.getOrNull() ?: return
         if (itemId != "minecraft:end_crystal") return
 
-        val blockDef = getBlockDefinition(session) ?: return
         val positions = getPlacePositions(target)
         if (positions.isEmpty()) return
 
         lastPlaceMs = now
 
-        for ((bx, by, bz) in positions) {
-            val key = posKey(bx, by, bz)
+        for (pos in positions) {
+            val key = posKey(pos.x, pos.y, pos.z)
 
             // Daha önce koyduğumuz pending var mı?
             val pendingTime = pendingPositions[key]
@@ -171,11 +173,11 @@ class CrystalAura : BaseModule(
             }
 
             // Zaten aktif kristal var mı?
-            if (crystalExistsAt(bx, by, bz)) continue
+            if (crystalExistsAt(pos.x, pos.y, pos.z)) continue
 
-            val centerX = bx + 0.5f
-            val centerY = by + 1.0f
-            val centerZ = bz + 0.5f
+            val centerX = pos.x + 0.5f
+            val centerY = pos.y + 1.0f
+            val centerZ = pos.z + 0.5f
 
             // Bize uzaklık kontrolü
             val distSelf = MathUtil.dist3(
@@ -187,11 +189,14 @@ class CrystalAura : BaseModule(
             // Suicide kontrolü
             if (!suicide.value && distSelf < 3f) continue
 
+            // Yüzeyde bulunan gerçek bloğun (obsidian/bedrock) definition'ı
+            val blockDef = getBlockDefinition(session, pos.blockId) ?: continue
+
             try {
                 session.serverBound(InventoryTransactionPacket().apply {
                     transactionType          = InventoryTransactionType.ITEM_USE
                     actionType               = 0
-                    blockPosition            = Vector3i.from(bx, by, bz)
+                    blockPosition            = Vector3i.from(pos.x, pos.y, pos.z)
                     blockFace                = 1
                     hotbarSlot               = EntityTracker.selfHotbarSlot
                     itemInHand               = heldItem
@@ -208,6 +213,90 @@ class CrystalAura : BaseModule(
         }
     }
 
+    // ── Nuke (delay'siz, koyabildiği her yer) ──────────────────────────────────
+
+    private fun doNuke(target: EntityTracker.TrackedEntity) {
+        val session = PacketEventBus.currentSession ?: return
+        val now = System.currentTimeMillis()
+
+        if (place.value) {
+            val heldItem = EntityTracker.getHeldItem()
+            val itemId   = runCatching { heldItem?.definition?.identifier }.getOrNull()
+            if (heldItem != null && heldItem.count > 0 && itemId == "minecraft:end_crystal") {
+                for (pos in getNukePositions(target)) {
+                    val key = posKey(pos.x, pos.y, pos.z)
+
+                    val pendingTime = pendingPositions[key]
+                    if (pendingTime != null && now - pendingTime < 3000L) continue
+                    if (crystalExistsAt(pos.x, pos.y, pos.z)) continue
+
+                    val centerX = pos.x + 0.5f
+                    val centerY = pos.y + 1.0f
+                    val centerZ = pos.z + 0.5f
+
+                    val distSelf = MathUtil.dist3(
+                        centerX, centerY, centerZ,
+                        EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ
+                    )
+                    if (distSelf > placeRange.value) continue
+                    if (!suicide.value && distSelf < 3f) continue
+
+                    val blockDef = getBlockDefinition(session, pos.blockId) ?: continue
+
+                    try {
+                        session.serverBound(InventoryTransactionPacket().apply {
+                            transactionType          = InventoryTransactionType.ITEM_USE
+                            actionType               = 0
+                            blockPosition            = Vector3i.from(pos.x, pos.y, pos.z)
+                            blockFace                = 1
+                            hotbarSlot               = EntityTracker.selfHotbarSlot
+                            itemInHand               = heldItem
+                            playerPosition           = Vector3f.from(
+                                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                            clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
+                            blockDefinition          = blockDef
+                            triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                            clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                            clientCooldownState      = 0
+                        })
+                        pendingPositions[key] = now
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
+        if (breakCrystals.value) {
+            val bRangeSq = breakRange.value * breakRange.value
+            val inRange = activeCrystals.entries.filter { (_, pos) ->
+                val dx = pos.x - target.x; val dy = pos.y - target.y; val dz = pos.z - target.z
+                dx*dx + dy*dy + dz*dz <= bRangeSq
+            }
+            for ((rid, _) in inRange) {
+                attackCrystal(rid, session)
+                activeCrystals.remove(rid)
+            }
+        }
+    }
+
+    // Placement radius'u placeRange'e göre hesaplar — koyabileceği her sütunu tarar
+    private fun getNukePositions(target: EntityTracker.TrackedEntity): List<PlacePos> {
+        val result = mutableListOf<PlacePos>()
+        val tx = floor(target.x).toInt()
+        val ty = floor(target.y).toInt()
+        val tz = floor(target.z).toInt()
+        val radius = kotlin.math.ceil(placeRange.value).toInt().coerceAtLeast(1)
+
+        for (dx in -radius..radius) {
+            for (dz in -radius..radius) {
+                val bx = tx + dx
+                val bz = tz + dz
+                val hit = findSurface(bx, ty, bz) ?: continue
+                result.add(PlacePos(bx, hit.y, bz, hit.blockId))
+            }
+        }
+        return result
+    }
+
     // Aktif kristal map'inde bu blok pozisyonuna karşılık gelen kristal var mı?
     private fun crystalExistsAt(bx: Int, by: Int, bz: Int): Boolean {
         val cx = bx + 0.5f
@@ -222,8 +311,8 @@ class CrystalAura : BaseModule(
 
     // ── Place position search ─────────────────────────────────────────────────
 
-    private fun getPlacePositions(target: EntityTracker.TrackedEntity): List<Triple<Int, Int, Int>> {
-        val result = mutableListOf<Triple<Int, Int, Int>>()
+    private fun getPlacePositions(target: EntityTracker.TrackedEntity): List<PlacePos> {
+        val result = mutableListOf<PlacePos>()
         val tx = floor(target.x).toInt()
         val ty = floor(target.y).toInt()
         val tz = floor(target.z).toInt()
@@ -234,20 +323,23 @@ class CrystalAura : BaseModule(
                 val bx = tx + dx
                 val bz = tz + dz
 
-                val by = findSurface(bx, ty, bz) ?: continue
+                val hit = findSurface(bx, ty, bz) ?: continue
 
                 // Kristal hedefe ne kadar yakın?
                 val distToTarget = MathUtil.dist3(
-                    bx + 0.5f, by + 1f, bz + 0.5f,
+                    bx + 0.5f, hit.y + 1f, bz + 0.5f,
                     target.x, target.y + 1f, target.z
                 )
                 if (distToTarget > 5f) continue
 
-                result.add(Triple(bx, by, bz))
+                result.add(PlacePos(bx, hit.y, bz, hit.blockId))
             }
         }
         return result
     }
+
+    private data class SurfaceHit(val y: Int, val blockId: String)
+    private data class PlacePos(val x: Int, val y: Int, val z: Int, val blockId: String)
 
     /**
      * Verilen (bx, bz) sütununda kristal koyulabilecek yüzeyi bulur.
@@ -256,7 +348,7 @@ class CrystalAura : BaseModule(
      * Veri yoksa rakibin ayak Y'sinin bir altını fallback olarak döndürür —
      * böylece WorldBlockTracker hazır olmasa da çalışmaya devam eder.
      */
-    private fun findSurface(bx: Int, ty: Int, bz: Int): Int? {
+    private fun findSurface(bx: Int, ty: Int, bz: Int): SurfaceHit? {
         val hasData = WorldBlockTracker.hasAnyTerrainData()
 
         if (hasData) {
@@ -272,13 +364,13 @@ class CrystalAura : BaseModule(
                 val clear2 = above2 == null || above2 == "minecraft:air"
                 if (!clear1 || !clear2) continue
 
-                return by
+                return SurfaceHit(by, here)
             }
             return null
         } else {
-            // Chunk verisi hiç yok: rakibin ayak Y'sinin altını kullan (fallback)
+            // Chunk verisi hiç yok: rakibin ayak Y'sinin altını obsidian varsayarak fallback yap
             // Sunucu paketi reddederse pendingPositions timeout'u ile zaten geçiyoruz
-            return ty - 1
+            return SurfaceHit(ty - 1, "minecraft:obsidian")
         }
     }
 
@@ -330,9 +422,8 @@ class CrystalAura : BaseModule(
 
     // ── Block definition ──────────────────────────────────────────────────────
 
-    private fun getBlockDefinition(session: OxRelaySession): BlockDefinition? {
-        cachedObsidianDef?.let { return it }
-        val targetId = "minecraft:obsidian"
+    private fun getBlockDefinition(session: OxRelaySession, targetId: String): BlockDefinition? {
+        blockDefCache[targetId]?.let { return it }
         try {
             fun scanDefs(defs: DefinitionRegistry<BlockDefinition>?): BlockDefinition? {
                 defs ?: return null
@@ -348,22 +439,27 @@ class CrystalAura : BaseModule(
                 return null
             }
             scanDefs(session.clientSession.peer.codecHelper.blockDefinitions)?.let {
-                cachedObsidianDef = it; return it
+                blockDefCache[targetId] = it; return it
             }
             scanDefs(Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions)?.let {
-                cachedObsidianDef = it; return it
+                blockDefCache[targetId] = it; return it
             }
         } catch (_: Exception) {}
 
-        // Fallback: hardcoded runtime id 49
+        // Fallback: registry'de bulunamazsa bilinen legacy numeric ID'lerle dene
+        val fallbackRuntimeId = when (targetId) {
+            "minecraft:obsidian" -> 49
+            "minecraft:bedrock"  -> 7
+            else -> return null
+        }
         val fallback = SimpleBlockDefinition(
-            targetId, 49,
+            targetId, fallbackRuntimeId,
             org.cloudburstmc.nbt.NbtMap.builder()
                 .putString("name", targetId)
                 .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())
                 .build()
         )
-        cachedObsidianDef = fallback
+        blockDefCache[targetId] = fallback
         return fallback
     }
 

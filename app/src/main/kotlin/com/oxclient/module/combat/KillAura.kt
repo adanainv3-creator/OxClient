@@ -35,12 +35,14 @@ class KillAura : BaseModule(
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
     private val headLockSmooth  = float("Head Lock Smooth", 0.2f, 0.01f, 1f)
+    private val fakeCrit        = bool ("Fake Crit",        false)
     private val shortcut        = bool ("Shortcut",         false)
 
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L
     @Volatile private var lastAttackMs       = 0L
     @Volatile private var lastRotationSendMs = 0L
+    @Volatile private var lastCritMs         = 0L
     @Volatile private var consecutiveMisses  = 0
     @Volatile private var attackCount        = 0L
     @Volatile private var headLockYaw        = 0f
@@ -53,6 +55,7 @@ class KillAura : BaseModule(
         currentTargetId = 0L
         consecutiveMisses = 0
         attackCount = 0L
+        lastCritMs = 0L
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
         PacketEventBus.register(this)
@@ -216,8 +219,10 @@ class KillAura : BaseModule(
             }
         }
 
-        injectCrit(session)
-        kotlinx.coroutines.delay(50L)
+        if (fakeCrit.value) {
+            injectCrit(session)
+            kotlinx.coroutines.delay(50L)
+        }
 
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
@@ -233,7 +238,8 @@ class KillAura : BaseModule(
 
     private suspend fun injectCrit(session: com.oxclient.core.relay.OxRelaySession) {
         val now = System.currentTimeMillis()
-        if (now - lastAttackMs < 5) return
+        if (now - lastCritMs < 400L) return
+        lastCritMs = now
         PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
         kotlinx.coroutines.delay(50L)
         PacketUtil.sendMoveAtSelf(session, dyOffset = 0.042f, onGround = false)

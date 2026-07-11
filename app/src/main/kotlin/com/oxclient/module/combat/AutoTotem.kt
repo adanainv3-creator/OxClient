@@ -17,7 +17,7 @@ class AutoTotem : BaseModule(
     description = "Totemi sürekli sol ele takar"
 ) {
     companion object {
-        private const val RESEND_COOLDOWN_MS = 150L
+        private const val RESEND_COOLDOWN_MS = 40L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
 
@@ -36,7 +36,7 @@ class AutoTotem : BaseModule(
         if (!offhandHasTotem && totemSlot >= 0) {
             equipTotem()
         }
-        tickJob = launchTickLoop(100L) { tickCheck() }
+        tickJob = launchTickLoop(20L) { tickCheck() }
     }
 
     override fun onDisable() {
