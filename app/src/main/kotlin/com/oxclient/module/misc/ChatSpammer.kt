@@ -5,7 +5,6 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
-import org.cloudburstmc.protocol.bedrock.data.entity.EntityEventType
 import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import java.util.concurrent.ConcurrentHashMap
@@ -45,8 +44,10 @@ class ChatSpammer : BaseModule(
 
             is EntityEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
-                if (p.type != EntityEventType.CONSUME_TOTEM) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
+
+                val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
+                if (!typeStr.contains("TOTEM")) return
 
                 val entity = EntityTracker.getById(p.runtimeEntityId)
                 val name  = entity?.name?.takeIf { it.isNotEmpty() } ?: "unknown"
