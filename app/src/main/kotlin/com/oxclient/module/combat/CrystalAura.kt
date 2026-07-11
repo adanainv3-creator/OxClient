@@ -19,6 +19,7 @@ import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
 import org.cloudburstmc.protocol.bedrock.packet.*
+import org.cloudburstmc.protocol.common.DefinitionRegistry
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.floor
 
@@ -53,8 +54,7 @@ class CrystalAura : BaseModule(
     private var cachedObsidianDef: BlockDefinition? = null
     private var cachedBedrockDef:  BlockDefinition? = null
 
-    // ── Shortcut key ─────────────────────────────────────────────────────────
-    override val shortcutKey: String = "CA"
+    private val shortcut = bool("Shortcut", false)
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -334,7 +334,7 @@ class CrystalAura : BaseModule(
         cachedObsidianDef?.let { return it }
         val targetId = "minecraft:obsidian"
         try {
-            fun scanDefs(defs: org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinitions?): BlockDefinition? {
+            fun scanDefs(defs: DefinitionRegistry<BlockDefinition>?): BlockDefinition? {
                 defs ?: return null
                 for (i in 0..4096) {
                     val def = try { defs.getDefinition(i) } catch (_: Exception) { null } ?: continue
