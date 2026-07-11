@@ -35,7 +35,8 @@ class CrystalAura : BaseModule(
     private val suicide         = bool ("Suicide",        false)
     private val place           = bool ("Place",          true)
     private val breakCrystals   = bool ("Break",          true)
-    private val delay           = int  ("Delay",          100,  50,  500)
+    private val placeDelay      = int  ("Place Delay",    100,  20,  500)
+    private val breakDelay      = int  ("Break Delay",    50,   20,  500)
     private val removeParticles = bool ("RemoveParticles",true)
     private val placeMode       = enum ("Place Mode",     Mode.Single)
     private val breakMode       = enum ("Break Mode",     Mode.Single)
@@ -97,8 +98,10 @@ class CrystalAura : BaseModule(
             if (isEnabled) {
                 val target = selectTarget()
                 if (target != null) {
+                    // Önce break, sonra place — break kısa delay'li olduğu için
+                    // aynı tick'te ikisi de çalışabilir
                     if (breakCrystals.value) doBreak(target)
-                    if (place.value) doPlace(target)
+                    if (place.value)         doPlace(target)
                 }
             }
             delay(1L)
@@ -174,7 +177,7 @@ class CrystalAura : BaseModule(
 
     private fun doPlace(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
-        if (now - lastPlaceMs < delay.value) return
+        if (now - lastPlaceMs < placeDelay.value) return
         lastPlaceMs = now
 
         val session = PacketEventBus.currentSession ?: return
@@ -201,9 +204,9 @@ class CrystalAura : BaseModule(
             }
 
             val alreadyPlaced = activeCrystals.values.any { c ->
-                Math.abs(c.x - bx - 0.5f) < 0.5f &&
-                Math.abs(c.y - by - 1f)   < 0.5f &&
-                Math.abs(c.z - bz - 0.5f) < 0.5f
+                Math.abs(c.x - (bx + 0.5f)) < 0.8f &&
+                Math.abs(c.y - (by + 1.0f)) < 1.2f &&
+                Math.abs(c.z - (bz + 0.5f)) < 0.8f
             }
             if (alreadyPlaced) continue
 
@@ -272,11 +275,21 @@ class CrystalAura : BaseModule(
     }
 
     private fun findValidSurface(bx: Int, ty: Int, bz: Int): Int? {
-        for (by in (ty - 2)..(ty + 1)) {
+        // Daha geniş Y aralığı: rakip düzlükte olmasa da bulabilsin
+        for (by in (ty - 3)..(ty + 2)) {
             val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue
             if (here != "minecraft:obsidian" && here != "minecraft:bedrock") continue
-            val above = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz) ?: continue
-            if (above != "minecraft:air") continue
+
+            // above null ise (chunk veri yok) veya air ise geçerli yüzey
+            val above = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)
+            val aboveIsClear = above == null || above == "minecraft:air"
+            if (!aboveIsClear) continue
+
+            // above + 1 de boş olmalı (kristal 2 blok yüksek)
+            val above2 = WorldBlockTracker.getBlockIdentifier(bx, by + 2, bz)
+            val above2IsClear = above2 == null || above2 == "minecraft:air"
+            if (!above2IsClear) continue
+
             return by
         }
         return null
@@ -284,7 +297,7 @@ class CrystalAura : BaseModule(
 
     private fun doBreak(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
-        if (now - lastBreakMs < delay.value) return
+        if (now - lastBreakMs < breakDelay.value) return
         lastBreakMs = now
 
         val session = PacketEventBus.currentSession ?: return
