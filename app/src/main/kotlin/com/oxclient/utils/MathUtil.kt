@@ -40,36 +40,61 @@ object MathUtil {
         return t * t * (3f - 2f * t)
     }
 
+    /**
+     * Minecraft Bedrock dünya koordinatını ekran koordinatına çevirir.
+     *
+     * Koordinat sistemi:
+     *   - Yaw  0°  = Güney (+Z), 90° = Batı (-X), -90° = Doğu (+X)
+     *   - Pitch pozitif = aşağı bakış
+     *   - selfY = ayak pozisyonu; göz yüksekliği +1.62f eklenerek düzeltilir
+     *   - fov   = YATAY (horizontal) FOV derece cinsinden (Bedrock default 110°)
+     *
+     * @return ekran koordinatı (px, py) veya kamera arkasındaysa null
+     */
     fun worldToScreen(
         wx: Float, wy: Float, wz: Float,
         selfX: Float, selfY: Float, selfZ: Float,
         yaw: Float, pitch: Float,
         screenW: Int, screenH: Int,
-        fov: Float = 70f
+        fov: Float = 110f
     ): Pair<Float, Float>? {
 
-        val dx = selfX - wx
-        val dy = wy - selfY
-        val dz = wz - selfZ
+        // Göz yüksekliği offseti — selfY ayak pozisyonu, göz +1.62f yukarıda
+        val eyeY = selfY + 1.62f
 
-        val yawR   = Math.toRadians(yaw.toDouble())
-        val pitchR = Math.toRadians(pitch.toDouble())
+        // Hedefe vektör (kamera → hedef)
+        val dx = (wx - selfX).toDouble()
+        val dy = (wy - eyeY).toDouble()
+        val dz = (wz - selfZ).toDouble()
 
-        val sinY = sin(yawR); val cosY = cos(yawR)
+        // Bedrock yaw: 0=Güney(+Z), pozitif=Batı
+        // Rotation: önce yaw etrafında Y ekseni, sonra pitch etrafında X ekseni
+        val yawR   = Math.toRadians(-yaw.toDouble())   // negatif: sağ-el → sol-el dönüşümü
+        val pitchR = Math.toRadians(-pitch.toDouble())  // negatif: Bedrock pitch pozitif = aşağı
+
+        val sinY = sin(yawR);  val cosY = cos(yawR)
         val sinP = sin(pitchR); val cosP = cos(pitchR)
 
-        val rx = dx * cosY - dz * sinY
-        val ry = dx * sinY * sinP + dy * cosP + dz * cosY * sinP
-        val rz = dx * sinY * cosP - dy * sinP + dz * cosY * cosP
+        // Kamera uzayına döndür
+        // Önce yaw (Y ekseni etrafında):
+        val rx0 =  dx * cosY + dz * sinY
+        val rz0 = -dx * sinY + dz * cosY
 
-        if (rz <= 0.5f) return null
+        // Sonra pitch (X ekseni etrafında):
+        val rx =  rx0
+        val ry =  dy * cosP - rz0 * sinP
+        val rz =  dy * sinP + rz0 * cosP   // ileri eksen: pozitif = kamera önü
 
-        val aspect = screenW.toFloat() / screenH.toFloat()
-        val tanHalfFovY = tan(Math.toRadians(fov / 2.0))
-        val tanHalfFovX = tanHalfFovY * aspect
+        // Kamera arkası → görünmez
+        if (rz <= 0.1) return null
 
-        val sx = ((rx / (rz * tanHalfFovX)) * (screenW / 2f) + screenW / 2f).toFloat()
-        val sy = ((-ry / (rz * tanHalfFovY)) * (screenH / 2f) + screenH / 2f).toFloat()
+        // fov YATAY → dikey FOV'a çevir
+        val aspect      = screenW.toDouble() / screenH.toDouble()
+        val tanHalfFovX = tan(Math.toRadians(fov / 2.0))
+        val tanHalfFovY = tanHalfFovX / aspect
+
+        val sx = (( rx / (rz * tanHalfFovX)) * (screenW / 2.0) + screenW / 2.0).toFloat()
+        val sy = ((-ry / (rz * tanHalfFovY)) * (screenH / 2.0) + screenH / 2.0).toFloat()
 
         return Pair(sx, sy)
     }

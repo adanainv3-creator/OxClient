@@ -4,6 +4,10 @@ package com.oxclient.core.proxy
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.utils.MathUtil
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +21,9 @@ import kotlin.math.*
 object EntityTracker : PacketEventBus.PacketListener {
 
     private const val TAG = "EntityTracker"
+
+    // Metadata decode IO thread dışında yapılsın diye ayrı scope
+    private val metadataScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     enum class EntityType { PLAYER, MONSTER, ANIMAL, PASSIVE, PROJECTILE, ITEM, CRYSTAL, UNKNOWN }
 
@@ -179,9 +186,13 @@ object EntityTracker : PacketEventBus.PacketListener {
             velY       = p.motion.y,
             velZ       = p.motion.z,
         )
-        applyMetadata(e, p.metadata)
+        // Önce entity'yi kaydet, metadata'yı IO thread dışında decode et
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
         notifyUpdate()
+        val meta = try { p.metadata } catch (_: Exception) { null }
+        if (meta != null) {
+            metadataScope.launch { applyMetadata(e, meta) }
+        }
     }
 
     private fun handleAddPlayer(p: AddPlayerPacket) {
@@ -202,9 +213,13 @@ object EntityTracker : PacketEventBus.PacketListener {
             velZ       = p.motion.z,
             name       = p.username ?: "",
         )
-        applyMetadata(e, p.metadata)
+        // Önce entity'yi kaydet, metadata'yı IO thread dışında decode et
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
         notifyUpdate()
+        val meta = try { p.metadata } catch (_: Exception) { null }
+        if (meta != null) {
+            metadataScope.launch { applyMetadata(e, meta) }
+        }
     }
 
     private fun handleRemoveEntity(p: RemoveEntityPacket) {
