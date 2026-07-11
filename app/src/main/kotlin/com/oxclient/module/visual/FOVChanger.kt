@@ -17,7 +17,7 @@ class FOVChanger : BaseModule(
     category    = ModuleCategory.VISUAL,
     description = "walkSpeed değerini sahteleyerek görüş açısını (FOV) değiştirir"
 ) {
-    private val fov = float("FOV", 110f, 30f, 300f)
+    private val fov = float("FOV", 110f, 10f, 300f)
 
     private val DEFAULT_FOV   = GameFov.VANILLA_DEFAULT
     private val DEFAULT_SPEED = 0.1f

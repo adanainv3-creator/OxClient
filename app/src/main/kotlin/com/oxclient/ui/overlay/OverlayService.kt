@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontFamily
@@ -89,6 +90,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private val shortcutViews = mutableMapOf<String, ComposeView>()
 
     private var fabX = 50f; private var fabY = 300f
+    private var totemX = 16f; private var totemY = 16f
     private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
 
     override fun onCreate() {
@@ -191,9 +193,18 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             val totemParams = overlayParams(
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                16f, 16f
+                totemX, totemY
             )
-            totemView = composeView { TotemCounterIcon() }
+            totemView = composeView {
+                TotemCounterIcon(
+                    onDrag = { dx, dy ->
+                        totemX += dx; totemY += dy
+                        totemParams.x = totemX.roundToInt()
+                        totemParams.y = totemY.roundToInt()
+                        safeUpdate(totemView, totemParams)
+                    }
+                )
+            }
             wm.addView(totemView, totemParams)
 
             refreshShortcuts()
@@ -309,25 +320,49 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         .build()
 }
 
-// ── Totem counter (sol üst köşe) ──────────────────────────────────────────────
+// ── Totem counter (sürüklenebilir) ───────────────────────────────────────────
 
 @Composable
-private fun TotemCounterIcon() {
-    val count = OverlayState.totemCount
-    Box(
+private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
+    val count      = OverlayState.totemCount
+    var totalDrag  by remember { mutableFloatStateOf(0f) }
+
+    Row(
         modifier = Modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xCC1E2340))
-            .border(1.dp, Color(0xFF2D3561), RoundedCornerShape(8.dp)),
-        contentAlignment = Alignment.Center
+            .wrapContentSize()
+            .clip(RoundedCornerShape(50.dp))
+            .background(Color(0xDD111827))
+            .border(1.dp, Color(0xFF2D3F6E), RoundedCornerShape(50.dp))
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { totalDrag = 0f },
+                    onDragEnd   = { },
+                    onDrag      = { change, offset ->
+                        change.consume()
+                        totalDrag += kotlin.math.abs(offset.x) + kotlin.math.abs(offset.y)
+                        onDrag(offset.x, offset.y)
+                    }
+                )
+            }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
+        androidx.compose.foundation.Image(
+            painter            = painterResource(id = R.drawable.ic_totem),
+            contentDescription = "Totem",
+            modifier           = Modifier.size(22.dp)
+        )
         Text(
-            "$count",
-            fontSize = 15.sp,
+            text       = "$count",
+            fontSize   = 14.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
-            color = if (count > 0) OxOnBackground else OxError
+            color      = when {
+                count <= 0 -> OxError
+                count <= 2 -> Color(0xFFFFB347)
+                else       -> OxOnBackground
+            }
         )
     }
 }
