@@ -16,85 +16,61 @@ class ChatSpammer : BaseModule(
     category    = ModuleCategory.MISC,
     description = "Chat prefix + totem pop sayacı"
 ) {
-
     companion object {
-        private const val VERSION   = "v1.2"
-        private const val TAG_LINE  = "OxClient $VERSION"
-        private const val PVP_TAIL  = "by OxClient | Best Mobile Client"
-
+        private const val VERSION  = "v1.2"
+        private const val TAG_LINE = "OxClient $VERSION"
+        private const val PVP_TAIL = "by OxClient | Best Mobile Client"
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
         private val JUNK_RANGE = 12..22
     }
 
-    // ── Per-player totem pop sayacı ───────────────────────────────────────────
+    private val shortcut = bool("Shortcut", false)
+
     private val popCounts = ConcurrentHashMap<String, Int>()
 
-    // ── Listener ──────────────────────────────────────────────────────────────
-    private val listener = object : PacketEventBus.PacketListener {
+    override fun onPacket(event: PacketEvent) {
+        if (!isEnabled) return
+        when (val p = event.packet) {
 
-        override val priority: Int = 50   // Diğer modüllerden önce çalışsın
+            is TextPacket -> {
+                if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+                if (p.sourceName == "__ox_internal__") return
 
-        override fun onPacket(event: PacketEvent) {
-            when (val p = event.packet) {
+                val raw = p.message?.trim() ?: return
+                if (raw.isEmpty() || raw.startsWith("/")) return
 
-                // ── Kullanıcının yazdığı mesajları prefix'le ─────────────────
-                is TextPacket -> {
-                    if (!event.isClientToServer) return
-                    // Zaten bizim gönderdiğimiz paket mi? (sonsuz döngü önlemi)
-                    if (p.sourceName == "__ox_internal__") return
+                val formatted = "> $raw | $TAG_LINE"
+                event.cancelAndReplace(buildTextPacket(formatted))
+            }
 
-                    val raw = p.message?.trim() ?: return
-                    if (raw.isEmpty()) return
+            is EntityEventPacket -> {
+                if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
+                if (p.type != EntityEventType.CONSUME_TOTEM) return
+                if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
 
-                    // ">" ile başlayan komutlara/mesajlara müdahale etme
-                    if (raw.startsWith("/")) return
+                val entity = EntityTracker.getById(p.runtimeEntityId)
+                val name  = entity?.name?.takeIf { it.isNotEmpty() } ?: "unknown"
+                val count = (popCounts[name] ?: 0) + 1
+                popCounts[name] = count
 
-                    val formatted = "> $raw | $TAG_LINE"
-                    val replacement = buildTextPacket(formatted)
-                    event.cancelAndReplace(replacement)
-                }
+                val session = PacketEventBus.currentSession
+                if (session == null || !session.isServerReady) return
 
-                // ── Totem pop yakalama ────────────────────────────────────────
-                is EntityEventPacket -> {
-                    if (!event.isServerToClient) return
-                    if (p.type != EntityEventType.CONSUME_TOTEM) return
-
-                    // Kendi totemimiz patlıyorsa sayma
-                    if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
-
-                    val entity = EntityTracker.getById(p.runtimeEntityId) ?: return
-                    if (!entity.isPlayer) return
-
-                    val name  = entity.name.ifEmpty { "unknown" }
-                    val count = (popCounts[name] ?: 0) + 1
-                    popCounts[name] = count
-
-                    val session = PacketEventBus.currentSession
-                    if (session == null || !session.isServerReady) return
-
-                    val junk    = randomJunk()
-                    val message = "> @$name Popped $count Totem $PVP_TAIL | $junk"
-                    session.sendToServer(buildTextPacket(message))
-                }
+                val message = "> @$name Popped $count Totem $PVP_TAIL | ${randomJunk()}"
+                session.sendToServer(buildTextPacket(message))
             }
         }
     }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
-
     override fun onEnable() {
         super.onEnable()
         popCounts.clear()
-        PacketEventBus.register(listener)
     }
 
     override fun onDisable() {
         super.onDisable()
-        PacketEventBus.unregister(listener)
         popCounts.clear()
     }
-
-    // ── Yardımcı ──────────────────────────────────────────────────────────────
 
     private fun buildTextPacket(message: String): TextPacket = TextPacket().apply {
         type               = TextPacket.Type.CHAT
@@ -108,8 +84,6 @@ class ChatSpammer : BaseModule(
 
     private fun randomJunk(): String {
         val len = Random.nextInt(JUNK_RANGE.first, JUNK_RANGE.last + 1)
-        return buildString(len) {
-            repeat(len) { append(JUNK_CHARS[Random.nextInt(JUNK_CHARS.length)]) }
-        }
+        return buildString(len) { repeat(len) { append(JUNK_CHARS[Random.nextInt(JUNK_CHARS.length)]) } }
     }
 }

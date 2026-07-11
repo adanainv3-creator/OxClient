@@ -26,6 +26,9 @@ object OverlayState {
     var totemCount by mutableIntStateOf(0)
         private set
 
+    var targetName by mutableStateOf<String?>(null)
+        private set
+
     var activeModuleCount by mutableIntStateOf(0)
         private set
 
@@ -36,6 +39,7 @@ object OverlayState {
     internal fun setMenuOpen(v: Boolean)        { isMenuOpen = v }
 
     fun updateTotemCount(count: Int)       { totemCount = count }
+    fun updateTarget(name: String?)        { targetName = name }
     fun updateActiveModuleCount(count: Int) { activeModuleCount = count }
 
     fun postModuleToast(toast: ModuleToast) {

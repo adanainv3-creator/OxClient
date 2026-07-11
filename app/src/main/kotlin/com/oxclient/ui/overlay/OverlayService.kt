@@ -62,6 +62,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     companion object {
         private const val CHANNEL_ID = "ox_overlay"
         private const val NOTIF_ID   = 1002
+        private const val TARGET_RANGE = 64f
 
         fun start(ctx: Context) {
             val i = Intent(ctx, OverlayService::class.java)
@@ -85,12 +86,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private var fabView  : ComposeView? = null
     private var menuView : ComposeView? = null
-    private var totemView: ComposeView? = null
+    private var totemView : ComposeView? = null
+    private var targetView: ComposeView? = null
     private var espView  : ESPOverlayView? = null
     private val shortcutViews = mutableMapOf<String, ComposeView>()
 
     private var fabX = 50f; private var fabY = 300f
     private var totemX = 16f; private var totemY = 16f
+    private var targetX = 16f; private var targetY = 64f
     private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
 
     override fun onCreate() {
@@ -128,6 +131,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     (slot in 0..35 || slot == 119) && InventoryUtil.isTotem(item)
                 }
                 OverlayState.updateTotemCount(totemCount)
+
+                val nearest = EntityTracker.getNearestPlayer(TARGET_RANGE)
+                val targetLabel = nearest?.let { e ->
+                    e.name.ifBlank { e.identifier.removePrefix("minecraft:") }
+                }
+                OverlayState.updateTarget(targetLabel)
+
                 delay(500L)
             }
         }
@@ -206,6 +216,23 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 )
             }
             wm.addView(totemView, totemParams)
+
+            val targetParams = overlayParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                targetX, targetY
+            )
+            targetView = composeView {
+                TargetIndicator(
+                    onDrag = { dx, dy ->
+                        targetX += dx; targetY += dy
+                        targetParams.x = targetX.roundToInt()
+                        targetParams.y = targetY.roundToInt()
+                        safeUpdate(targetView, targetParams)
+                    }
+                )
+            }
+            wm.addView(targetView, targetParams)
 
             refreshShortcuts()
             isAttached = true
@@ -287,10 +314,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun removeAllOverlays() {
         hideMenu()
-        listOfNotNull(fabView, totemView, espView).plus(shortcutViews.values).forEach { v ->
+        listOfNotNull(fabView, totemView, targetView, espView).plus(shortcutViews.values).forEach { v ->
             try { wm.removeViewImmediate(v) } catch (_: Exception) {}
         }
-        fabView = null; totemView = null; espView = null; shortcutViews.clear(); isAttached = false
+        fabView = null; totemView = null; targetView = null; espView = null; shortcutViews.clear(); isAttached = false
     }
 
     private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
@@ -363,6 +390,40 @@ private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
                 count <= 2 -> Color(0xFFFFB347)
                 else       -> OxOnBackground
             }
+        )
+    }
+}
+
+// ── Hedef göstergesi (saydam, sürüklenebilir) ─────────────────────────────────
+
+@Composable
+private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
+    val target = OverlayState.targetName
+
+    Box(
+        modifier = Modifier
+            .wrapContentSize()
+            .pointerInput(Unit) {
+                detectDragGestures { change, offset ->
+                    change.consume()
+                    onDrag(offset.x, offset.y)
+                }
+            }
+            .padding(6.dp)
+    ) {
+        Text(
+            text = "T: ${target ?: "-"}",
+            fontSize = 14.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = if (target != null) Color.White else Color.White.copy(alpha = 0.45f),
+            style = androidx.compose.ui.text.TextStyle(
+                shadow = androidx.compose.ui.graphics.Shadow(
+                    color = Color.Black,
+                    offset = androidx.compose.ui.geometry.Offset(1f, 1f),
+                    blurRadius = 5f
+                )
+            )
         )
     }
 }
