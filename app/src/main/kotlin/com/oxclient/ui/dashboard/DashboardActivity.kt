@@ -62,7 +62,7 @@ import com.oxclient.auth.DeviceCodeLoginActivity
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.auth.SavedAccount
 import com.oxclient.config.ServerConfig
-import com.oxclient.config.ModuleConfigManager
+import com.oxclient.config.Config
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.ModuleManager
@@ -456,15 +456,12 @@ private fun AccountRow(
 
 @Composable
 private fun ConfigTab() {
-    // Profil listesini state'te tut
-    var profiles by remember { mutableStateOf(ModuleConfigManager.listProfiles()) }
+    val scope = rememberCoroutineScope()
+    val profiles       by Config.profiles.collectAsState(initial = emptyList())
+    val activeProfile  by Config.activeProfile.collectAsState(initial = null)
+
     var showSaveDialog by remember { mutableStateOf(false) }
     var newProfileName by remember { mutableStateOf("") }
-
-    // Listeyi güncellemek için yardımcı
-    fun refreshList() {
-        profiles = ModuleConfigManager.listProfiles()
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Configs") {
@@ -490,18 +487,12 @@ private fun ConfigTab() {
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                profiles.forEach { profileName ->
+                profiles.forEach { profile ->
                     ProfileRow(
-                        name = profileName,
-                        onLoad = {
-                            ModuleConfigManager.loadProfile(profileName)
-                            // Ayarlar değişti, UI'ı yenilemek için version'ı artır
-                            // (modüllerin UI'da güncellenmesi için ModuleManager.version artırılabilir)
-                        },
-                        onDelete = {
-                            ModuleConfigManager.deleteProfile(profileName)
-                            refreshList()
-                        }
+                        name     = profile.name,
+                        active   = profile.name == activeProfile,
+                        onLoad   = { scope.launch { Config.load(profile.name) } },
+                        onDelete = { scope.launch { Config.delete(profile.name) } }
                     )
                 }
             }
@@ -536,11 +527,11 @@ private fun ConfigTab() {
             confirmButton = {
                 Button(
                     onClick = {
-                        if (ModuleConfigManager.isValidProfileName(newProfileName)) {
-                            ModuleConfigManager.saveProfile(newProfileName.trim())
+                        val trimmed = newProfileName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            scope.launch { Config.save(trimmed) }
                             newProfileName = ""
                             showSaveDialog = false
-                            refreshList()
                         }
                     },
                     shape = RoundedCornerShape(6.dp),
@@ -563,14 +554,15 @@ private fun ConfigTab() {
 @Composable
 private fun ProfileRow(
     name: String,
+    active: Boolean,
     onLoad: () -> Unit,
     onDelete: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(OxSurface)
-            .border(1.dp, OxOutline, RoundedCornerShape(10.dp))
+            .background(if (active) OxAccentDark else OxSurface)
+            .border(1.dp, if (active) OxAccent else OxOutline, RoundedCornerShape(10.dp))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween

@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.oxclient.auth.AccountManager
 import com.oxclient.auth.MicrosoftAuthManager
+import com.oxclient.config.Config
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.relay.Definitions
 import com.oxclient.module.ModuleManager
@@ -23,7 +24,6 @@ import com.oxclient.module.visual.FOVChanger
 import com.oxclient.module.visual.FullBright
 import com.oxclient.module.visual.EnemyESP
 import com.oxclient.module.combat.AirFight
-import com.oxclient.config.ModuleConfigManager
 import com.oxclient.module.combat.HeadTrack
 import com.oxclient.utils.WorldBlockTracker
 
@@ -40,7 +40,7 @@ class OxClientApp : Application() {
         instance = this
 
         ServerConfig.init(applicationContext)
-        ModuleConfigManager.init(applicationContext)
+        Config.init(applicationContext)
         AccountManager.init(applicationContext)
         MicrosoftAuthManager.init(applicationContext)
 

@@ -41,6 +41,12 @@ class EnumSetting<T : Enum<T>>(name: String, default: T, val values: Array<T>) :
         value = values[idx]
         return value
     }
+
+    fun setByName(name: String): Boolean {
+        val match = values.firstOrNull { it.name == name } ?: return false
+        value = match
+        return true
+    }
 }
 
 class StringSetting(name: String, default: String) : ModuleSetting<String>(name) {

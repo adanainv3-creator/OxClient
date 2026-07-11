@@ -41,6 +41,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.oxclient.R
+import com.oxclient.config.Config
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
@@ -408,6 +409,20 @@ private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, o
     }
 }
 
+// ── Menü sekmeleri (modül kategorileri + Config) ──────────────────────────────
+
+private enum class MenuSection(val displayName: String) {
+    COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), CONFIG("Config")
+}
+
+private fun MenuSection.toModuleCategory(): ModuleCategory? = when (this) {
+    MenuSection.COMBAT   -> ModuleCategory.COMBAT
+    MenuSection.MOVEMENT -> ModuleCategory.MOVEMENT
+    MenuSection.VISUAL   -> ModuleCategory.VISUAL
+    MenuSection.MISC     -> ModuleCategory.MISC
+    MenuSection.CONFIG   -> null
+}
+
 // ── Ana menü ──────────────────────────────────────────────────────────────────
 
 @Composable
@@ -417,8 +432,9 @@ private fun HileMenu(
     onShortcutChanged: () -> Unit,
     modifier         : Modifier = Modifier
 ) {
-    var cat  by remember { mutableStateOf(ModuleCategory.COMBAT) }
-    val mods = remember(moduleVersion, cat) { ModuleManager.byCategory(cat) }
+    var section by remember { mutableStateOf(MenuSection.COMBAT) }
+    val cat  = section.toModuleCategory()
+    val mods = remember(moduleVersion, cat) { cat?.let { ModuleManager.byCategory(it) } ?: emptyList() }
     val relayActive by SessionManager.isActive.collectAsState()
 
     Box(
@@ -486,8 +502,8 @@ private fun HileMenu(
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                ModuleCategory.entries.forEach { c ->
-                    val sel = c == cat
+                MenuSection.entries.forEach { s ->
+                    val sel = s == section
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50.dp))
@@ -495,30 +511,143 @@ private fun HileMenu(
                             .border(1.dp,
                                 if (sel) OxOutlineStrong else OxOutline,
                                 RoundedCornerShape(50.dp))
-                            .clickable { cat = c }
+                            .clickable { section = s }
                             .padding(horizontal = 14.dp, vertical = 6.dp)
                     ) {
-                        Text(c.displayName, fontSize = 11.sp,
+                        Text(s.displayName, fontSize = 11.sp,
                             color = if (sel) OxOnBackground else OxOnSurface,
                             fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
                     }
-                }
-            }
+                }            }
 
             HorizontalDivider(color = OxOutlineStrong)
 
-            // ── Modül listesi ─────────────────────────────────────────────────
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(horizontal = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = PaddingValues(vertical = 10.dp)
-            ) {
-                items(mods) { mod ->
-                    ModuleCard(module = mod, onShortcutChanged = onShortcutChanged)
+            // ── İçerik: modül listesi ya da Config ────────────────────────────
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                if (section == MenuSection.CONFIG) {
+                    ConfigSection()
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(vertical = 10.dp)
+                    ) {
+                        items(mods) { mod ->
+                            ModuleCard(module = mod, onShortcutChanged = onShortcutChanged)
+                        }
+                    }
                 }
+            }
+        }
+    }
+}
+
+// ── Config sekmesi (overlay içinden profil kaydet/yükle/sil) ──────────────────
+
+@Composable
+private fun ConfigSection() {
+    val scope = rememberCoroutineScope()
+    val profiles      by Config.profiles.collectAsState(initial = emptyList())
+    val activeProfile by Config.activeProfile.collectAsState(initial = null)
+    var newName by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                singleLine = true,
+                placeholder = { Text("Profile name", fontSize = 11.sp, color = OxOnSurfaceDim) },
+                modifier = Modifier.weight(1f),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = OxOnSurface),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor   = OxAccent,
+                    unfocusedBorderColor = OxOutline
+                )
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(OxAccent)
+                    .clickable {
+                        val trimmed = newName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            scope.launch { Config.save(trimmed) }
+                            newName = ""
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Text("Save", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        }
+
+        HorizontalDivider(color = OxOutlineStrong)
+
+        if (profiles.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No saved profiles yet.", fontSize = 12.sp, color = OxOnSurfaceDim)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(profiles) { profile ->
+                    ConfigProfileRow(
+                        name     = profile.name,
+                        active   = profile.name == activeProfile,
+                        onLoad   = { scope.launch { Config.load(profile.name) } },
+                        onDelete = { scope.launch { Config.delete(profile.name) } }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigProfileRow(
+    name    : String,
+    active  : Boolean,
+    onLoad  : () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (active) OxSurfaceVar else OxSurface)
+            .border(1.dp,
+                if (active) OxAccentLight.copy(0.6f) else OxOutline,
+                RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            name,
+            fontSize = 13.sp,
+            color = OxOnBackground,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = onLoad, colors = ButtonDefaults.textButtonColors(contentColor = OxAccentLight)) {
+                Text("Load", fontSize = 11.sp)
+            }
+            TextButton(onClick = onDelete, colors = ButtonDefaults.textButtonColors(contentColor = OxError)) {
+                Text("Del", fontSize = 11.sp)
             }
         }
     }
