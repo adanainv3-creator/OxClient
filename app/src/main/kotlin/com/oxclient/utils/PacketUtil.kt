@@ -8,7 +8,6 @@ import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTra
 import org.cloudburstmc.protocol.bedrock.packet.AnimatePacket
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
-import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 
 object PacketUtil {
 
@@ -19,18 +18,13 @@ object PacketUtil {
         })
     }
 
-    fun sendAttack(
-        session: OxRelaySession,
-        targetRid: Long,
-        hotbarSlot: Int = EntityTracker.selfHotbarSlot,
-        clickPos: Vector3f? = null
-    ) {
+    fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = EntityTracker.selfHotbarSlot) {
 
         val heldItem = EntityTracker.getInventoryItem(hotbarSlot) ?: ItemData.AIR
         val target   = EntityTracker.getById(targetRid)
 
         val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-        val resolvedClickPos = clickPos ?: if (target != null) {
+        val clickPos  = if (target != null) {
             val heightDiff = EntityTracker.selfY - target.y
             val clickY = when {
                 heightDiff < -0.5f -> target.y + 0.1f
@@ -49,7 +43,7 @@ object PacketUtil {
             this.hotbarSlot = hotbarSlot
             itemInHand      = heldItem
             playerPosition  = playerPos
-            clickPosition   = resolvedClickPos
+            clickPosition   = clickPos
         })
     }
 
@@ -93,15 +87,4 @@ object PacketUtil {
         EntityTracker.selfZ,
         yaw, pitch, onGround, teleport
     )
-
-    /**
-     * Server-authoritative movement (auth-input) sunucularında fall distance/kritik hesaplaması
-     * MovePlayerPacket'ten değil, ardışık PlayerAuthInputPacket.position.y tick'lerinden çıkarılıyor.
-     * Bu fonksiyon gerçek, o an client'tan gelen auth-input paketinin Y'sini geçici olarak
-     * dyOffset kadar aşağı kaydırır — paket iptal/replace edilmeden aynı nesne üzerinden devam eder.
-     */
-    fun applyAuthInputFallOffset(p: PlayerAuthInputPacket, dyOffset: Float) {
-        val pos = p.position ?: return
-        p.position = Vector3f.from(pos.x, pos.y - dyOffset, pos.z)
-    }
 }
