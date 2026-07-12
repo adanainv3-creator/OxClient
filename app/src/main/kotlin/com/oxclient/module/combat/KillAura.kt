@@ -4,7 +4,6 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -37,9 +36,7 @@ class KillAura : BaseModule(
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
     private val headLockSmooth  = float("Head Lock Smooth", 0.9f, 0.01f, 1f)
-    
-    // ✅ GUARANTEED CRIT
-    private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)  // 2 paket, en hızlı
+    private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)
     private val predictDelay    = float("Predict Delay",    0.1f, 0.05f, 0.5f)
     private val shortcut        = bool ("Shortcut",         false)
 
@@ -62,7 +59,6 @@ class KillAura : BaseModule(
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: GUARANTEED CRIT mode | CPS=${cpsMin.value}-${cpsMax.value} CritMode=${critMode.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -70,7 +66,6 @@ class KillAura : BaseModule(
         tickJob?.cancel()
         PacketEventBus.unregister(this)
         super.onDisable()
-        OverlayLogger.d(TAG, "Disabled (totalAttacks=$attackCount)")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -147,7 +142,6 @@ class KillAura : BaseModule(
         try {
             PacketUtil.sendMoveAtSelf(session, newYaw, newPitch, onGround = true)
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "HeadLock error: ${e.message}", e)
         }
     }
 
@@ -210,19 +204,9 @@ class KillAura : BaseModule(
         scope.launch { performAttackSequence(e) }
     }
 
-    /**
-     * ✅ HER VURUŞ KRİTİK
-     * 
-     * Sıra:
-     * 1. Crit effect (Y offset paketleri) - GUARANTEED
-     * 2. Rotation update
-     * 3. Swing animation
-     * 4. Attack packet
-     */
     private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
 
-        // Tahmin edilen konum
         val predPos = e.predictedPosition(predictDelay.value)
         val clickPos = Vector3f.from(
             predPos.first, 
@@ -231,10 +215,8 @@ class KillAura : BaseModule(
         )
         val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.62f, predPos.third)
 
-        // ✅ 1. KRİTİK EFFECT (GUARANTEED) — her attack'ta mutlaka çalışır
         injectCrit(session)
 
-        // ✅ 2. Rotasyonu güncelle
         if (rotationMode.value != RotationMode.None) {
             val rot = when (rotationMode.value) {
                 RotationMode.Lock -> targetRot
@@ -244,57 +226,38 @@ class KillAura : BaseModule(
             PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = true)
         }
 
-        // ✅ 3. Saldırı animasyonu
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
             else -> {}
         }
 
-        // ✅ 4. ATTACK PAKETİ
         val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
-
-        OverlayLogger.d(TAG, "Attack #$attackCount CRIT: mode=${critMode.value}")
     }
 
-    /**
-     * ✅ KRİTİK EFFECT İNJEKSİYONU
-     * 
-     * MovePacket Crit: 2 paket (0.11→0) — en hızlı, en etkili
-     * Vanilla Crit: 7 paket — daha tutarlı
-     * Jump Crit: 4 paket alternating
-     */
     private suspend fun injectCrit(s: com.oxclient.core.relay.OxRelaySession) {
         try {
             when (critMode.value) {
                 CritMode.MovePacket -> {
-                    // 🚀 EN HIZLI: 2 paket, 0.11f → 0
                     PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
                     PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = true)
                 }
                 
                 CritMode.Vanilla -> {
-                    // 7 paket gradual düşüş (0.42→0)
                     listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
                         PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = dy == 0f)
                     }
                 }
                 
                 CritMode.Jump -> {
-                    // 4 paket alternating
                     listOf(0.0625f, 0f, 0.0625f, 0f).forEach { dy ->
                         PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = dy == 0f)
                     }
                 }
             }
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Crit injection error: ${e.message}", e)
         }
     }
 
     private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value
-
-    private companion object {
-        const val TAG = "KillAura"
-    }
 }

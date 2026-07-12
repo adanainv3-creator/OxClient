@@ -4,7 +4,6 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
@@ -18,7 +17,7 @@ import kotlin.random.Random
 class TPAura : BaseModule(
     name        = "TPAura",
     category    = ModuleCategory.MOVEMENT,
-    description = "Rakip etrafında hareket eder (attack removed)"
+    description = "Rakip etrafında hareket eder"
 ), PacketEventBus.PacketListener {
 
     enum class MoveMode { Random, Strafe, Behind }
@@ -37,21 +36,17 @@ class TPAura : BaseModule(
     private var moveAttempts = 0L
     @Volatile private var lastTargetId = 0L
 
-    private companion object { const val TAG = "TPAura" }
-
     override fun onEnable() {
         super.onEnable()
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
         lastTargetId = 0L
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} range=${range.value}")
     }
 
     override fun onDisable() {
         PacketEventBus.unregister(this)
         super.onDisable()
-        OverlayLogger.d(TAG, "Disabled (moveAttempts=$moveAttempts)")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -70,7 +65,6 @@ class TPAura : BaseModule(
         return candidates.minByOrNull { EntityTracker.distanceTo(it) }.also { target ->
             if (target != null && target.runtimeId != lastTargetId) {
                 lastTargetId = target.runtimeId
-                OverlayLogger.d(TAG, "Target: ${target.name.ifEmpty { target.runtimeId.toString() }}")
             }
         }
     }
@@ -105,7 +99,6 @@ class TPAura : BaseModule(
             })
             moveAttempts++
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Packet error: ${e.message}", e)
         }
     }
 
