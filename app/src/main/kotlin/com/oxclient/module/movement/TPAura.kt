@@ -5,9 +5,9 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.MathUtil
+import com.oxclient.utils.PacketUtil
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
-import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -35,20 +35,18 @@ class TPAura : BaseModule(
     private var strafeAngle = 0.0
     private var moveAttempts = 0L
     private var tickJob: Job? = null
-    @Volatile private var desiredPos: Vector3f? = null
+    @Volatile private var lastMoveMs = 0L
 
     override fun onEnable() {
         super.onEnable()
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
-        desiredPos = null
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
-        desiredPos = null
         PacketEventBus.unregister(this)
         super.onDisable()
     }
@@ -56,28 +54,17 @@ class TPAura : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) tick()
-            delay(50L)
+            delay(50L) // 50ms aralıkla hareket güncelle
         }
     }
 
     private fun tick() {
-        val target = findTarget()
-        if (target == null) {
-            desiredPos = null
-            return
-        }
-        desiredPos = computeDesiredPos(target)
-        moveAttempts++
+        val target = findTarget() ?: return
+        moveAroundTarget(target)
     }
 
     override fun onPacket(event: PacketEvent) {
-        if (!isEnabled) return
-        if (!event.isClientToServer) return
-        val packet = event.packet
-        if (packet !is PlayerAuthInputPacket) return
-        val pos = desiredPos ?: return
-        packet.position = pos
-        event.cancelAndReplace(packet)
+        // Gerekirse burada veri toplanabilir, ama şimdilik boş
     }
 
     private fun findTarget(): EntityTracker.TrackedEntity? {
@@ -86,7 +73,13 @@ class TPAura : BaseModule(
         return candidates.minByOrNull { EntityTracker.distanceTo(it) }
     }
 
-    private fun computeDesiredPos(target: EntityTracker.TrackedEntity): Vector3f {
+    private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
+        val now = System.currentTimeMillis()
+        if (now - lastMoveMs < 50L) return // 50ms cooldown
+        lastMoveMs = now
+
+        val session = PacketEventBus.currentSession ?: return
+
         val selfX = EntityTracker.selfX
         val selfY = EntityTracker.selfY
         val selfZ = EntityTracker.selfZ
@@ -94,10 +87,24 @@ class TPAura : BaseModule(
         val targetPos = Vector3f.from(target.x, target.y + yOffset.value, target.z)
         val dist = MathUtil.dist3(selfX, selfY, selfZ, target.x, target.y, target.z)
 
-        return if (dist > range.value) {
+        val newPos = if (dist > range.value) {
             stepTowardTarget(selfX, selfY, selfZ, targetPos)
         } else {
             calculatePosition(selfX, selfZ, targetPos, target)
+        }
+
+        try {
+            // Sadece konum gönder, rotasyonu KillAura'ya bırak
+            PacketUtil.sendMove(
+                session,
+                newPos.x, newPos.y, newPos.z,
+                EntityTracker.selfYaw,
+                EntityTracker.selfPitch,
+                onGround = true,
+                teleport = false
+            )
+            moveAttempts++
+        } catch (e: Exception) {
         }
     }
 

@@ -24,10 +24,10 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile     = file(System.getenv("KEYSTORE_PATH")?.takeIf { it.isNotBlank() } ?: "debug.jks")
-            storePassword = System.getenv("KEYSTORE_PASS")?.takeIf { it.isNotBlank() } ?: "oxclient"
-            keyAlias      = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }     ?: "oxclient"
-            keyPassword   = System.getenv("KEY_PASS")?.takeIf { it.isNotBlank() }      ?: "oxclient"
+            storeFile     = file(System.getenv("KEYSTORE_PATH") ?: "debug.jks")
+            storePassword = System.getenv("KEYSTORE_PASS") ?: "oxclient"
+            keyAlias      = System.getenv("KEY_ALIAS")     ?: "oxclient"
+            keyPassword   = System.getenv("KEY_PASS")      ?: "oxclient"
         }
     }
 

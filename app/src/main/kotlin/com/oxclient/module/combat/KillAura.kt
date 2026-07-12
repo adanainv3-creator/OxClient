@@ -102,7 +102,7 @@ class KillAura : BaseModule(
         when (attackMode.value) {
             AttackMode.Multi -> {
                 val maxTargetsVal = maxTargets.value.coerceAtMost(targets.size)
-                prioritySorted(targets).take(maxTargetsVal).forEach { target ->
+                targets.take(maxTargetsVal).forEach { target ->
                     if (!shouldFail()) doAttack(target, now)
                 }
                 lastAttackMs = now
@@ -188,23 +188,18 @@ class KillAura : BaseModule(
             if (cur != null) return cur
         }
 
-        val sorted = prioritySorted(candidates)
+        val sorted = when (priorityMode.value) {
+            PriorityMode.Distance    -> candidates.sortedBy { EntityTracker.distanceTo(it) }
+            PriorityMode.Health      -> candidates.sortedBy { it.health }
+            PriorityMode.LowestHealth -> candidates.sortedBy { it.health }
+            PriorityMode.Direction   -> candidates.sortedBy { EntityTracker.angleToEntity(it) }
+        }
 
-        val result = sorted.firstOrNull()
+        val result = if (reversePriority.value) sorted.lastOrNull() else sorted.firstOrNull()
         if (attackMode.value == AttackMode.Switch && result != null) {
             currentTargetId = result.runtimeId
         }
         return result
-    }
-
-    private fun prioritySorted(candidates: List<EntityTracker.TrackedEntity>): List<EntityTracker.TrackedEntity> {
-        val sorted = when (priorityMode.value) {
-            PriorityMode.Distance     -> candidates.sortedBy { EntityTracker.distanceTo(it) }
-            PriorityMode.Health       -> candidates.sortedByDescending { it.health }
-            PriorityMode.LowestHealth -> candidates.sortedBy { it.health }
-            PriorityMode.Direction    -> candidates.sortedBy { EntityTracker.angleToEntity(it) }
-        }
-        return if (reversePriority.value) sorted.reversed() else sorted
     }
 
     private fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {

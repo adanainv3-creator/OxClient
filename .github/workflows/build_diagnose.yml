@@ -69,31 +69,14 @@ jobs:
           name: OxClient-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
-      - name: Release keystore oluştur (secret yoksa)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/debug.jks
-            echo "secret'tan gelen keystore kullanılıyor"
-          elif [ ! -f app/debug.jks ]; then
-            keytool -genkeypair -v \
-              -keystore app/debug.jks \
-              -storepass oxclient \
-              -alias oxclient \
-              -keypass oxclient \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=OxClient, OU=Dev, O=OxClient, L=NA, S=NA, C=TR"
-            echo "otomatik keystore üretildi"
-          fi
-
       - name: Build Release APK
         if: github.ref == 'refs/heads/main'
         run: ./gradlew assembleRelease
         env:
-          KEYSTORE_PATH: app/debug.jks
-          KEYSTORE_PASS: oxclient
-          KEY_ALIAS: oxclient
-          KEY_PASS: oxclient
+          KEYSTORE_PATH: ${{ secrets.KEYSTORE_PATH }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
       - name: Upload Release APK
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
