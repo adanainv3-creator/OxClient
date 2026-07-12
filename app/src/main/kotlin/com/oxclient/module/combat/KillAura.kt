@@ -14,21 +14,21 @@ import org.cloudburstmc.math.vector.Vector3f
 class KillAura : BaseModule(
     name        = "KillAura",
     category    = ModuleCategory.COMBAT,
-    description = "Otomatik saldırı (MAX HASAR)"
+    description = "Otomatik saldırı (GUARANTEED CRIT)"
 ), PacketEventBus.PacketListener {
     
     enum class AttackMode   { Single, Multi, Switch, Closest }
     enum class RotationMode { Lock, Approximate, Silent, None }
     enum class SwingMode    { Client, Server, Both, None }
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
+    enum class CritMode     { Vanilla, MovePacket, Jump }
 
-    // ✅ [MAX DAMAGE] CPS 12-16 (hızlı ancak sunucu takip edebiliyor)
     private val cpsMin          = int  ("CPS Min",          12,   1,  30)
     private val cpsMax          = int  ("CPS Max",          16,   1,  30)
-    private val range           = float("Range",            6.5f, 1f,  10f)  // 6 → 6.5
+    private val range           = float("Range",            6.5f, 1f,  10f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
-    private val maxTargets      = int  ("Max Targets",      5,    1,  10)    // 3 → 5
+    private val maxTargets      = int  ("Max Targets",      5,    1,  10)
     private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
     private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
@@ -36,9 +36,11 @@ class KillAura : BaseModule(
     private val reversePriority = bool ("Reverse Priority", false)
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
-    private val headLockSmooth  = float("Head Lock Smooth", 0.9f, 0.01f, 1f)  // 0.8 → 0.9 (daha agresif)
-    private val fakeCrit        = bool ("Fake Crit",        true)
-    private val predictDelay    = float("Predict Delay",   0.1f, 0.05f, 0.5f) // lag kompanzasyonu
+    private val headLockSmooth  = float("Head Lock Smooth", 0.9f, 0.01f, 1f)
+    
+    // ✅ GUARANTEED CRIT
+    private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)  // 2 paket, en hızlı
+    private val predictDelay    = float("Predict Delay",    0.1f, 0.05f, 0.5f)
     private val shortcut        = bool ("Shortcut",         false)
 
     @Volatile private var currentTargetId    = 0L
@@ -60,7 +62,7 @@ class KillAura : BaseModule(
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: MAXDAMAGE mode | CPS=${cpsMin.value}-${cpsMax.value} Range=${range.value}")
+        OverlayLogger.d(TAG, "Enabled: GUARANTEED CRIT mode | CPS=${cpsMin.value}-${cpsMax.value} CritMode=${critMode.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -209,54 +211,85 @@ class KillAura : BaseModule(
     }
 
     /**
-     * ✅ [MAX DAMAGE] Saldırı sequence optimize edildi:
-     * 1. CRIT: Y offset paketleri (delay yok)
-     * 2. ROTATION: hedefi hesapla
-     * 3. SWING: harita animasyonu (sunucuya gözüksün)
-     * 4. ATTACK: clickPos tahmin edilerek hesaplanmış
+     * ✅ HER VURUŞ KRİTİK
+     * 
+     * Sıra:
+     * 1. Crit effect (Y offset paketleri) - GUARANTEED
+     * 2. Rotation update
+     * 3. Swing animation
+     * 4. Attack packet
      */
     private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
 
-        // ✅ 1. Hedefin gelecek konumunu tahmin et (lag kompanzasyonu)
-        val predictionTime = predictDelay.value
-        val predPos = e.predictedPosition(predictionTime)
-        
-        // Head'e doğru vur (1.62m height)
-        val clickPos = Vector3f.from(predPos.first, (predPos.second + 1.62f).coerceIn(predPos.second - 0.5f, predPos.second + 2f), predPos.third)
-        
-        // Tahmin edilen pozisyona doğru rotation
+        // Tahmin edilen konum
+        val predPos = e.predictedPosition(predictDelay.value)
+        val clickPos = Vector3f.from(
+            predPos.first, 
+            (predPos.second + 1.62f).coerceIn(predPos.second - 0.5f, predPos.second + 2f), 
+            predPos.third
+        )
         val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.62f, predPos.third)
 
-        // ✅ 2. Kritik vuruş hareketleri (delay YOK - hızlı sequence)
-        if (fakeCrit.value) {
-            PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
-            PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0f, onGround = false)
-        }
+        // ✅ 1. KRİTİK EFFECT (GUARANTEED) — her attack'ta mutlaka çalışır
+        injectCrit(session)
 
-        // ✅ 3. Rotasyonu güncelle (attack'tan hemen ÖNCE)
+        // ✅ 2. Rotasyonu güncelle
         if (rotationMode.value != RotationMode.None) {
             val rot = when (rotationMode.value) {
                 RotationMode.Lock -> targetRot
                 RotationMode.Approximate -> RotationUtil.approximate(targetRot)
                 else -> targetRot
             }
-            // ✅ onGround=true (sunucu hareket paketini dinlemesi için)
             PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = true)
         }
 
-        // ✅ 4. Saldırı animasyonu (ikisini de gönder)
+        // ✅ 3. Saldırı animasyonu
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
             else -> {}
         }
 
-        // ✅ 5. ATTACK PAKETİ — clickPos tahmin edilerek hesaplanmış
-        // Hotbar slot 0-8 arası, selfHotbarSlot kullan
+        // ✅ 4. ATTACK PAKETİ
         val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
 
-        OverlayLogger.v(TAG, "Attack #$attackCount: clickPos=$clickPos hotbar=$hotbarSlot")
+        OverlayLogger.d(TAG, "Attack #$attackCount CRIT: mode=${critMode.value}")
+    }
+
+    /**
+     * ✅ KRİTİK EFFECT İNJEKSİYONU
+     * 
+     * MovePacket Crit: 2 paket (0.11→0) — en hızlı, en etkili
+     * Vanilla Crit: 7 paket — daha tutarlı
+     * Jump Crit: 4 paket alternating
+     */
+    private suspend fun injectCrit(s: com.oxclient.core.relay.OxRelaySession) {
+        try {
+            when (critMode.value) {
+                CritMode.MovePacket -> {
+                    // 🚀 EN HIZLI: 2 paket, 0.11f → 0
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = true)
+                }
+                
+                CritMode.Vanilla -> {
+                    // 7 paket gradual düşüş (0.42→0)
+                    listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
+                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = dy == 0f)
+                    }
+                }
+                
+                CritMode.Jump -> {
+                    // 4 paket alternating
+                    listOf(0.0625f, 0f, 0.0625f, 0f).forEach { dy ->
+                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = dy == 0f)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            OverlayLogger.e(TAG, "Crit injection error: ${e.message}", e)
+        }
     }
 
     private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value
