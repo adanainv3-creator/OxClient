@@ -4,7 +4,6 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
-import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
@@ -25,10 +24,10 @@ class TPAura : BaseModule(
 
     private val moveMode         = enum ("Mode",              MoveMode.Aggressive)
     private val detectRange      = float("Detect Range",      100f, 10f,  500f)
-    private val range            = float("Range",             2.5f, 1f,   10f)
-    private val horizontalSpeed  = float("Horizontal Speed",  2.5f, 0.5f, 5f)
-    private val verticalSpeed    = float("Vertical Speed",    0.8f, 0.1f, 3f)
-    private val strafeSpeed      = float("Strafe Speed",      20f, 0.1f, 50f)
+    private val range            = float("Range",             1.52f, 1f,   8f)
+    private val horizontalSpeed  = float("Horizontal Speed",  3.8f, 0.5f, 8f)
+    private val verticalSpeed    = float("Vertical Speed",    1.8f, 0.1f, 8f)
+    private val strafeSpeed      = float("Strafe Speed",      1.5f, 0.1f, 50f)
     private val yOffset          = float("Y Offset",          0.8f, -2f,  2f)
     private val rotateToTarget   = bool ("Rotate To Target",  true)
     private val shortcut         = bool ("Shortcut",          false)
@@ -37,21 +36,17 @@ class TPAura : BaseModule(
     private var moveAttempts = 0L
     @Volatile private var lastTargetId = 0L
 
-    private companion object { const val TAG = "TPAura" }
-
     override fun onEnable() {
         super.onEnable()
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
         lastTargetId = 0L
         PacketEventBus.register(this)
-        OverlayLogger.d(TAG, "Enabled: mode=${moveMode.value} | range=${range.value}m | hSpeed=${horizontalSpeed.value}")
     }
 
     override fun onDisable() {
         PacketEventBus.unregister(this)
         super.onDisable()
-        OverlayLogger.d(TAG, "Disabled (moves=$moveAttempts)")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -70,7 +65,6 @@ class TPAura : BaseModule(
         val target = candidates.minByOrNull { EntityTracker.distanceTo(it) }
         if (target != null && target.runtimeId != lastTargetId) {
             lastTargetId = target.runtimeId
-            OverlayLogger.v(TAG, "New target: ${target.name.ifEmpty { target.runtimeId }} | ${"%.1f".format(EntityTracker.distanceTo(target))}m")
         }
         return target
     }
@@ -105,11 +99,7 @@ class TPAura : BaseModule(
                 ridingRuntimeEntityId = 0L
             })
             moveAttempts++
-            if (moveAttempts % 30 == 0L) {
-                OverlayLogger.v(TAG, "move: #$moveAttempts | dist=${"%.1f".format(dist)}m | mode=${moveMode.value}")
-            }
         } catch (e: Exception) {
-            OverlayLogger.e(TAG, "Paket hatası: ${e.message}")
         }
     }
 
