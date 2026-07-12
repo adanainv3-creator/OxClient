@@ -1,11 +1,11 @@
 package com.oxclient.module.movement
 
-import android.util.Log
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.MathUtil
+import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
@@ -18,42 +18,44 @@ import kotlin.random.Random
 class TPAura : BaseModule(
     name        = "TPAura",
     category    = ModuleCategory.MOVEMENT,
-    description = "Rakip etrafında hareket eder"
+    description = "Güçlü rakibi çevreleyerek saldır"
 ), PacketEventBus.PacketListener {
 
-    enum class MoveMode { Random, Strafe, Behind, Aggressive }
+    enum class MoveMode { Strafe, Aggressive, Behind, Random, PVP }
 
     private val moveMode         = enum ("Mode",              MoveMode.Aggressive)
-    private val detectRange      = float("Detect Range",      100f, 10f,  500f)
-    private val range            = float("Range",             1.52f, 1f,   8f)
-    private val horizontalSpeed  = float("Horizontal Speed",  3.8f, 0.5f, 8f)
-    private val verticalSpeed    = float("Vertical Speed",    1.8f, 0.1f, 8f)
-    private val strafeSpeed      = float("Strafe Speed",      1.5f, 0.1f, 50f)
-    private val yOffset          = float("Y Offset",          0.8f, -2f,  2f)
-    private val rotateToTarget   = bool ("Rotate To Target",  true)
+    private val detectRange      = float("Detect Range",      500f, 10f,  500f)
+    private val range            = float("Range",             2.5f, 1f,   8f)
+    private val horizontalSpeed  = float("Horizontal Speed",  4f,   0.5f, 10f)
+    private val verticalSpeed    = float("Vertical Speed",    1.5f, 0.1f, 5f)
+    private val strafeSpeed      = float("Strafe Speed",      2.5f, 0.1f, 20f)
+    private val yOffset          = float("Y Offset",          0.8f, -2f,   2f)
+    private val pvpDepth         = float("PVP Depth",         2.5f, 2f,   3f)
+    private val pvpRadius        = float("PVP Radius",        1.2f, 0.5f, 2.5f)
+    private val pvpCrit          = bool ("PVP Crit",          true)
+    private val attack           = bool ("Attack",            true)
+    private val attackRange      = float("Attack Range",      4.2f, 1f,   6f)
+    private val cpsMin           = int  ("CPS Min",           18,   1,    30)
+    private val cpsMax           = int  ("CPS Max",           22,   1,    30)
+    private val doubleAttack     = bool ("Double Attack",     true)
     private val shortcut         = bool ("Shortcut",          false)
 
     private var strafeAngle = 0.0
     private var moveAttempts = 0L
-    @Volatile private var lastTargetId = 0L
-
-    companion object {
-        private const val TAG = "TPAura"
-    }
+    private var attackCount  = 0L
+    @Volatile private var lastAttackMs = 0L
 
     override fun onEnable() {
         super.onEnable()
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
-        lastTargetId = 0L
+        attackCount = 0L
         PacketEventBus.register(this)
-        Log.d(TAG, "onEnable: registered, listening for PlayerAuthInputPacket")
     }
 
     override fun onDisable() {
         PacketEventBus.unregister(this)
         super.onDisable()
-        Log.d(TAG, "onDisable: unregistered, total moveAttempts=$moveAttempts")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -61,64 +63,46 @@ class TPAura : BaseModule(
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
         if (event.packet !is PlayerAuthInputPacket) return
 
-        val target = findTarget()
-        if (target == null) {
-            Log.d(TAG, "onPacket: no target found in range ${detectRange.value}")
-            return
-        }
+        val target = findTarget() ?: return
         moveAroundTarget(target)
+        if (attack.value) tryAttack(target)
     }
 
     private fun findTarget(): EntityTracker.TrackedEntity? {
         val candidates = EntityTracker.getEntitiesInRange(detectRange.value)
             .filter { it.runtimeId != EntityTracker.selfRuntimeId && it.isPlayer }
-
-        val target = candidates.minByOrNull { EntityTracker.distanceTo(it) }
-        if (target != null && target.runtimeId != lastTargetId) {
-            lastTargetId = target.runtimeId
-            Log.d(TAG, "findTarget: new target=${target.runtimeId} dist=${EntityTracker.distanceTo(target)}")
-        }
-        return target
+        return candidates.minByOrNull { EntityTracker.distanceTo(it) }
     }
 
     private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
-        val session = PacketEventBus.currentSession
-        if (session == null) {
-            Log.w(TAG, "moveAroundTarget: currentSession is NULL, cannot send packet")
-            return
-        }
+        val session = PacketEventBus.currentSession ?: return
 
-        val selfX   = EntityTracker.selfX
-        val selfY   = EntityTracker.selfY
-        val selfZ   = EntityTracker.selfZ
+        val selfX = EntityTracker.selfX
+        val selfY = EntityTracker.selfY
+        val selfZ = EntityTracker.selfZ
 
         val targetPos = Vector3f.from(target.x, target.y + yOffset.value, target.z)
-        val dist      = MathUtil.dist3(selfX, selfY, selfZ, target.x, target.y, target.z)
+        val dist = MathUtil.dist3(selfX, selfY, selfZ, target.x, target.y, target.z)
 
         val newPos = if (dist > range.value) {
             stepTowardTarget(selfX, selfY, selfZ, targetPos)
         } else {
-            calculatePosition(selfX, selfZ, targetPos)
+            calculatePosition(selfX, selfZ, targetPos, target)
         }
 
-        val rot = if (rotateToTarget.value) RotationUtil.toEntity(target) else null
+        val rot = RotationUtil.toEntity(target)
 
         try {
             session.clientBound(MovePlayerPacket().apply {
                 runtimeEntityId       = EntityTracker.selfRuntimeId
                 position              = newPos
-                rotation              = if (rot != null) Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
-                                        else Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, 0f)
+                rotation              = Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
                 mode                  = MovePlayerPacket.Mode.NORMAL
                 isOnGround            = true
                 ridingRuntimeEntityId = 0L
             })
             moveAttempts++
-            if (moveAttempts % 20 == 0L) {
-                Log.d(TAG, "moveAroundTarget: sent $moveAttempts packets, last pos=$newPos dist=$dist")
-            }
         } catch (e: Exception) {
-            Log.e(TAG, "moveAroundTarget: FAILED to send packet - ${e.javaClass.simpleName}: ${e.message}", e)
         }
     }
 
@@ -137,11 +121,34 @@ class TPAura : BaseModule(
         return Vector3f.from(newX, newY, newZ)
     }
 
-    private fun calculatePosition(selfX: Float, selfZ: Float, targetPos: Vector3f): Vector3f {
+    private fun tryAttack(target: EntityTracker.TrackedEntity) {
+        val dist = EntityTracker.distanceTo(target)
+        if (dist > attackRange.value) return
+
+        val now = System.currentTimeMillis()
+        val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
+        if (now - lastAttackMs < delayMs) return
+        lastAttackMs = now
+
+        val session = PacketEventBus.currentSession ?: return
+        attackCount++
+
+        if (moveMode.value == MoveMode.PVP && pvpCrit.value) {
+            PacketUtil.sendMoveAtSelf(session, dyOffset = 0.11f, onGround = false)
+            PacketUtil.sendMoveAtSelf(session, dyOffset = 0f,    onGround = false)
+        }
+
+        PacketUtil.sendSwing(session)
+        PacketUtil.sendAttack(session, target.runtimeId)
+        if (doubleAttack.value) {
+            PacketUtil.sendAttack(session, target.runtimeId)
+        }
+    }
+
+    private fun calculatePosition(selfX: Float, selfZ: Float, targetPos: Vector3f, target: EntityTracker.TrackedEntity): Vector3f {
         val radius = range.value
 
         return when (moveMode.value) {
-            // ⚡ AGGRESSIVE: Tight circle, hızlı dönüş, en iyi PvP
             MoveMode.Aggressive -> {
                 strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.05
                 val verticalWave = sin(strafeAngle * 0.7f).toFloat() * 0.25f * verticalSpeed.value
@@ -153,7 +160,6 @@ class TPAura : BaseModule(
                 )
             }
 
-            // Klasik strafe: daha geniş radius, dengeli hareket
             MoveMode.Strafe -> {
                 strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.03
                 val verticalWave = sin(strafeAngle * 0.5f).toFloat() * 0.3f * verticalSpeed.value
@@ -165,7 +171,6 @@ class TPAura : BaseModule(
                 )
             }
 
-            // Behind: Rakinin arkasına konumlan, defensive strat
             MoveMode.Behind -> {
                 val dx = targetPos.x - selfX
                 val dz = targetPos.z - selfZ
@@ -179,7 +184,6 @@ class TPAura : BaseModule(
                 )
             }
 
-            // Random: Unpredictable, chaos atak
             MoveMode.Random -> {
                 val angle            = Random.nextDouble(0.0, Math.PI * 2)
                 val horizontalOffset = radius * (0.7f + Random.nextFloat() * 0.3f)
@@ -189,6 +193,16 @@ class TPAura : BaseModule(
                     targetPos.x + (cos(angle) * horizontalOffset).toFloat(),
                     targetPos.y + verticalOffset,
                     targetPos.z + (sin(angle) * horizontalOffset).toFloat()
+                )
+            }
+
+            MoveMode.PVP -> {
+                strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.045
+
+                Vector3f.from(
+                    target.x + (cos(strafeAngle) * pvpRadius.value).toFloat(),
+                    target.y - pvpDepth.value,
+                    target.z + (sin(strafeAngle) * pvpRadius.value).toFloat()
                 )
             }
         }
