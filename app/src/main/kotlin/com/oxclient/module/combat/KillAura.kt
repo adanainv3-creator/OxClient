@@ -4,6 +4,7 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.ui.overlay.OverlayLogger
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -13,7 +14,7 @@ import org.cloudburstmc.math.vector.Vector3f
 class KillAura : BaseModule(
     name        = "KillAura",
     category    = ModuleCategory.COMBAT,
-    description = "Otomatik saldırı (Optimize)"
+    description = "Otomatik saldırı (MAX HASAR)"
 ), PacketEventBus.PacketListener {
     
     enum class AttackMode   { Single, Multi, Switch, Closest }
@@ -21,31 +22,29 @@ class KillAura : BaseModule(
     enum class SwingMode    { Client, Server, Both, None }
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
 
-    // ✅ [FIX] CPS 8-12 arasına çekildi (spam koruması)
-    private val cpsMin          = int  ("CPS Min",          8,    1,  30)
-    private val cpsMax          = int  ("CPS Max",          12,   1,  30)
-    private val range           = float("Range",            6.0f, 1f,  10f)
+    // ✅ [MAX DAMAGE] CPS 12-16 (hızlı ancak sunucu takip edebiliyor)
+    private val cpsMin          = int  ("CPS Min",          12,   1,  30)
+    private val cpsMax          = int  ("CPS Max",          16,   1,  30)
+    private val range           = float("Range",            6.5f, 1f,  10f)  // 6 → 6.5
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
-    private val maxTargets      = int  ("Max Targets",      3,    1,  10)
+    private val maxTargets      = int  ("Max Targets",      5,    1,  10)    // 3 → 5
     private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
-    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock) // Lock önerilir
+    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
-    // ✅ [FIX] Smooth değeri 0.8 yapıldı (hızlı takip)
-    private val headLockSmooth  = float("Head Lock Smooth", 0.8f, 0.01f, 1f)
-    // ✅ [FIX] FakeCrit varsayılan true
+    private val headLockSmooth  = float("Head Lock Smooth", 0.9f, 0.01f, 1f)  // 0.8 → 0.9 (daha agresif)
     private val fakeCrit        = bool ("Fake Crit",        true)
+    private val predictDelay    = float("Predict Delay",   0.1f, 0.05f, 0.5f) // lag kompanzasyonu
     private val shortcut        = bool ("Shortcut",         false)
 
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L
     @Volatile private var lastAttackMs       = 0L
     @Volatile private var lastRotationSendMs = 0L
-    @Volatile private var lastCritMs         = 0L
     @Volatile private var consecutiveMisses  = 0
     @Volatile private var attackCount        = 0L
     @Volatile private var headLockYaw        = 0f
@@ -58,10 +57,10 @@ class KillAura : BaseModule(
         currentTargetId = 0L
         consecutiveMisses = 0
         attackCount = 0L
-        lastCritMs = 0L
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
         PacketEventBus.register(this)
+        OverlayLogger.d(TAG, "Enabled: MAXDAMAGE mode | CPS=${cpsMin.value}-${cpsMax.value} Range=${range.value}")
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -69,6 +68,7 @@ class KillAura : BaseModule(
         tickJob?.cancel()
         PacketEventBus.unregister(this)
         super.onDisable()
+        OverlayLogger.d(TAG, "Disabled (totalAttacks=$attackCount)")
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -88,6 +88,7 @@ class KillAura : BaseModule(
     private suspend fun tick() {
         val now = System.currentTimeMillis()
         val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
+        
         if (now - lastAttackMs < delayMs) return
 
         val targets = selectTargets()
@@ -103,21 +104,21 @@ class KillAura : BaseModule(
             AttackMode.Multi -> {
                 val maxTargetsVal = maxTargets.value.coerceAtMost(targets.size)
                 targets.take(maxTargetsVal).forEach { target ->
-                    if (!shouldFail()) doAttack(target, now)
+                    if (!shouldFail()) doAttack(target)
                 }
                 lastAttackMs = now
             }
             AttackMode.Closest -> {
                 val target = targets.minByOrNull { EntityTracker.distanceTo(it) }
                 if (target != null && !shouldFail()) {
-                    doAttack(target, now)
+                    doAttack(target)
                     lastAttackMs = now
                 }
             }
             else -> {
                 val target = selectTarget(targets)
                 if (target != null && !shouldFail()) {
-                    doAttack(target, now)
+                    doAttack(target)
                     lastAttackMs = now
                 }
             }
@@ -144,6 +145,7 @@ class KillAura : BaseModule(
         try {
             PacketUtil.sendMoveAtSelf(session, newYaw, newPitch, onGround = true)
         } catch (e: Exception) {
+            OverlayLogger.e(TAG, "HeadLock error: ${e.message}", e)
         }
     }
 
@@ -202,46 +204,64 @@ class KillAura : BaseModule(
         return result
     }
 
-    private fun doAttack(e: EntityTracker.TrackedEntity, now: Long) {
+    private fun doAttack(e: EntityTracker.TrackedEntity) {
         scope.launch { performAttackSequence(e) }
     }
 
-    // ✅ [FIX] Tamamen yeniden yazıldı. Gecikme kaldırıldı, tahmin eklendi, çift vuruş kaldırıldı.
+    /**
+     * ✅ [MAX DAMAGE] Saldırı sequence optimize edildi:
+     * 1. CRIT: Y offset paketleri (delay yok)
+     * 2. ROTATION: hedefi hesapla
+     * 3. SWING: harita animasyonu (sunucuya gözüksün)
+     * 4. ATTACK: clickPos tahmin edilerek hesaplanmış
+     */
     private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
 
-        // 1. Hedefin 50ms sonraki konumunu tahmin et (lag kompanzasyonu)
-        val predPos = e.predictedPosition(0.05f)
-        val clickPos = Vector3f.from(predPos.first, predPos.second + 1.5f, predPos.third)
-        val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.5f, predPos.third)
+        // ✅ 1. Hedefin gelecek konumunu tahmin et (lag kompanzasyonu)
+        val predictionTime = predictDelay.value
+        val predPos = e.predictedPosition(predictionTime)
+        
+        // Head'e doğru vur (1.62m height)
+        val clickPos = Vector3f.from(predPos.first, (predPos.second + 1.62f).coerceIn(predPos.second - 0.5f, predPos.second + 2f), predPos.third)
+        
+        // Tahmin edilen pozisyona doğru rotation
+        val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.62f, predPos.third)
 
-        // 2. Kritik vuruş hareketini gönder (Eğer açıksa)
+        // ✅ 2. Kritik vuruş hareketleri (delay YOK - hızlı sequence)
         if (fakeCrit.value) {
-            // Hızlı seri hareket ile kritik simülasyonu (delay yok!)
             PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
-            // İkinci hareketi hemen gönder, araya delay koyma
             PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0f, onGround = false)
         }
 
-        // 3. Rotasyonu güncelle (Attack'ten hemen önce)
+        // ✅ 3. Rotasyonu güncelle (attack'tan hemen ÖNCE)
         if (rotationMode.value != RotationMode.None) {
             val rot = when (rotationMode.value) {
                 RotationMode.Lock -> targetRot
                 RotationMode.Approximate -> RotationUtil.approximate(targetRot)
                 else -> targetRot
             }
-            PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = false)
+            // ✅ onGround=true (sunucu hareket paketini dinlemesi için)
+            PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = true)
         }
 
-        // 4. Saldırı animasyonu
+        // ✅ 4. Saldırı animasyonu (ikisini de gönder)
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
             else -> {}
         }
 
-        // 5. Saldırı paketini gönder (Click pozisyonu tahmin edilen konum)
-        PacketUtil.sendAttack(session, e.runtimeId, clickPos = clickPos)
+        // ✅ 5. ATTACK PAKETİ — clickPos tahmin edilerek hesaplanmış
+        // Hotbar slot 0-8 arası, selfHotbarSlot kullan
+        val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+        PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
+
+        OverlayLogger.v(TAG, "Attack #$attackCount: clickPos=$clickPos hotbar=$hotbarSlot")
     }
 
     private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value
+
+    private companion object {
+        const val TAG = "KillAura"
+    }
 }
