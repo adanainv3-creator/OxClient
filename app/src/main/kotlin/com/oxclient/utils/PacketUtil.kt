@@ -18,20 +18,20 @@ object PacketUtil {
         })
     }
 
-    fun sendAttack(
-        session: OxRelaySession,
-        targetRid: Long,
-        hotbarSlot: Int = EntityTracker.selfHotbarSlot,
-        clickPos: Vector3f? = null
-    ) {
+    fun sendAttack(session: OxRelaySession, targetRid: Long, hotbarSlot: Int = EntityTracker.selfHotbarSlot) {
+
         val heldItem = EntityTracker.getInventoryItem(hotbarSlot) ?: ItemData.AIR
         val target   = EntityTracker.getById(targetRid)
 
         val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-
-        val finalClickPos = clickPos ?: if (target != null) {
-            val heightOffset = if (target.isPlayer) 1.5f else 0.5f
-            Vector3f.from(target.x, target.y + heightOffset, target.z)
+        val clickPos  = if (target != null) {
+            val heightDiff = EntityTracker.selfY - target.y
+            val clickY = when {
+                heightDiff < -0.5f -> target.y + 0.1f
+                heightDiff > 1.8f  -> target.y + 1.7f
+                else               -> target.y + 1.0f
+            }
+            Vector3f.from(target.x, clickY, target.z)
         } else {
             playerPos
         }
@@ -43,7 +43,7 @@ object PacketUtil {
             this.hotbarSlot = hotbarSlot
             itemInHand      = heldItem
             playerPosition  = playerPos
-            clickPosition   = finalClickPos
+            clickPosition   = clickPos
         })
     }
 
