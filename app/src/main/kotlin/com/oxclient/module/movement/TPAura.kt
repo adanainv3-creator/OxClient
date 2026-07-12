@@ -6,10 +6,8 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
-import com.oxclient.utils.RotationUtil
+import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
-import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
-import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -18,7 +16,7 @@ import kotlin.random.Random
 class TPAura : BaseModule(
     name        = "TPAura",
     category    = ModuleCategory.MOVEMENT,
-    description = "Güçlü rakibi çevreleyerek saldır"
+    description = "Hedef etrafında dolaş (KillAura ile uyumlu)"
 ), PacketEventBus.PacketListener {
 
     enum class MoveMode { Strafe, Aggressive, Behind, Random, PVP }
@@ -32,40 +30,41 @@ class TPAura : BaseModule(
     private val yOffset          = float("Y Offset",          0.8f, -2f,   2f)
     private val pvpDepth         = float("PVP Depth",         2.5f, 2f,   3f)
     private val pvpRadius        = float("PVP Radius",        1.2f, 0.5f, 2.5f)
-    private val pvpCrit          = bool ("PVP Crit",          true)
-    private val attack           = bool ("Attack",            true)
-    private val attackRange      = float("Attack Range",      4.2f, 1f,   6f)
-    private val cpsMin           = int  ("CPS Min",           18,   1,    30)
-    private val cpsMax           = int  ("CPS Max",           22,   1,    30)
-    private val doubleAttack     = bool ("Double Attack",     true)
     private val shortcut         = bool ("Shortcut",          false)
 
     private var strafeAngle = 0.0
     private var moveAttempts = 0L
-    private var attackCount  = 0L
-    @Volatile private var lastAttackMs = 0L
+    private var tickJob: Job? = null
+    @Volatile private var lastMoveMs = 0L
 
     override fun onEnable() {
         super.onEnable()
         strafeAngle = Random.nextDouble(0.0, Math.PI * 2)
         moveAttempts = 0L
-        attackCount = 0L
         PacketEventBus.register(this)
+        tickJob = scope.launch { tickLoop() }
     }
 
     override fun onDisable() {
+        tickJob?.cancel()
         PacketEventBus.unregister(this)
         super.onDisable()
     }
 
-    override fun onPacket(event: PacketEvent) {
-        if (!isEnabled) return
-        if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        if (event.packet !is PlayerAuthInputPacket) return
+    private suspend fun tickLoop() {
+        while (currentCoroutineContext().isActive) {
+            if (isEnabled) tick()
+            delay(50L) // 50ms aralıkla hareket güncelle
+        }
+    }
 
+    private fun tick() {
         val target = findTarget() ?: return
         moveAroundTarget(target)
-        if (attack.value) tryAttack(target)
+    }
+
+    override fun onPacket(event: PacketEvent) {
+        // Gerekirse burada veri toplanabilir, ama şimdilik boş
     }
 
     private fun findTarget(): EntityTracker.TrackedEntity? {
@@ -75,6 +74,10 @@ class TPAura : BaseModule(
     }
 
     private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
+        val now = System.currentTimeMillis()
+        if (now - lastMoveMs < 50L) return // 50ms cooldown
+        lastMoveMs = now
+
         val session = PacketEventBus.currentSession ?: return
 
         val selfX = EntityTracker.selfX
@@ -90,17 +93,16 @@ class TPAura : BaseModule(
             calculatePosition(selfX, selfZ, targetPos, target)
         }
 
-        val rot = RotationUtil.toEntity(target)
-
         try {
-            session.clientBound(MovePlayerPacket().apply {
-                runtimeEntityId       = EntityTracker.selfRuntimeId
-                position              = newPos
-                rotation              = Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
-                mode                  = MovePlayerPacket.Mode.NORMAL
-                isOnGround            = true
-                ridingRuntimeEntityId = 0L
-            })
+            // Sadece konum gönder, rotasyonu KillAura'ya bırak
+            PacketUtil.sendMove(
+                session,
+                newPos.x, newPos.y, newPos.z,
+                EntityTracker.selfYaw,
+                EntityTracker.selfPitch,
+                onGround = true,
+                teleport = false
+            )
             moveAttempts++
         } catch (e: Exception) {
         }
@@ -119,30 +121,6 @@ class TPAura : BaseModule(
             selfY + verticalSpeed.value
         )
         return Vector3f.from(newX, newY, newZ)
-    }
-
-    private fun tryAttack(target: EntityTracker.TrackedEntity) {
-        val dist = EntityTracker.distanceTo(target)
-        if (dist > attackRange.value) return
-
-        val now = System.currentTimeMillis()
-        val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
-        if (now - lastAttackMs < delayMs) return
-        lastAttackMs = now
-
-        val session = PacketEventBus.currentSession ?: return
-        attackCount++
-
-        if (moveMode.value == MoveMode.PVP && pvpCrit.value) {
-            PacketUtil.sendMoveAtSelf(session, dyOffset = 0.11f, onGround = false)
-            PacketUtil.sendMoveAtSelf(session, dyOffset = 0f,    onGround = false)
-        }
-
-        PacketUtil.sendSwing(session)
-        PacketUtil.sendAttack(session, target.runtimeId)
-        if (doubleAttack.value) {
-            PacketUtil.sendAttack(session, target.runtimeId)
-        }
     }
 
     private fun calculatePosition(selfX: Float, selfZ: Float, targetPos: Vector3f, target: EntityTracker.TrackedEntity): Vector3f {

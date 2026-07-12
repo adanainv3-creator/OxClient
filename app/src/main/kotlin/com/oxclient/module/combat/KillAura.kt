@@ -1,4 +1,3 @@
-
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
@@ -9,11 +8,12 @@ import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
 import kotlinx.coroutines.*
+import org.cloudburstmc.math.vector.Vector3f
 
 class KillAura : BaseModule(
     name        = "KillAura",
     category    = ModuleCategory.COMBAT,
-    description = "Otomatik saldırı"
+    description = "Otomatik saldırı (Optimize)"
 ), PacketEventBus.PacketListener {
     
     enum class AttackMode   { Single, Multi, Switch, Closest }
@@ -21,21 +21,24 @@ class KillAura : BaseModule(
     enum class SwingMode    { Client, Server, Both, None }
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
 
-    private val cpsMin          = int  ("CPS Min",          15,   1,  30)
-    private val cpsMax          = int  ("CPS Max",          18,   1,  30)
+    // ✅ [FIX] CPS 8-12 arasına çekildi (spam koruması)
+    private val cpsMin          = int  ("CPS Min",          8,    1,  30)
+    private val cpsMax          = int  ("CPS Max",          12,   1,  30)
     private val range           = float("Range",            6.0f, 1f,  10f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
     private val maxTargets      = int  ("Max Targets",      3,    1,  10)
     private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
-    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
+    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock) // Lock önerilir
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
-    private val headLockSmooth  = float("Head Lock Smooth", 0.2f, 0.01f, 1f)
-    private val fakeCrit        = bool ("Fake Crit",        false)
+    // ✅ [FIX] Smooth değeri 0.8 yapıldı (hızlı takip)
+    private val headLockSmooth  = float("Head Lock Smooth", 0.8f, 0.01f, 1f)
+    // ✅ [FIX] FakeCrit varsayılan true
+    private val fakeCrit        = bool ("Fake Crit",        true)
     private val shortcut        = bool ("Shortcut",         false)
 
     @Volatile private var currentTargetId    = 0L
@@ -203,46 +206,41 @@ class KillAura : BaseModule(
         scope.launch { performAttackSequence(e) }
     }
 
+    // ✅ [FIX] Tamamen yeniden yazıldı. Gecikme kaldırıldı, tahmin eklendi, çift vuruş kaldırıldı.
     private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
 
-        if (rotationMode.value != RotationMode.None) {
-            val r = RotationUtil.toEntity(e)
-            when (rotationMode.value) {
-                RotationMode.Lock -> PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
-                RotationMode.Approximate -> {
-                    val approx = RotationUtil.approximate(r)
-                    PacketUtil.sendMoveAtSelf(session, approx.yaw, approx.pitch)
-                }
-                RotationMode.Silent -> {}
-                RotationMode.None   -> {}
-            }
-        }
+        // 1. Hedefin 50ms sonraki konumunu tahmin et (lag kompanzasyonu)
+        val predPos = e.predictedPosition(0.05f)
+        val clickPos = Vector3f.from(predPos.first, predPos.second + 1.5f, predPos.third)
+        val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.5f, predPos.third)
 
+        // 2. Kritik vuruş hareketini gönder (Eğer açıksa)
         if (fakeCrit.value) {
-            injectCrit(session)
-            kotlinx.coroutines.delay(50L)
+            // Hızlı seri hareket ile kritik simülasyonu (delay yok!)
+            PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
+            // İkinci hareketi hemen gönder, araya delay koyma
+            PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0f, onGround = false)
         }
 
+        // 3. Rotasyonu güncelle (Attack'ten hemen önce)
+        if (rotationMode.value != RotationMode.None) {
+            val rot = when (rotationMode.value) {
+                RotationMode.Lock -> targetRot
+                RotationMode.Approximate -> RotationUtil.approximate(targetRot)
+                else -> targetRot
+            }
+            PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = false)
+        }
+
+        // 4. Saldırı animasyonu
         when (swingMode.value) {
             SwingMode.Server, SwingMode.Both -> PacketUtil.sendSwing(session)
             else -> {}
         }
 
-        PacketUtil.sendAttack(session, e.runtimeId)
-        if (attackCount % 2 == 0L) {
-            kotlinx.coroutines.delay(1)
-            PacketUtil.sendAttack(session, e.runtimeId)
-        }
-    }
-
-    private suspend fun injectCrit(session: com.oxclient.core.relay.OxRelaySession) {
-        val now = System.currentTimeMillis()
-        if (now - lastCritMs < 400L) return
-        lastCritMs = now
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.0625f, onGround = false)
-        kotlinx.coroutines.delay(50L)
-        PacketUtil.sendMoveAtSelf(session, dyOffset = 0.042f, onGround = false)
+        // 5. Saldırı paketini gönder (Click pozisyonu tahmin edilen konum)
+        PacketUtil.sendAttack(session, e.runtimeId, clickPos = clickPos)
     }
 
     private fun shouldFail(): Boolean = failRate.value > 0f && Math.random() < failRate.value
