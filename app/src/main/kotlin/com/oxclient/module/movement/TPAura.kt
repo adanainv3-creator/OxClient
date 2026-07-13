@@ -116,6 +116,20 @@ class TPAura : BaseModule(
                 isOnGround            = true
                 ridingRuntimeEntityId = 0L
             })
+
+            // ✅ [FIX] Cihazdan gelecek auth-input round-trip'ini bekleme.
+            // Cihaza "buradasın" dediğimiz an, KillAura gibi aynı tick içinde
+            // mesafe/menzil hesaplayan diğer modüllerin de bunu hemen görmesi gerekiyor.
+            // Aksi halde KillAura saldırı paketini bayat (stale) selfX/Y/Z ile gönderiyor,
+            // sunucu reach/mesafe kontrolünde tutarsızlık görüp saldırıyı reddediyor.
+            EntityTracker.selfX = newPos.x
+            EntityTracker.selfY = newPos.y
+            EntityTracker.selfZ = newPos.z
+            if (rot != null) {
+                EntityTracker.selfYaw   = rot.yaw
+                EntityTracker.selfPitch = rot.pitch
+            }
+
             moveAttempts++
             if (moveAttempts % 20 == 0L) {
                 Log.d(TAG, "moveAroundTarget: sent $moveAttempts packets, last pos=$newPos dist=$dist")

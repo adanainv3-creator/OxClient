@@ -30,7 +30,7 @@ class KillAura : BaseModule(
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
     private val maxTargets      = int  ("Max Targets",      5,    1,  10)
     private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
-    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
+    private val rotationMode    = enum ("Rotation Mode",    RotationMode.None)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
