@@ -309,7 +309,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         // MobEquipmentPacket DEĞİL, bu paket gönderiliyor. Bu dinlenmezse selfHotbarSlot
         // bayatlaşıyor ve KillAura/CrystalAura yanlış (boş) slotu kullanıp yumruk hasarı verir.
         if (dir != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        if (!p.selectHotbarSlot) return
+        if (!p.isSelectHotbarSlot) return
         if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
             selfHotbarSlot = p.selectedHotbarSlot
         }
