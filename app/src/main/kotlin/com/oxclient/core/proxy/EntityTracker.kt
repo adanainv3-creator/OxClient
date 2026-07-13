@@ -149,6 +149,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             is SetEntityLinkPacket      -> handleEntityLink(p)
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
             is MobEquipmentPacket       -> handleMobEquipment(p, event.direction)
+            is PlayerHotbarPacket       -> handlePlayerHotbar(p, event.direction)
             is InventoryContentPacket   -> {
                 handleInventoryContent(p)
             }
@@ -290,6 +291,27 @@ object EntityTracker : PacketEventBus.PacketListener {
         if (p.runtimeEntityId != selfRuntimeId && p.runtimeEntityId != 0L) return
         if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
             selfHotbarSlot = p.hotbarSlot
+            // MobEquipmentPacket asıl item verisini de taşıyor (item alanı) - envanter
+            // takibinin InventoryContentPacket/InventorySlotPacket senkronizasyonuna bağımlı
+            // kalmaması için burada da direkt yazıyoruz. Bu, iki paket arasında oluşabilecek
+            // sıralama/gecikme farkından kaynaklı bayat item verisini engeller.
+            val item = p.item
+            if (item != null && !isEmptyItem(item)) {
+                selfInventory[p.hotbarSlot] = item
+            } else {
+                selfInventory.remove(p.hotbarSlot)
+            }
+        }
+    }
+
+    private fun handlePlayerHotbar(p: PlayerHotbarPacket, dir: PacketEvent.Direction) {
+        // Gerçek cihaz hotbar tuşuyla (1-9) slot değiştirdiğinde item değişmiyorsa
+        // MobEquipmentPacket DEĞİL, bu paket gönderiliyor. Bu dinlenmezse selfHotbarSlot
+        // bayatlaşıyor ve KillAura/CrystalAura yanlış (boş) slotu kullanıp yumruk hasarı verir.
+        if (dir != PacketEvent.Direction.CLIENT_TO_SERVER) return
+        if (!p.selectHotbarSlot) return
+        if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
+            selfHotbarSlot = p.selectedHotbarSlot
         }
     }
 
