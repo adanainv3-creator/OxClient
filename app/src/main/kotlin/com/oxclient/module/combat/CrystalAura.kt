@@ -353,8 +353,11 @@ class CrystalAura : BaseModule(
 
         if (hasData) {
             // Chunk verisi var: obsidian/bedrock yüzey ara
+            var sawAnyResolvedBlock = false
             for (by in (ty - 3)..(ty + 2)) {
-                val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue
+                val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz)
+                if (here != null) sawAnyResolvedBlock = true
+                if (here == null) continue
                 if (here != "minecraft:obsidian" && here != "minecraft:bedrock") continue
 
                 val above  = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)
@@ -365,6 +368,14 @@ class CrystalAura : BaseModule(
                 if (!clear1 || !clear2) continue
 
                 return SurfaceHit(by, here)
+            }
+
+            // Güvenlik ağı: bu sütunda TEK bir blok bile resolve edilemediyse
+            // (registry uyuşmazlığı / decode sorunu), gerçek veriye güvenme —
+            // naive fallback'e düş. Böylece registry sorunları modülü
+            // tamamen durdurmaz, sadece "yerleştirmesin" yerine "yine dener" olur.
+            if (!sawAnyResolvedBlock) {
+                return SurfaceHit(ty - 1, "minecraft:obsidian")
             }
             return null
         } else {

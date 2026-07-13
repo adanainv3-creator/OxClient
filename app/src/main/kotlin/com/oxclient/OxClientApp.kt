@@ -15,6 +15,7 @@ import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.CrystalAura
 import com.oxclient.module.combat.KillAura
 import com.oxclient.module.misc.ChatSpammer
+import com.oxclient.module.misc.Disconnect
 import com.oxclient.module.movement.AntiKnockback
 import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.MotionFly
@@ -79,7 +80,8 @@ class OxClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
-            ChatSpammer()
+            ChatSpammer(),
+            Disconnect()
         )
     }
 }

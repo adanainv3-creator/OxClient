@@ -300,15 +300,36 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     private fun resolveIdentifier(runtimeId: Int): String? {
         identifierCache[runtimeId]?.let { return it }
         val session = PacketEventBus.currentSession ?: return null
-        val identifier = runCatching {
-            when (val def = session.clientSession.peer.codecHelper.blockDefinitions?.getDefinition(runtimeId)) {
-                is org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition -> def.identifier
-                is com.oxclient.core.relay.Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
-                else -> null
-            }
-        }.getOrElse { null } ?: return null
-        identifierCache[runtimeId] = identifier
-        return identifier
+
+        fun extract(def: Any?): String? = when (def) {
+            is org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition -> def.identifier
+            is com.oxclient.core.relay.Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
+            else -> null
+        }
+
+        // Birincil kaynak: aktif session'ın kendi registry'si
+        val primary = runCatching {
+            extract(session.clientSession.peer.codecHelper.blockDefinitions?.getDefinition(runtimeId))
+        }.getOrNull()
+
+        if (primary != null) {
+            identifierCache[runtimeId] = primary
+            return primary
+        }
+
+        // Fallback: CrystalAura.getBlockDefinition() ile aynı mantık —
+        // session registry'si boş/uyumsuzsa en yakın protokol tanımına düş
+        val fallback = runCatching {
+            extract(
+                com.oxclient.core.relay.Definitions
+                    .getClosestDefinitions(session.activeCodec.protocolVersion)
+                    .blockDefinitions
+                    ?.getDefinition(runtimeId)
+            )
+        }.getOrNull() ?: return null
+
+        identifierCache[runtimeId] = fallback
+        return fallback
     }
 
     private fun sectionKey(cx: Int, sy: Int, cz: Int): Long {
