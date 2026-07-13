@@ -16,6 +16,7 @@ import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
 import org.cloudburstmc.protocol.bedrock.packet.*
@@ -34,6 +35,7 @@ class CrystalAura : BaseModule(
     private val placeRange      = float("Place Range",    4.5f, 2f,   8f)
     private val breakRange      = float("Break Range",    6f,   3f,  10f)
     private val suicide         = bool ("Suicide",        false)
+    private val minSelfDistance = float("Min Self Distance", 3f, 0f, 5f)
     private val place           = bool ("Place",          true)
     private val breakCrystals   = bool ("Break",          true)
     private val placeDelay      = int  ("Place Delay",    100,  20,  500)
@@ -41,26 +43,67 @@ class CrystalAura : BaseModule(
     private val removeParticles = bool ("RemoveParticles",true)
     private val placeMode       = enum ("Place Mode",     Mode.Single)
     private val breakMode       = enum ("Break Mode",     Mode.Single)
+    private val noSwitch        = bool ("No Switch",      false)
+    private val autoObby        = bool ("Auto Obby",      false)
+    private val autoObbyDelay   = int  ("Auto Obby Delay", 200, 50, 1000)
+    private val multiTarget     = bool ("Multi Target",   false)
+    private val smartBreakRange = bool ("Smart Break Range", false)
+    private val smartBreakBoost = float("Smart Break Boost", 2f, 0f, 5f)
+    private val autoReplace     = bool ("Auto Re-Place",  false)
 
     private val activeCrystals  = ConcurrentHashMap<Long, Vector3f>()
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
     // Biz koyduğumuz pozisyonlar → AddEntityPacket gelince temizlenir
     private val pendingPositions = ConcurrentHashMap<Long, Long>()
+    // Bu pozisyona hangi block id ile kristal koyduğumuzu tutar (Auto Re-Place için)
+    private val placedBlockIds = ConcurrentHashMap<Long, String>()
 
-    @Volatile private var lastPlaceMs = 0L
-    @Volatile private var lastBreakMs = 0L
+    // Multi Target'ta her hedefin kendi cooldown'u olsun diye runtimeId bazlı map
+    private val lastPlaceMsMap = ConcurrentHashMap<Long, Long>()
+    private val lastBreakMsMap = ConcurrentHashMap<Long, Long>()
+    @Volatile private var lastObbyMs  = 0L
     private var tickJob: Job? = null
 
     private val blockDefCache = ConcurrentHashMap<String, BlockDefinition>()
 
     private val shortcut = bool("Shortcut", false)
 
+    // Elde tutmadan koyabilmek için: hotbar'ı tarayıp end_crystal olan slotu bulur.
+    // noSwitch kapalıysa sadece o an elde tutulan item'ı kontrol eder (eski davranış).
+    private fun resolveCrystalSlot(): Pair<Int, ItemData>? {
+        if (!noSwitch.value) {
+            val held = EntityTracker.getHeldItem() ?: return null
+            if (held.count <= 0) return null
+            val id = runCatching { held.definition?.identifier }.getOrNull()
+            if (id != "minecraft:end_crystal") return null
+            return EntityTracker.selfHotbarSlot to held
+        }
+
+        // Önce mevcut elde tutulan slotu dene (gereksiz slot bilgisi göndermemek için)
+        EntityTracker.getHeldItem()?.let { held ->
+            val id = runCatching { held.definition?.identifier }.getOrNull()
+            if (id == "minecraft:end_crystal" && held.count > 0) {
+                return EntityTracker.selfHotbarSlot to held
+            }
+        }
+
+        // Elde yoksa hotbar'ın tamamını tara (0..8)
+        for (slot in 0..8) {
+            val item = EntityTracker.getInventoryItem(slot) ?: continue
+            if (item.count <= 0) continue
+            val id = runCatching { item.definition?.identifier }.getOrNull()
+            if (id == "minecraft:end_crystal") return slot to item
+        }
+        return null
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onEnable() {
         super.onEnable()
         activeCrystals.clear(); uniqueToRuntime.clear(); pendingPositions.clear()
-        blockDefCache.clear()
+        blockDefCache.clear(); placedBlockIds.clear()
+        lastPlaceMsMap.clear(); lastBreakMsMap.clear()
         tickJob = scope.launch { tickLoop() }
     }
 
@@ -68,6 +111,7 @@ class CrystalAura : BaseModule(
         tickJob?.cancel()
         super.onDisable()
         activeCrystals.clear(); uniqueToRuntime.clear(); pendingPositions.clear()
+        placedBlockIds.clear(); lastPlaceMsMap.clear(); lastBreakMsMap.clear()
     }
 
     // ── Packet handling ───────────────────────────────────────────────────────
@@ -90,7 +134,19 @@ class CrystalAura : BaseModule(
             }
             is RemoveEntityPacket -> {
                 val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
-                if (rid != null) activeCrystals.remove(rid)
+                if (rid != null) {
+                    val pos = activeCrystals.remove(rid)
+                    if (autoReplace.value && place.value && pos != null) {
+                        val bx = floor(pos.x - 0.5f).toInt()
+                        val by = floor(pos.y - 1f).toInt()
+                        val bz = floor(pos.z - 0.5f).toInt()
+                        val key = posKey(bx, by, bz)
+                        val blockId = placedBlockIds[key] ?: "minecraft:obsidian"
+                        // Eski bookkeeping'i temizle, hemen aynı yere tekrar koymayı dene
+                        pendingPositions.remove(key)
+                        tryPlaceAt(event.session, PlacePos(bx, by, bz, blockId), ignorePending = true)
+                    }
+                }
             }
             is LevelEventPacket -> {
                 if (removeParticles.value) {
@@ -109,8 +165,10 @@ class CrystalAura : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) {
-                val target = selectTarget()
-                if (target != null) {
+                if (autoObby.value) doAutoObby()
+
+                val targets = if (multiTarget.value) selectTargets() else listOfNotNull(selectTarget())
+                for (target in targets) {
                     if (placeMode.value == Mode.Nuke) {
                         doNuke(target)
                     } else {
@@ -144,129 +202,108 @@ class CrystalAura : BaseModule(
         return closest
     }
 
+    // Multi Target: menzildeki TÜM oyuncuları yakınlık sırasına göre döner
+    private fun selectTargets(): List<EntityTracker.TrackedEntity> {
+        val rangeSq = range.value * range.value
+        return EntityTracker.getAll()
+            .asSequence()
+            .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
+            .filter { e ->
+                val dx = e.x - EntityTracker.selfX
+                val dy = e.y - EntityTracker.selfY
+                val dz = e.z - EntityTracker.selfZ
+                dx*dx + dy*dy + dz*dz <= rangeSq
+            }
+            .sortedBy { e ->
+                val dx = e.x - EntityTracker.selfX
+                val dy = e.y - EntityTracker.selfY
+                val dz = e.z - EntityTracker.selfZ
+                dx*dx + dy*dy + dz*dz
+            }
+            .toList()
+    }
+
     // ── Place ─────────────────────────────────────────────────────────────────
 
     private fun doPlace(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
-        if (now - lastPlaceMs < placeDelay.value) return
+        val last = lastPlaceMsMap[target.runtimeId] ?: 0L
+        if (now - last < placeDelay.value) return
 
         val session  = PacketEventBus.currentSession ?: return
-        val heldItem = EntityTracker.getHeldItem() ?: return
-        if (heldItem.count <= 0) return
-        val itemId   = runCatching { heldItem.definition?.identifier }.getOrNull() ?: return
-        if (itemId != "minecraft:end_crystal") return
+        if (resolveCrystalSlot() == null) return
 
         val positions = getPlacePositions(target)
         if (positions.isEmpty()) return
 
-        lastPlaceMs = now
+        lastPlaceMsMap[target.runtimeId] = now
 
-        for (pos in positions) {
-            val key = posKey(pos.x, pos.y, pos.z)
+        for (pos in positions) tryPlaceAt(session, pos)
+    }
 
-            // Daha önce koyduğumuz pending var mı?
+    // Tek bir pozisyona kristal koymayı dener. Auto Re-Place ve doPlace/doNuke
+    // arasında ortak kullanılır.
+    private fun tryPlaceAt(session: OxRelaySession, pos: PlacePos, ignorePending: Boolean = false): Boolean {
+        val now = System.currentTimeMillis()
+        val key = posKey(pos.x, pos.y, pos.z)
+
+        if (!ignorePending) {
             val pendingTime = pendingPositions[key]
             if (pendingTime != null) {
-                // 3 saniye geçtiyse sunucu reddetti, tekrar dene
-                if (now - pendingTime < 3000L) continue
+                if (now - pendingTime < 3000L) return false
                 else pendingPositions.remove(key)
             }
-
-            // Zaten aktif kristal var mı?
-            if (crystalExistsAt(pos.x, pos.y, pos.z)) continue
-
-            val centerX = pos.x + 0.5f
-            val centerY = pos.y + 1.0f
-            val centerZ = pos.z + 0.5f
-
-            // Bize uzaklık kontrolü
-            val distSelf = MathUtil.dist3(
-                centerX, centerY, centerZ,
-                EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ
-            )
-            if (distSelf > placeRange.value) continue
-
-            // Suicide kontrolü
-            if (!suicide.value && distSelf < 3f) continue
-
-            // Yüzeyde bulunan gerçek bloğun (obsidian/bedrock) definition'ı
-            val blockDef = getBlockDefinition(session, pos.blockId) ?: continue
-
-            try {
-                session.serverBound(InventoryTransactionPacket().apply {
-                    transactionType          = InventoryTransactionType.ITEM_USE
-                    actionType               = 0
-                    blockPosition            = Vector3i.from(pos.x, pos.y, pos.z)
-                    blockFace                = 1
-                    hotbarSlot               = EntityTracker.selfHotbarSlot
-                    itemInHand               = heldItem
-                    playerPosition           = Vector3f.from(
-                        EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                    clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
-                    blockDefinition          = blockDef
-                    triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                    clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                    clientCooldownState      = 0
-                })
-                pendingPositions[key] = now
-            } catch (_: Exception) {}
         }
+
+        if (crystalExistsAt(pos.x, pos.y, pos.z)) return false
+
+        val centerX = pos.x + 0.5f
+        val centerY = pos.y + 1.0f
+        val centerZ = pos.z + 0.5f
+
+        val distSelf = MathUtil.dist3(
+            centerX, centerY, centerZ,
+            EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ
+        )
+        if (distSelf > placeRange.value) return false
+        if (!suicide.value && distSelf < minSelfDistance.value) return false
+
+        val (crystalSlot, heldItem) = resolveCrystalSlot() ?: return false
+        val blockDef = getBlockDefinition(session, pos.blockId) ?: return false
+
+        return try {
+            session.serverBound(InventoryTransactionPacket().apply {
+                transactionType          = InventoryTransactionType.ITEM_USE
+                actionType               = 0
+                blockPosition            = Vector3i.from(pos.x, pos.y, pos.z)
+                blockFace                = 1
+                hotbarSlot               = crystalSlot
+                itemInHand               = heldItem
+                playerPosition           = Vector3f.from(
+                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
+                blockDefinition          = blockDef
+                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                clientCooldownState      = 0
+            })
+            pendingPositions[key] = now
+            placedBlockIds[key] = pos.blockId
+            true
+        } catch (_: Exception) { false }
     }
 
     // ── Nuke (delay'siz, koyabildiği her yer) ──────────────────────────────────
 
     private fun doNuke(target: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
-        val now = System.currentTimeMillis()
 
-        if (place.value) {
-            val heldItem = EntityTracker.getHeldItem()
-            val itemId   = runCatching { heldItem?.definition?.identifier }.getOrNull()
-            if (heldItem != null && heldItem.count > 0 && itemId == "minecraft:end_crystal") {
-                for (pos in getNukePositions(target)) {
-                    val key = posKey(pos.x, pos.y, pos.z)
-
-                    val pendingTime = pendingPositions[key]
-                    if (pendingTime != null && now - pendingTime < 3000L) continue
-                    if (crystalExistsAt(pos.x, pos.y, pos.z)) continue
-
-                    val centerX = pos.x + 0.5f
-                    val centerY = pos.y + 1.0f
-                    val centerZ = pos.z + 0.5f
-
-                    val distSelf = MathUtil.dist3(
-                        centerX, centerY, centerZ,
-                        EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ
-                    )
-                    if (distSelf > placeRange.value) continue
-                    if (!suicide.value && distSelf < 3f) continue
-
-                    val blockDef = getBlockDefinition(session, pos.blockId) ?: continue
-
-                    try {
-                        session.serverBound(InventoryTransactionPacket().apply {
-                            transactionType          = InventoryTransactionType.ITEM_USE
-                            actionType               = 0
-                            blockPosition            = Vector3i.from(pos.x, pos.y, pos.z)
-                            blockFace                = 1
-                            hotbarSlot               = EntityTracker.selfHotbarSlot
-                            itemInHand               = heldItem
-                            playerPosition           = Vector3f.from(
-                                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                            clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
-                            blockDefinition          = blockDef
-                            triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                            clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                            clientCooldownState      = 0
-                        })
-                        pendingPositions[key] = now
-                    } catch (_: Exception) {}
-                }
-            }
+        if (place.value && resolveCrystalSlot() != null) {
+            for (pos in getNukePositions(target)) tryPlaceAt(session, pos)
         }
 
         if (breakCrystals.value) {
-            val bRangeSq = breakRange.value * breakRange.value
+            val bRangeSq = effectiveBreakRange(target).let { it * it }
             val inRange = activeCrystals.entries.filter { (_, pos) ->
                 val dx = pos.x - target.x; val dy = pos.y - target.y; val dz = pos.z - target.z
                 dx*dx + dy*dy + dz*dz <= bRangeSq
@@ -389,10 +426,11 @@ class CrystalAura : BaseModule(
 
     private fun doBreak(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
-        if (now - lastBreakMs < breakDelay.value) return
+        val last = lastBreakMsMap[target.runtimeId] ?: 0L
+        if (now - last < breakDelay.value) return
 
         val session = PacketEventBus.currentSession ?: return
-        val bRangeSq = breakRange.value * breakRange.value
+        val bRangeSq = effectiveBreakRange(target).let { it * it }
 
         val inRange = activeCrystals.entries.filter { (_, pos) ->
             val dx = pos.x - target.x
@@ -402,7 +440,7 @@ class CrystalAura : BaseModule(
         }
         if (inRange.isEmpty()) return
 
-        lastBreakMs = now
+        lastBreakMsMap[target.runtimeId] = now
 
         when (breakMode.value) {
             Mode.Single -> {
@@ -424,11 +462,93 @@ class CrystalAura : BaseModule(
         }
     }
 
+    // Smart Break Range: hedefin canı düştükçe kırma menzilini genişletir,
+    // böylece kaçmaya çalışan düşük canlı bir rakibi bitirmek daha kolay olur.
+    // Not: TrackedEntity'de maxHealth alanı yoksa vanilla varsayılan 20f kullanılıyor;
+    // gerçek maxHealth alanın varsa haber ver, ona göre değiştiririm.
+    private fun effectiveBreakRange(target: EntityTracker.TrackedEntity): Float {
+        if (!smartBreakRange.value) return breakRange.value
+        val assumedMaxHealth = 20f
+        val healthFraction = (target.health / assumedMaxHealth).coerceIn(0f, 1f)
+        return breakRange.value + (1f - healthFraction) * smartBreakBoost.value
+    }
+
     private fun attackCrystal(rid: Long, session: OxRelaySession) {
         val pos = activeCrystals[rid] ?: return
         val r = RotationUtil.toPoint(pos.x, pos.y, pos.z)
         PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
         PacketUtil.sendSwingAndAttack(session, rid)
+    }
+
+    // ── Auto Obby (savunma) ───────────────────────────────────────────────────
+
+    private fun resolveObsidianSlot(): Pair<Int, ItemData>? {
+        EntityTracker.getHeldItem()?.let { held ->
+            val id = runCatching { held.definition?.identifier }.getOrNull()
+            if (id == "minecraft:obsidian" && held.count > 0) {
+                return EntityTracker.selfHotbarSlot to held
+            }
+        }
+        for (slot in 0..8) {
+            val item = EntityTracker.getInventoryItem(slot) ?: continue
+            if (item.count <= 0) continue
+            val id = runCatching { item.definition?.identifier }.getOrNull()
+            if (id == "minecraft:obsidian") return slot to item
+        }
+        return null
+    }
+
+    // Ayak seviyesinde kendi etrafına (4 yön: +x,-x,+z,-z) obsidian koyar.
+    // Kristal patlamasının yatay knockback/hasarını kesmek için.
+    private fun doAutoObby() {
+        val now = System.currentTimeMillis()
+        if (now - lastObbyMs < autoObbyDelay.value) return
+
+        val session = PacketEventBus.currentSession ?: return
+        val (slot, item) = resolveObsidianSlot() ?: return
+
+        val fx = floor(EntityTracker.selfX).toInt()
+        val fy = floor(EntityTracker.selfY).toInt()
+        val fz = floor(EntityTracker.selfZ).toInt()
+        val hasData = WorldBlockTracker.hasAnyTerrainData()
+
+        lastObbyMs = now
+
+        for ((dx, dz) in listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)) {
+            val tx = fx + dx
+            val tz = fz + dz
+            val ty = fy          // koyulacak boşluk: ayak seviyesi
+            val supportY = ty - 1 // basacağı zemin
+
+            // Hedef pozisyon zaten dolu mu?
+            val existing = if (hasData) WorldBlockTracker.getBlockIdentifier(tx, ty, tz) else null
+            if (existing != null && existing != "minecraft:air") continue
+
+            // Destek (zemin) bloğu — veri yoksa kendi ayağının altındaki gibi zemin varsay
+            val supportId = (if (hasData) WorldBlockTracker.getBlockIdentifier(tx, supportY, tz) else null)
+                ?: "minecraft:obsidian"
+            if (supportId == "minecraft:air") continue
+
+            val blockDef = getBlockDefinition(session, supportId) ?: continue
+
+            try {
+                session.serverBound(InventoryTransactionPacket().apply {
+                    transactionType          = InventoryTransactionType.ITEM_USE
+                    actionType               = 0
+                    blockPosition            = Vector3i.from(tx, supportY, tz)
+                    blockFace                = 1
+                    hotbarSlot               = slot
+                    itemInHand               = item
+                    playerPosition           = Vector3f.from(
+                        EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                    clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
+                    blockDefinition          = blockDef
+                    triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                    clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                    clientCooldownState      = 0
+                })
+            } catch (_: Exception) {}
+        }
     }
 
     // ── Block definition ──────────────────────────────────────────────────────

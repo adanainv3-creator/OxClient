@@ -43,30 +43,22 @@ class ChatSpammer : BaseModule(
             }
 
             is EntityEventPacket -> {
-                android.util.Log.d("ChatSpammer", "EEP recv rid=${p.runtimeEntityId} type=${p.type} dir=${event.direction}")
-
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
-                android.util.Log.d("ChatSpammer", "EEP typeStr=$typeStr")
                 if (!typeStr.contains("TOTEM")) return
 
                 val entity = EntityTracker.getById(p.runtimeEntityId)
                 val name  = entity?.name?.takeIf { it.isNotEmpty() } ?: "unknown"
                 val count = (popCounts[name] ?: 0) + 1
                 popCounts[name] = count
-                android.util.Log.d("ChatSpammer", "EEP totem match name=$name count=$count entityFound=${entity != null}")
 
-                val session = PacketEventBus.currentSession
-                if (session == null || !session.isServerReady) {
-                    android.util.Log.d("ChatSpammer", "EEP session null=${session == null} ready=${session?.isServerReady}")
-                    return
-                }
+                val session = event.session
+                if (!session.isServerReady) return
 
                 val message = "> @$name Popped $count Totem $PVP_TAIL | ${randomJunk()}"
                 session.sendToServer(buildTextPacket(message))
-                android.util.Log.d("ChatSpammer", "EEP sent: $message")
             }
         }
     }
