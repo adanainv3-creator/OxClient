@@ -4,6 +4,7 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.module.social.isFriendEntity
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -38,6 +39,7 @@ class KillAura : BaseModule(
     private val headLockSmooth  = float("Head Lock Smooth", 0.9f, 0.01f, 1f)
     private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)
     private val predictDelay    = float("Predict Delay",    0.1f, 0.05f, 0.5f)
+    private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
 
     @Volatile private var currentTargetId    = 0L
@@ -164,12 +166,14 @@ class KillAura : BaseModule(
     private fun findHeadLockTarget(): EntityTracker.TrackedEntity? {
         val candidates = EntityTracker.getEntitiesInRange(range.value * 1.5f)
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
+            .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
         return selectTarget(candidates)
     }
 
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
         return EntityTracker.getEntitiesInRange(range.value)
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
+            .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
             .toMutableList()
     }
 

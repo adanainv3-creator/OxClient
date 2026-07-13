@@ -8,6 +8,7 @@ import com.oxclient.config.Config
 import com.oxclient.config.ServerConfig
 import com.oxclient.core.relay.Definitions
 import com.oxclient.module.ModuleManager
+import com.oxclient.module.social.FriendManager
 import com.oxclient.module.combat.AutoArmor
 import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
@@ -43,6 +44,7 @@ class OxClientApp : Application() {
         Config.init(applicationContext)
         AccountManager.init(applicationContext)
         MicrosoftAuthManager.init(applicationContext)
+        FriendManager.init(applicationContext)
 
         Thread({
             try {

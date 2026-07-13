@@ -46,6 +46,7 @@ import com.oxclient.config.Config
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.module.social.FriendManager
 import com.oxclient.session.SessionManager
 import com.oxclient.ui.theme.*
 import com.oxclient.utils.InventoryUtil
@@ -508,7 +509,7 @@ private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, o
 // ── Menü sekmeleri (modül kategorileri + Config) ──────────────────────────────
 
 private enum class MenuSection(val displayName: String) {
-    COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), CONFIG("Config")
+    COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), FRIENDS("Friends"), CONFIG("Config")
 }
 
 private fun MenuSection.toModuleCategory(): ModuleCategory? = when (this) {
@@ -516,6 +517,7 @@ private fun MenuSection.toModuleCategory(): ModuleCategory? = when (this) {
     MenuSection.MOVEMENT -> ModuleCategory.MOVEMENT
     MenuSection.VISUAL   -> ModuleCategory.VISUAL
     MenuSection.MISC     -> ModuleCategory.MISC
+    MenuSection.FRIENDS  -> null
     MenuSection.CONFIG   -> null
 }
 
@@ -622,6 +624,8 @@ private fun HileMenu(
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 if (section == MenuSection.CONFIG) {
                     ConfigSection()
+                } else if (section == MenuSection.FRIENDS) {
+                    FriendsSection()
                 } else {
                     LazyColumn(
                         modifier = Modifier
@@ -745,6 +749,122 @@ private fun ConfigProfileRow(
             TextButton(onClick = onDelete, colors = ButtonDefaults.textButtonColors(contentColor = OxError)) {
                 Text("Del", fontSize = 11.sp)
             }
+        }
+    }
+}
+
+// ── Friends sekmesi (isme göre ekle/çıkar, kill/tp aura'yı etkiler) ────────────
+
+@Composable
+private fun FriendsSection() {
+    var newName by remember { mutableStateOf("") }
+    var friends by remember { mutableStateOf(FriendManager.getAll()) }
+
+    fun refresh() { friends = FriendManager.getAll() }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                singleLine = true,
+                placeholder = { Text("Oyuncu adı", fontSize = 11.sp, color = OxOnSurfaceDim) },
+                modifier = Modifier.weight(1f),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = OxOnSurface),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor   = OxAccent,
+                    unfocusedBorderColor = OxOutline
+                )
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(OxAccent)
+                    .clickable {
+                        val trimmed = newName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            FriendManager.addFriend(trimmed)
+                            newName = ""
+                            refresh()
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Text("Ekle", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "${friends.size} arkadaş • KillAura ve TPAura hedef almaz",
+                fontSize = 10.sp,
+                color = OxOnSurfaceDim
+            )
+            if (friends.isNotEmpty()) {
+                TextButton(
+                    onClick = { FriendManager.clear(); refresh() },
+                    colors = ButtonDefaults.textButtonColors(contentColor = OxError)
+                ) {
+                    Text("Tümünü sil", fontSize = 11.sp)
+                }
+            }
+        }
+
+        HorizontalDivider(color = OxOutlineStrong)
+
+        if (friends.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("Henüz arkadaş eklenmedi.", fontSize = 12.sp, color = OxOnSurfaceDim)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(friends) { name ->
+                    FriendRow(
+                        name     = name,
+                        onRemove = { FriendManager.removeFriend(name); refresh() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FriendRow(name: String, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(OxSurface)
+            .border(1.dp, OxOutline, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            name,
+            fontSize = 13.sp,
+            color = OxOnBackground,
+            fontWeight = FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = OxError)) {
+            Text("Sil", fontSize = 11.sp)
         }
     }
 }

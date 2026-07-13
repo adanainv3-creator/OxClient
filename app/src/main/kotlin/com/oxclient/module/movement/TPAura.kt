@@ -5,6 +5,7 @@ import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
+import com.oxclient.module.social.isFriendEntity
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
@@ -31,6 +32,7 @@ class TPAura : BaseModule(
     private val strafeSpeed      = float("Strafe Speed",      1.5f, 0.1f, 50f)
     private val yOffset          = float("Y Offset",          0.8f, -2f,  2f)
     private val rotateToTarget   = bool ("Rotate To Target",  true)
+    private val ignoreFriends    = bool ("Ignore Friends",    true)
     private val shortcut         = bool ("Shortcut",          false)
 
     private var strafeAngle = 0.0
@@ -72,6 +74,7 @@ class TPAura : BaseModule(
     private fun findTarget(): EntityTracker.TrackedEntity? {
         val candidates = EntityTracker.getEntitiesInRange(detectRange.value)
             .filter { it.runtimeId != EntityTracker.selfRuntimeId && it.isPlayer }
+            .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
 
         val target = candidates.minByOrNull { EntityTracker.distanceTo(it) }
         if (target != null && target.runtimeId != lastTargetId) {
