@@ -484,7 +484,7 @@ class CrystalAura : BaseModule(
                     activeCrystals.remove(rid)
                 }
             }
-            Mode.Full5x5, Mode.Nuke -> {
+            Mode.Full5x5, Mode.Square5, Mode.Nuke -> {
                 for ((rid, _) in inRange) {
                     attackCrystal(rid, session)
                     activeCrystals.remove(rid)
