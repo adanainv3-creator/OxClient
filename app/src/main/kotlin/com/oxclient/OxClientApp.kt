@@ -14,6 +14,7 @@ import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.CrystalAura
 import com.oxclient.module.combat.KillAura
+import com.oxclient.module.combat.KillAuraPro
 import com.oxclient.module.misc.ChatSpammer
 import com.oxclient.module.misc.Disconnect
 import com.oxclient.module.movement.AntiKnockback
@@ -65,6 +66,7 @@ class OxClientApp : Application() {
     private fun registerModules() {
         ModuleManager.registerAll(
             KillAura(),
+            KillAuraPro(),
             CrystalAura(),
             AutoTotem(),
             Criticals(),

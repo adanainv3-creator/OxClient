@@ -29,7 +29,7 @@ class CrystalAura : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "Rakip oyuncunun etrafına otomatik kristal yerleştirir ve patlatır"
 ) {
-    enum class Mode { Single, Full5x5, Nuke }
+    enum class Mode { Single, Full5x5, Square5, Nuke }
 
     private val range           = float("Range",          5f,   3f,  10f)
     private val placeRange      = float("Place Range",    4.5f, 2f,   8f)
@@ -50,6 +50,11 @@ class CrystalAura : BaseModule(
     private val smartBreakRange = bool ("Smart Break Range", false)
     private val smartBreakBoost = float("Smart Break Boost", 2f, 0f, 5f)
     private val autoReplace     = bool ("Auto Re-Place",  false)
+    // Bir pozisyona koyma denemesi sunucudan onay (AddEntityPacket) almazsa
+    // ne kadar süre sonra aynı yere tekrar denesin. Eskiden sabit 3000ms'ydi;
+    // bu yüzden ilk deneme reddedilince 3sn boyunca "yerleşmiyormuş" gibi
+    // görünüyordu. Artık ayarlanabilir, düşürerek gecikmeyi azaltabilirsin.
+    private val placeRetryMs    = int  ("Place Retry Ms", 400,  100, 3000)
 
     private val activeCrystals  = ConcurrentHashMap<Long, Vector3f>()
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
@@ -250,7 +255,7 @@ class CrystalAura : BaseModule(
         if (!ignorePending) {
             val pendingTime = pendingPositions[key]
             if (pendingTime != null) {
-                if (now - pendingTime < 3000L) return false
+                if (now - pendingTime < placeRetryMs.value) return false
                 else pendingPositions.remove(key)
             }
         }
@@ -349,6 +354,8 @@ class CrystalAura : BaseModule(
     // ── Place position search ─────────────────────────────────────────────────
 
     private fun getPlacePositions(target: EntityTracker.TrackedEntity): List<PlacePos> {
+        if (placeMode.value == Mode.Square5) return getSquare5Positions(target)
+
         val result = mutableListOf<PlacePos>()
         val tx = floor(target.x).toInt()
         val ty = floor(target.y).toInt()
@@ -369,6 +376,30 @@ class CrystalAura : BaseModule(
                 )
                 if (distToTarget > 5f) continue
 
+                result.add(PlacePos(bx, hit.y, bz, hit.blockId))
+            }
+        }
+        return result
+    }
+
+    // Square5 modu: rakibin önü/arkası/sağı/solu — 5 blok mesafede kare bir
+    // çerçeve (perimeter) oluşturacak şekilde kristal koyar. Full5x5'in aksine
+    // içi dolu değil, sadece |dx|==5 veya |dz|==5 olan dış hat.
+    private fun getSquare5Positions(target: EntityTracker.TrackedEntity): List<PlacePos> {
+        val result = mutableListOf<PlacePos>()
+        val tx = floor(target.x).toInt()
+        val ty = floor(target.y).toInt()
+        val tz = floor(target.z).toInt()
+        val r = 5
+
+        for (dx in -r..r) {
+            for (dz in -r..r) {
+                // Sadece karenin dış çizgisi: en az bir eksende tam 5 blok uzakta olmalı
+                if (kotlin.math.abs(dx) != r && kotlin.math.abs(dz) != r) continue
+
+                val bx = tx + dx
+                val bz = tz + dz
+                val hit = findSurface(bx, ty, bz) ?: continue
                 result.add(PlacePos(bx, hit.y, bz, hit.blockId))
             }
         }
@@ -508,7 +539,10 @@ class CrystalAura : BaseModule(
         val (slot, item) = resolveObsidianSlot() ?: return
 
         val fx = floor(EntityTracker.selfX).toInt()
-        val fy = floor(EntityTracker.selfY).toInt()
+        // Düzeltme: floor(selfY) burada gerçek ayak bloğundan 1 fazla çıkıyordu,
+        // bu yüzden obsidian hep 1 blok yukarıya konuyordu. 1 çıkararak
+        // gerçek ayak seviyesine hizalıyoruz.
+        val fy = floor(EntityTracker.selfY).toInt() - 1
         val fz = floor(EntityTracker.selfZ).toInt()
         val hasData = WorldBlockTracker.hasAnyTerrainData()
 

@@ -107,7 +107,7 @@ class TPAura : BaseModule(
         val rot = if (rotateToTarget.value) RotationUtil.toEntity(target) else null
 
         try {
-            session.clientBound(MovePlayerPacket().apply {
+            val movePacket = MovePlayerPacket().apply {
                 runtimeEntityId       = EntityTracker.selfRuntimeId
                 position              = newPos
                 rotation              = if (rot != null) Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
@@ -115,7 +115,15 @@ class TPAura : BaseModule(
                 mode                  = MovePlayerPacket.Mode.NORMAL
                 isOnGround            = true
                 ridingRuntimeEntityId = 0L
-            })
+            }
+
+            // KRİTİK FIX: eskiden sadece clientBound gönderiliyordu, yani bu pozisyon
+            // SADECE senin ekranına yansıyordu — sunucu senin hâlâ eski yerde olduğunu
+            // sanıyordu. Bu yüzden saldırı paketleri sunucu tarafında mesafe kontrolüne
+            // takılıp reddediliyordu ve hiç hasar geçmiyordu. Artık serverBound da
+            // gönderiyoruz ki sunucu gerçekten yakınında olduğunu bilsin.
+            session.serverBound(movePacket)
+            session.clientBound(movePacket)
 
 
             EntityTracker.selfX = newPos.x

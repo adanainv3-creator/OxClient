@@ -23,22 +23,22 @@ class KillAura : BaseModule(
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
     enum class CritMode     { Vanilla, MovePacket, Jump }
 
-    private val cpsMin          = int  ("CPS Min",          12,   1,  30)
-    private val cpsMax          = int  ("CPS Max",          16,   1,  30)
-    private val range           = float("Range",            6.5f, 1f,  10f)
+    private val cpsMin          = int  ("CPS Min",          10,   1,  30)
+    private val cpsMax          = int  ("CPS Max",          13,   1,  30)
+    private val range           = float("Range",            5.2f, 1f,  10f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
     private val maxTargets      = int  ("Max Targets",      5,    1,  10)
-    private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
-    private val rotationMode    = enum ("Rotation Mode",    RotationMode.None)
+    private val attackMode      = enum ("Attack Mode",      AttackMode.Switch)
+    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
-    private val headLockSmooth  = float("Head Lock Smooth", 0.9f, 0.01f, 1f)
-    private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)
-    private val predictDelay    = float("Predict Delay",    0.1f, 0.05f, 0.5f)
+    private val headLockSmooth  = float("Head Lock Smooth", 0.65f, 0.01f, 1f)
+    private val critMode        = enum ("Crit Mode",        CritMode.Vanilla)
+    private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
 
@@ -73,8 +73,8 @@ class KillAura : BaseModule(
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled || !headLock.value) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        if (event.packet !is org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) return
-        updateHeadLock()
+        val pkt = event.packet as? org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket ?: return
+        applyHeadLock(pkt)
     }
 
     private suspend fun tickLoop() {
@@ -124,8 +124,7 @@ class KillAura : BaseModule(
         }
     }
 
-    private fun updateHeadLock() {
-        val session = PacketEventBus.currentSession ?: return
+    private fun applyHeadLock(pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) {
         val target = findHeadLockTarget() ?: return
 
         val now = System.currentTimeMillis()
@@ -141,10 +140,16 @@ class KillAura : BaseModule(
         headLockYaw = newYaw
         headLockPitch = newPitch
 
-        try {
-            PacketUtil.sendMoveAtSelf(session, newYaw, newPitch, onGround = true)
-        } catch (e: Exception) {
-        }
+        // ÖNEMLİ FIX: eskiden burada ayrı bir sahte MovePlayerPacket gönderiliyordu.
+        // Ama bu paket, hemen ardından iletilen GERÇEK PlayerAuthInputPacket
+        // (telefonun gerçek baktığın yönüyle) tarafından anında eziliyordu —
+        // yani kilit hiç tutmuyordu. Artık gönderilecek olan GERÇEK paketin
+        // rotasyonunu doğrudan burada değiştiriyoruz, böylece sunucuya giden
+        // tek ve nihai rotasyon zaten kilitli olan rotasyon oluyor.
+        pkt.rotation = Vector3f.from(newPitch, newYaw, newYaw)
+
+        EntityTracker.selfYaw = newYaw
+        EntityTracker.selfPitch = newPitch
     }
 
     private fun smoothYaw(current: Float, target: Float, factor: Float): Float {
@@ -244,18 +249,21 @@ class KillAura : BaseModule(
             when (critMode.value) {
                 CritMode.MovePacket -> {
                     PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
-                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = true)
+                    delay(30L)
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = false)
                 }
                 
                 CritMode.Vanilla -> {
                     listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
-                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = dy == 0f)
+                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
+                        delay(25L)
                     }
                 }
                 
                 CritMode.Jump -> {
                     listOf(0.0625f, 0f, 0.0625f, 0f).forEach { dy ->
-                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = dy == 0f)
+                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
+                        delay(25L)
                     }
                 }
             }
