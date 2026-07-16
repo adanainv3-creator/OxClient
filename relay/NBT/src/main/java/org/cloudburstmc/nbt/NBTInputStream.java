@@ -14,6 +14,14 @@ import static org.cloudburstmc.nbt.NbtUtils.MAX_DEPTH;
 import static org.cloudburstmc.nbt.NbtUtils.MAX_READ_SIZE;
 
 public class NBTInputStream implements Closeable {
+    // GÜVENLİK: maxReadSize bütçe kontrolü array/list boyutları için yetersiz
+    // kalıyordu (bkz. deserialize() içindeki yorumlar) — bu yüzden allocation'dan
+    // ÖNCE kontrol edilen, bağımsız sert üst sınırlar ekliyoruz. Değerler normal
+    // oyun verisi için fazlasıyla cömert, kötü niyetli aşırı büyük değerleri
+    // (örn. Integer.MAX_VALUE) hemen reddediyor.
+    private static final int MAX_ARRAY_SIZE  = 16 * 1024 * 1024; // 16M eleman
+    private static final int MAX_LIST_LENGTH = 1_000_000;
+
     private final DataInput input;
     private final boolean internKeys;
     private final boolean internValues;
@@ -101,6 +109,13 @@ public class NBTInputStream implements Closeable {
                 return input.readDouble();
             case BYTE_ARRAY:
                 int arraySize = input.readInt();
+                // GÜVENLİK FIX: maxReadSize kontrolü burada işe yaramıyor çünkü
+                // "new byte[arraySize]" allocation'ı, bütçe kontrolünden ÖNCE
+                // yapılıyordu. Kötü niyetli arraySize (örn. Integer.MAX_VALUE)
+                // anında dev bir allocation'a / uzun donmaya sebep oluyordu.
+                if (arraySize < 0 || arraySize > MAX_ARRAY_SIZE) {
+                    throw new IOException("NBT byte array too large: " + arraySize);
+                }
                 byte[] bytes = new byte[arraySize];
                 input.readFully(bytes);
                 return bytes;
@@ -128,12 +143,22 @@ public class NBTInputStream implements Closeable {
                 NbtType<?> listType = NbtType.byId(typeId);
                 List<Object> list = new ArrayList<>();
                 int listLength = input.readInt();
+                // GÜVENLİK FIX: listType == END gibi "sıfır byte maliyetli" bir
+                // tip seçilirse, tryRead() hiç tetiklenmediği için maxReadSize
+                // bütçesi bu döngüyü hiç sınırlamıyordu — milyarlarca elemanlı
+                // bir liste CPU'yu/heap'i tüketip client'ı donduruyordu.
+                if (listLength < 0 || listLength > MAX_LIST_LENGTH) {
+                    throw new IOException("NBT list too large: " + listLength);
+                }
                 for (int i = 0; i < listLength; i++) {
                     list.add(deserialize(listType, maxDepth - 1));
                 }
                 return new NbtList(listType, list);
             case INT_ARRAY:
                 arraySize = input.readInt();
+                if (arraySize < 0 || arraySize > MAX_ARRAY_SIZE) {
+                    throw new IOException("NBT int array too large: " + arraySize);
+                }
                 int[] ints = new int[arraySize];
                 for (int i = 0; i < arraySize; i++) {
                     ints[i] = input.readInt();
@@ -141,6 +166,9 @@ public class NBTInputStream implements Closeable {
                 return ints;
             case LONG_ARRAY:
                 arraySize = input.readInt();
+                if (arraySize < 0 || arraySize > MAX_ARRAY_SIZE) {
+                    throw new IOException("NBT long array too large: " + arraySize);
+                }
                 long[] longs = new long[arraySize];
                 for (int i = 0; i < arraySize; i++) {
                     longs[i] = input.readLong();
