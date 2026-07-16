@@ -25,12 +25,22 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
             } else codec
         }
 
-        private val UNLIMITED = EncodingSettings.builder()
-            .maxListSize(Int.MAX_VALUE)
-            .maxByteArraySize(Int.MAX_VALUE)
-            .maxNetworkNBTSize(Int.MAX_VALUE)
-            .maxItemNBTSize(Int.MAX_VALUE)
-            .maxStringLength(Int.MAX_VALUE)
+        // ÖNEMLİ FIX: bu değerler eskiden Int.MAX_VALUE'ydi, yani kütüphanenin
+        // kendi NBT/liste/byte-array boyut koruması pratikte tamamen devre
+        // dışıydı. Bu ayar hem clientSession'a hem de (OxRelaySession.
+        // connectToServer() içinde buradan kopyalandığı için) serverSession'a
+        // uygulanıyor — yani gerçek sunucudan gelen kötü niyetli/aşırı büyük
+        // item NBT'si (başka bir oyuncunun "NBT bomb" saldırısı) hiçbir sınıra
+        // takılmadan okunmaya çalışılıyor, bu da 15-30 saniyelik donmalara
+        // sebep oluyordu. Aşağıdaki değerler normal oyun verisi için
+        // fazlasıyla cömert (hiçbir vanilla item/chunk verisi bu sınırlara
+        // yaklaşmaz) ama kötü niyetli aşırı büyük değerleri hemen reddeder.
+        private val SAFE_LIMITS = EncodingSettings.builder()
+            .maxListSize(1_000_000)
+            .maxByteArraySize(16 * 1024 * 1024)   // 16MB
+            .maxNetworkNBTSize(4 * 1024 * 1024)   // 4MB — chunk/block-entity NBT'si için bolca yeter
+            .maxItemNBTSize(1 * 1024 * 1024)      // 1MB — normal item NBT'si (enchant/lore/custom name) için fazlasıyla cömert
+            .maxStringLength(32768)
             .build()
     }
 
@@ -59,7 +69,7 @@ class AutoCodecListener(private val relay: OxRelay? = null) : OxPacketListener {
                 itemDefinitions         = defs.itemDefinitions
                 blockDefinitions        = defs.blockDefinitions
                 cameraPresetDefinitions = Definitions.cameraPresetDefinitions
-                encodingSettings        = UNLIMITED
+                encodingSettings        = SAFE_LIMITS
             }
 
             session.sendToClient(NetworkSettingsPacket().apply {
