@@ -38,6 +38,7 @@ class CrystalAura : BaseModule(
     private val minSelfDistance = float("Min Self Distance", 3f, 0f, 5f)
     private val place           = bool ("Place",          true)
     private val breakCrystals   = bool ("Break",          true)
+    private val breakAnywhere   = bool ("Break Anywhere", true)
     private val placeDelay      = int  ("Place Delay",    100,  20,  500)
     private val breakDelay      = int  ("Break Delay",    50,   20,  500)
     private val removeParticles = bool ("RemoveParticles",true)
@@ -172,17 +173,48 @@ class CrystalAura : BaseModule(
             if (isEnabled) {
                 if (autoObby.value) doAutoObby()
 
+                // Bağımsız kırma: yakında hedef (rakip) olsun olmasın, kendi
+                // menzinde gördüğün HER kristali kırar — oyuncu tarafından
+                // konulmuş olup olmadığına bakmaz, çünkü activeCrystals zaten
+                // sahibi kim olursa olsun tüm kristal entity'lerini tutuyor.
+                if (breakCrystals.value && breakAnywhere.value) doBreakAnywhere()
+
                 val targets = if (multiTarget.value) selectTargets() else listOfNotNull(selectTarget())
                 for (target in targets) {
                     if (placeMode.value == Mode.Nuke) {
                         doNuke(target)
                     } else {
-                        if (breakCrystals.value) doBreak(target)
+                        if (breakCrystals.value && !breakAnywhere.value) doBreak(target)
                         if (place.value)         doPlace(target)
                     }
                 }
             }
             delay(1L)
+        }
+    }
+
+    // Hedef gerekmeden, sadece kendi pozisyonuna göre menzildeki tüm kristalleri kırar.
+    private fun doBreakAnywhere() {
+        val now = System.currentTimeMillis()
+        val last = lastBreakMsMap[-1L] ?: 0L
+        if (now - last < breakDelay.value) return
+
+        val session = PacketEventBus.currentSession ?: return
+        val bRangeSq = breakRange.value * breakRange.value
+
+        val inRange = activeCrystals.entries.filter { (_, pos) ->
+            val dx = pos.x - EntityTracker.selfX
+            val dy = pos.y - EntityTracker.selfY
+            val dz = pos.z - EntityTracker.selfZ
+            dx*dx + dy*dy + dz*dz <= bRangeSq
+        }
+        if (inRange.isEmpty()) return
+
+        lastBreakMsMap[-1L] = now
+
+        for ((rid, _) in inRange) {
+            attackCrystal(rid, session)
+            activeCrystals.remove(rid)
         }
     }
 

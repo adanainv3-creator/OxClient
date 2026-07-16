@@ -4,6 +4,7 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.utils.PacketUtil
+import com.oxclient.utils.CritLock
 import kotlinx.coroutines.*
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
@@ -47,12 +48,14 @@ class Criticals : BaseModule(
         event.cancel()
 
         scope.launch {
-            when (mode.value) {
-                CritMode.Vanilla    -> injectVanilla(session)
-                CritMode.MovePacket -> injectMovePacket(session)
-                CritMode.Jump       -> injectJump(session)
-                CritMode.TPJump     -> injectTPJump(session)
-                CritMode.Packet     -> injectPacket(session)
+            CritLock.tryRun {
+                when (mode.value) {
+                    CritMode.Vanilla    -> injectVanilla(session)
+                    CritMode.MovePacket -> injectMovePacket(session)
+                    CritMode.Jump       -> injectJump(session)
+                    CritMode.TPJump     -> injectTPJump(session)
+                    CritMode.Packet     -> injectPacket(session)
+                }
             }
             session.serverBound(pkt)
         }

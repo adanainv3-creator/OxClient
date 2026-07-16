@@ -8,6 +8,7 @@ import com.oxclient.module.*
 import com.oxclient.module.social.isFriendEntity
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
+import com.oxclient.utils.CritLock
 import org.cloudburstmc.math.vector.Vector3f
 import kotlinx.coroutines.*
 
@@ -97,7 +98,7 @@ class KillAuraPro : BaseModule(
     }
 
     private suspend fun burstAttack(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
-        if (alwaysCrit.value) injectCritTimed(session)
+        if (alwaysCrit.value) CritLock.tryRun { injectCritTimed(session) }
 
         val predPos = target.predictedPosition(predictDelay.value)
         val clickPos = Vector3f.from(predPos.first, predPos.second + 1.5f, predPos.third)

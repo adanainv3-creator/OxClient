@@ -7,6 +7,7 @@ import com.oxclient.module.*
 import com.oxclient.module.social.isFriendEntity
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
+import com.oxclient.utils.CritLock
 import com.oxclient.utils.RotationUtil
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
@@ -170,6 +171,7 @@ class KillAura : BaseModule(
 
     private fun findHeadLockTarget(): EntityTracker.TrackedEntity? {
         val candidates = EntityTracker.getEntitiesInRange(range.value * 1.5f)
+            .filter { it.isPlayer }
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
         return selectTarget(candidates)
@@ -224,7 +226,7 @@ class KillAura : BaseModule(
         )
         val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.62f, predPos.third)
 
-        injectCrit(session)
+        CritLock.tryRun { injectCrit(session) }
 
         if (rotationMode.value != RotationMode.None) {
             val rot = when (rotationMode.value) {
