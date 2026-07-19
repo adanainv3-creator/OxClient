@@ -1,3 +1,4 @@
+
 package com.oxclient
 
 import android.app.Application
@@ -10,6 +11,7 @@ import com.oxclient.core.relay.Definitions
 import com.oxclient.module.ModuleManager
 import com.oxclient.module.social.FriendManager
 import com.oxclient.module.combat.AutoArmor
+import com.oxclient.module.combat.AntiCrystal
 import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.CrystalAura
@@ -18,8 +20,10 @@ import com.oxclient.module.combat.KillAuraPro
 import com.oxclient.module.misc.ChatSpammer
 import com.oxclient.module.misc.Disconnect
 import com.oxclient.module.movement.AntiKnockback
+import com.oxclient.module.movement.CreativeFly
 import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.MotionFly
+import com.oxclient.module.movement.Speed
 import com.oxclient.module.movement.TPAura
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
@@ -68,9 +72,12 @@ class OxClientApp : Application() {
             KillAura(),
             KillAuraPro(),
             CrystalAura(),
+            AntiCrystal(),
             AutoTotem(),
             Criticals(),
             MotionFly(),
+            CreativeFly(),
+            Speed(),
             Jetpack(),
             TPAura(),
             AntiKnockback(),
