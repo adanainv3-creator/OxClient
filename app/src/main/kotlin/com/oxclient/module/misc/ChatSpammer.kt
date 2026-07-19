@@ -1,4 +1,4 @@
-package com.oxclient.module.misc
+üpackage com.oxclient.module.misc
 
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
@@ -71,6 +71,16 @@ class ChatSpammer : BaseModule(
                 if (!typeStr.contains("TOTEM")) return
 
                 val pos = p.position ?: return
+
+                // Önce bu bizim kendi totemimiz mi diye bak — patlama pozisyonu
+                // bize rakipten daha yakınsa (ya da 3 blok içindeyse) muhtemelen
+                // bizimdir, rakibe atfedip yanlış sayma.
+                val selfDx = EntityTracker.selfX - pos.x
+                val selfDy = EntityTracker.selfY - pos.y
+                val selfDz = EntityTracker.selfZ - pos.z
+                val selfDistSq = selfDx * selfDx + selfDy * selfDy + selfDz * selfDz
+                if (selfDistSq <= 9f) return
+
                 val nearest = EntityTracker.getAll()
                     .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
                     .minByOrNull { e ->
