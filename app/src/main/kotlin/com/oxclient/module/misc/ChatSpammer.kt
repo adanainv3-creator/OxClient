@@ -1,4 +1,4 @@
-üpackage com.oxclient.module.misc
+package com.oxclient.module.misc
 
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEvent
