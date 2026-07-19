@@ -57,6 +57,9 @@ class CreativeFly : BaseModule(
     }
 
     private fun sendAbilities(session: OxRelaySession, enabled: Boolean) {
+        val fs = if (enabled) flySpeed.value else 0.05f
+        val ws = walkSpeed.value
+
         val packet = UpdateAbilitiesPacket().apply {
             playerPermission  = if (enabled) PlayerPermission.OPERATOR else PlayerPermission.VISITOR
             commandPermission = if (enabled) CommandPermission.OWNER  else CommandPermission.ANY
@@ -82,8 +85,8 @@ class CreativeFly : BaseModule(
                 }
                 abilityValues.addAll(values.toTypedArray())
 
-                this.walkSpeed = walkSpeed.value
-                this.flySpeed  = if (enabled) flySpeed.value else 0.05f
+                this.walkSpeed = ws
+                this.flySpeed  = fs
             })
         }
         session.clientBound(packet)
