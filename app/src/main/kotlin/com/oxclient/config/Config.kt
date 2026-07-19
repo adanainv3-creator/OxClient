@@ -203,4 +203,60 @@ object Config {
             } catch (_: Exception) {}
         }
     }
+
+    // ---- Dışa aktarma (indirilebilir dosya) / İçe aktarma (daha önce indirilmiş dosya) ----
+
+    /**
+     * Kayıtlı bir profili, kullanıcının cihaza dosya olarak kaydedebileceği
+     * (paylaşabileceği / yedekleyebileceği) bir JSON string'ine çevirir.
+     */
+    suspend fun exportJson(name: String): String? {
+        return try {
+            val raw = safeCtx().configDataStore.data.map { it[KEY_CONFIGS] }.first()
+            val root = readRoot(raw)
+            val profilesJson = root.optJSONObject("profiles") ?: return null
+            val entry = profilesJson.optJSONObject(name) ?: return null
+            val state = entry.optJSONObject("state") ?: return null
+
+            val export = JSONObject()
+            export.put("oxclientConfig", true)
+            export.put("name", name)
+            export.put("exportedAt", System.currentTimeMillis())
+            export.put("state", state)
+            export.toString(2)
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * Daha önce exportJson ile indirilmiş bir dosyanın içeriğini (veya doğrudan
+     * "modules" içeren ham bir state JSON'unu) yeni bir profil olarak kaydeder.
+     * @return kaydedilen profilin adı, başarısızsa null
+     */
+    suspend fun importJson(json: String, nameOverride: String? = null): String? {
+        return try {
+            val parsed = JSONObject(json)
+            // Hem bizim export formatımızı ("state" içinde) hem de doğrudan
+            // ham state JSON'unu (modules en üst seviyede) kabul et.
+            val state = if (parsed.has("state")) parsed.getJSONObject("state") else parsed
+            if (!state.has("modules")) return null // geçerli bir OxClient config'i değil
+
+            var name = (nameOverride?.trim()?.takeIf { it.isNotEmpty() })
+                ?: parsed.optString("name").trim()
+            if (name.isBlank()) name = "Imported ${System.currentTimeMillis()}"
+
+            safeCtx().configDataStore.edit { prefs ->
+                val root = readRoot(prefs[KEY_CONFIGS])
+                val profilesJson = root.optJSONObject("profiles") ?: JSONObject().also { root.put("profiles", it) }
+
+                val entry = JSONObject()
+                entry.put("savedAt", System.currentTimeMillis())
+                entry.put("state", state)
+                profilesJson.put(name, entry)
+
+                root.put("active", name)
+                prefs[KEY_CONFIGS] = root.toString()
+            }
+            name
+        } catch (_: Exception) { null }
+    }
 }

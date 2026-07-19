@@ -25,15 +25,15 @@ class TPAura : BaseModule(
     enum class MoveMode { Random, Strafe, Behind, Aggressive }
 
     private val moveMode         = enum ("Mode",              MoveMode.Aggressive)
-    private val detectRange      = float("Detect Range",      100f, 10f,  500f)
+    private val detectRange      = float("Detect Range",      500f, 10f,  500f)
     private val range            = float("Range",             1.52f, 1f,   8f)
-    private val horizontalSpeed  = float("Horizontal Speed",  3.8f, 0.5f, 8f)
+    private val horizontalSpeed  = float("Horizontal Speed",  3.29f, 0.5f, 8f)
     private val verticalSpeed    = float("Vertical Speed",    1.8f, 0.1f, 8f)
-    private val strafeSpeed      = float("Strafe Speed",      1.5f, 0.1f, 50f)
+    private val strafeSpeed      = float("Strafe Speed",      6.21f, 0.1f, 50f)
     private val yOffset          = float("Y Offset",          0.8f, -2f,  2f)
     private val rotateToTarget   = bool ("Rotate To Target",  true)
     private val ignoreFriends    = bool ("Ignore Friends",    true)
-    private val shortcut         = bool ("Shortcut",          false)
+    private val shortcut         = bool ("Shortcut",          true)
 
     private var strafeAngle = 0.0
     private var moveAttempts = 0L

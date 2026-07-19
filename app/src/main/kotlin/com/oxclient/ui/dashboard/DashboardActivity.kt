@@ -7,8 +7,10 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
@@ -457,14 +459,56 @@ private fun AccountRow(
 @Composable
 private fun ConfigTab() {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val profiles       by Config.profiles.collectAsState(initial = emptyList())
     val activeProfile  by Config.activeProfile.collectAsState(initial = null)
 
     var showSaveDialog by remember { mutableStateOf(false) }
     var newProfileName by remember { mutableStateOf("") }
 
+    // Dışa aktarma: "Export" tıklandığında bu isim set edilir, launcher
+    // dosya kaydetme dialog'unu açar açmaz onResult'ta kullanılır.
+    var pendingExportName by remember { mutableStateOf<String?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val exportName = pendingExportName
+        pendingExportName = null
+        if (uri != null && exportName != null) {
+            scope.launch {
+                val json = Config.exportJson(exportName)
+                if (json != null) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(json.toByteArray())
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val text = context.contentResolver.openInputStream(uri)
+                        ?.bufferedReader()?.use { it.readText() }
+                    if (text != null) Config.importJson(text)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Configs") {
+            TextButton(onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) }) {
+                Text("Import", color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(8.dp))
             AddIconButton(onClick = { showSaveDialog = true })
         }
 
@@ -492,7 +536,11 @@ private fun ConfigTab() {
                         name     = profile.name,
                         active   = profile.name == activeProfile,
                         onLoad   = { scope.launch { Config.load(profile.name) } },
-                        onDelete = { scope.launch { Config.delete(profile.name) } }
+                        onDelete = { scope.launch { Config.delete(profile.name) } },
+                        onExport = {
+                            pendingExportName = profile.name
+                            exportLauncher.launch("${profile.name}.oxcfg.json")
+                        }
                     )
                 }
             }
@@ -556,7 +604,8 @@ private fun ProfileRow(
     name: String,
     active: Boolean,
     onLoad: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onExport: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth()
@@ -577,13 +626,20 @@ private fun ProfileRow(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(
                 onClick = onLoad,
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.textButtonColors(contentColor = OxAccentLight)
             ) {
                 Text("Load", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+            TextButton(
+                onClick = onExport,
+                shape = RoundedCornerShape(6.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = OxOnSurfaceDim)
+            ) {
+                Text("Export", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
             TextButton(
                 onClick = onDelete,

@@ -33,14 +33,14 @@ class KillAuraPro : BaseModule(
     description = "Silent, burst-attack, garantili kritik — profesyonel KillAura varyantı"
 ), PacketEventBus.PacketListener {
 
-    private val cpsMin        = int  ("CPS Min",       13,   1,  30)
-    private val cpsMax        = int  ("CPS Max",       18,   1,  30)
-    private val range         = float("Range",         5.2f, 1f,  10f)
-    private val maxTargets    = int  ("Max Targets",   6,    1,  15)
+    private val cpsMin        = int  ("CPS Min",       16,   1,  30)
+    private val cpsMax        = int  ("CPS Max",       20,   1,  30)
+    private val range         = float("Range",         10f, 1f,  10f)
+    private val maxTargets    = int  ("Max Targets",   1,    1,  15)
     private val predictDelay  = float("Predict Delay", 0.12f, 0.05f, 0.5f)
     private val ignoreFriends = bool ("Ignore Friends", true)
     private val alwaysCrit    = bool ("Always Crit",   true)
-    private val shortcut      = bool ("Shortcut",      false)
+    private val shortcut      = bool ("Shortcut",      true)
 
     @Volatile private var lastAttackMs = 0L
     private var tickJob: Job? = null

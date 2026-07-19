@@ -24,13 +24,13 @@ class KillAura : BaseModule(
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
     enum class CritMode     { Vanilla, MovePacket, Jump }
 
-    private val cpsMin          = int  ("CPS Min",          10,   1,  30)
-    private val cpsMax          = int  ("CPS Max",          13,   1,  30)
-    private val range           = float("Range",            5.2f, 1f,  10f)
+    private val cpsMin          = int  ("CPS Min",          16,   1,  30)
+    private val cpsMax          = int  ("CPS Max",          20,   1,  30)
+    private val range           = float("Range",            10f, 1f,  10f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
-    private val maxTargets      = int  ("Max Targets",      5,    1,  10)
-    private val attackMode      = enum ("Attack Mode",      AttackMode.Switch)
+    private val maxTargets      = int  ("Max Targets",      1,    1,  10)
+    private val attackMode      = enum ("Attack Mode",      AttackMode.Single)
     private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
@@ -41,7 +41,7 @@ class KillAura : BaseModule(
     private val critMode        = enum ("Crit Mode",        CritMode.Vanilla)
     private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
-    private val shortcut        = bool ("Shortcut",         false)
+    private val shortcut        = bool ("Shortcut",         true)
 
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L
