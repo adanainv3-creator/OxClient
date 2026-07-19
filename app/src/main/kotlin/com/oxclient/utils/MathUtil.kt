@@ -77,8 +77,8 @@ object MathUtil {
 
         // Kamera uzayına döndür
         // Önce yaw (Y ekseni etrafında):
-        val rx0 =  dx * cosY + dz * sinY
-        val rz0 = -dx * sinY + dz * cosY
+        val rx0 = -dx * cosY + dz * sinY
+        val rz0 =  dx * sinY + dz * cosY
 
         // Sonra pitch (X ekseni etrafında):
         val rx =  rx0

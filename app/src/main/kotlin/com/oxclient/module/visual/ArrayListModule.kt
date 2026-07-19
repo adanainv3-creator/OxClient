@@ -2,8 +2,10 @@ package com.oxclient.module.visual
 
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
 import com.oxclient.module.ModuleManager
@@ -83,13 +85,24 @@ class ArrayListModule : BaseModule(
         val fm = textPaint.fontMetrics
         val lineH = (fm.descent - fm.ascent) + 12f
         val rightX = screenW - 16f
-        val timeHue = (System.currentTimeMillis() / 16.6f).toFloat()
+
+        // Rainbow akış fazı: sürekli döner, cycleMs = bir tam turun süresi (ms).
+        // Daha küçük değer = daha hızlı akış.
+        val cycleMs = 1000f
+        val basePhase = ((System.currentTimeMillis() % cycleMs) / cycleMs) * 360f
+        val rainbowStops = 6
+        val colorBuf = IntArray(rainbowStops)
+
+        fun fillRainbow(phaseOffset: Float) {
+            for (i in 0 until rainbowStops) {
+                val hue = ((basePhase + phaseOffset + i * (360f / rainbowStops)) % 360f + 360f) % 360f
+                colorBuf[i] = Color.HSVToColor(floatArrayOf(hue, 0.85f, 1f))
+            }
+        }
 
         var y = 16f
         drawOrder.forEachIndexed { index, (name, _) ->
             val progress = slideProgress[name] ?: return@forEachIndexed
-            val hue = ((timeHue + index * 28f) % 360f + 360f) % 360f
-            val color = Color.HSVToColor(floatArrayOf(hue, 0.75f, 1f))
 
             val textW = textPaint.measureText(name)
             val accentW = 6f
@@ -103,18 +116,29 @@ class ArrayListModule : BaseModule(
 
             val alpha = (255 * progress).toInt().coerceIn(0, 255)
 
+            // Her satır kendi faz ofsetiyle akıyor, böylece liste de kendi içinde
+            // dalga gibi görünür (hepsi bire bir aynı anda değişmiyor).
+            fillRainbow(index * -40f)
+
             bgPaint.color = Color.BLACK
             bgPaint.alpha = (110 * progress).toInt().coerceIn(0, 255)
             canvas.drawRoundRect(RectF(boxLeft, boxTop, boxRight, boxBottom), 8f, 8f, bgPaint)
 
-            accentPaint.color = color
+            accentPaint.shader = null
+            accentPaint.color = colorBuf[0]
             accentPaint.alpha = alpha
             canvas.drawRoundRect(RectF(boxLeft, boxTop, boxLeft + 5f, boxBottom), 3f, 3f, accentPaint)
 
-            textPaint.color = color
+            val textLeft = boxRight - 10f - textW
+            val textRight = boxRight - 10f
+            textPaint.shader = LinearGradient(
+                textLeft, 0f, textRight, 0f,
+                colorBuf, null, Shader.TileMode.CLAMP
+            )
             textPaint.alpha = alpha
             val textY = boxTop + 6f - fm.ascent
             canvas.drawText(name, boxRight - 10f, textY, textPaint)
+            textPaint.shader = null
 
             y += lineH
         }
