@@ -27,6 +27,12 @@ val OxWarning        = Color(0xFF8A8A8E)
 
 val OxConnectIdle    = Color(0xFFC7C7CC)
 
+// Aktif/açık modül kartları için grimsi tonlar (yeşil yerine)
+val OxModuleActive       = Color(0xFFAEAEB4)
+val OxModuleActiveBorder = Color(0xFF7D7D83)
+val OxModuleExpanded     = Color(0xFF9C9CA3)
+val OxModuleActiveText   = Color(0xFF1C1C1E)
+
 val OxPurple      = OxAccent
 val OxPurpleLight = OxAccentLight
 val OxPurpleDark  = OxAccentDark

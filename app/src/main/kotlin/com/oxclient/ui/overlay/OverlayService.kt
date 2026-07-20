@@ -13,6 +13,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -26,6 +27,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -361,6 +363,17 @@ private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
     val count      = OverlayState.totemCount
     var totalDrag  by remember { mutableFloatStateOf(0f) }
 
+    val autoTotem  = remember { ModuleManager.byName("AutoTotem") }
+    var autoTotemEnabled by remember { mutableStateOf(autoTotem?.isEnabled ?: false) }
+    LaunchedEffect(autoTotem) {
+        autoTotem?.enabledFlow?.collect { autoTotemEnabled = it }
+    }
+
+    AnimatedVisibility(
+        visible = autoTotemEnabled,
+        enter   = fadeIn() + expandHorizontally(),
+        exit    = fadeOut() + shrinkHorizontally()
+    ) {
     Row(
         modifier = Modifier
             .wrapContentSize()
@@ -399,6 +412,7 @@ private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
             }
         )
     }
+    }
 }
 
 // ── Hedef göstergesi (saydam, sürüklenebilir) ─────────────────────────────────
@@ -407,6 +421,17 @@ private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
 private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
     val target = OverlayState.targetName
 
+    val autoTotem  = remember { ModuleManager.byName("AutoTotem") }
+    var autoTotemEnabled by remember { mutableStateOf(autoTotem?.isEnabled ?: false) }
+    LaunchedEffect(autoTotem) {
+        autoTotem?.enabledFlow?.collect { autoTotemEnabled = it }
+    }
+
+    AnimatedVisibility(
+        visible = autoTotemEnabled,
+        enter   = fadeIn() + expandHorizontally(),
+        exit    = fadeOut() + shrinkHorizontally()
+    ) {
     Box(
         modifier = Modifier
             .wrapContentSize()
@@ -432,6 +457,7 @@ private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
                 )
             )
         )
+    }
     }
 }
 
@@ -847,14 +873,24 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
 
+    // Aktif/açık kartlar için grimsi ton (yeşil değil); açıkken bir tık daha koyu gri.
+    val cardBg = when {
+        expanded -> OxModuleExpanded
+        enabled  -> OxModuleActive
+        else     -> OxSurface
+    }
+    val borderColor = when {
+        enabled -> OxModuleActiveBorder
+        else    -> OxOutline.copy(0.6f)
+    }
+    val textColor = if (enabled) OxModuleActiveText else OxOnSurface
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (expanded) OxSurfaceVar else OxSurface)
-            .border(1.dp,
-                if (enabled) OxOutlineStrong else OxOutline.copy(0.6f),
-                RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(cardBg)
+            .border(if (enabled) 1.5.dp else 1.dp, borderColor, RoundedCornerShape(14.dp))
     ) {
         Row(
             modifier = Modifier
@@ -863,41 +899,44 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                     if (module.settings.isNotEmpty()) expanded = !expanded
                     else ModuleManager.toggle(module)
                 }
-                .padding(horizontal = 14.dp, vertical = 13.dp),
+                .padding(horizontal = 18.dp, vertical = 18.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 module.name,
-                fontSize = 14.sp,
-                fontWeight = if (enabled) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (enabled) OxOnBackground else OxOnSurface,
+                fontSize = 17.sp,
+                fontWeight = if (enabled) FontWeight.Bold else FontWeight.Medium,
+                color = textColor,
                 modifier = Modifier.weight(1f)
             )
             Switch(
                 checked = enabled,
                 onCheckedChange = { ModuleManager.toggle(module); onShortcutChanged() },
                 colors = SwitchDefaults.colors(
-                    checkedTrackColor   = OxAccent,
+                    checkedTrackColor   = OxModuleActiveBorder,
                     checkedThumbColor   = Color.White,
                     uncheckedTrackColor = OxOutlineStrong,
                     uncheckedThumbColor = OxOnSurfaceDim
                 ),
-                modifier = Modifier.height(20.dp)
+                modifier = Modifier
+                    .scale(1.3f)
+                    .height(26.dp)
             )
         }
 
+        // Ayarlar paneli: satıra basınca animasyonlu şekilde aşağı doğru açılır.
         AnimatedVisibility(
             visible = expanded && module.settings.isNotEmpty(),
-            enter   = expandVertically() + fadeIn(),
-            exit    = shrinkVertically() + fadeOut()
+            enter   = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(220)),
+            exit    = shrinkVertically(animationSpec = tween(180)) + fadeOut(animationSpec = tween(150))
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color(0x22000000))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 module.settings.forEach { s ->
                     SettingRow(setting = s, onShortcutChanged = onShortcutChanged)
