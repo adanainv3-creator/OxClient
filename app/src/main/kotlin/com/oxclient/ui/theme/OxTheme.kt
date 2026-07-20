@@ -5,7 +5,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-val OxBackground     = Color(0xFFF3F1EC)
+val OxBackground     = Color(0xFFEAE7E0)
 val OxSurface        = Color(0xFFE9E6DF)
 val OxSurfaceVar     = Color(0xFFDDD9D0)
 val OxSurfaceRaised  = Color(0xFFF8F6F1)
@@ -25,7 +25,7 @@ val OxError          = Color(0xFF1C1C1E)
 val OxSuccess        = Color(0xFF6E6E73)
 val OxWarning        = Color(0xFF8A8A8E)
 
-val OxConnectIdle    = Color(0xFFE3E3E7)
+val OxConnectIdle    = Color(0xFFC7C7CC)
 
 val OxPurple      = OxAccent
 val OxPurpleLight = OxAccentLight

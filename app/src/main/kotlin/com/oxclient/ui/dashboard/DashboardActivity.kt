@@ -84,22 +84,26 @@ private enum class DashTab { RELAY, CONFIG, ACCOUNTS }
 
 class DashboardActivity : ComponentActivity() {
 
+    private var overlayPermissionGranted by mutableStateOf(false)
+
     private val overlayLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { }
+    ) { overlayPermissionGranted = Settings.canDrawOverlays(this) }
+
+    private fun requestOverlayPermission() {
+        overlayLauncher.launch(
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                data = Uri.parse("package:$packageName")
+            }
+        )
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        if (!Settings.canDrawOverlays(this)) {
-            overlayLauncher.launch(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-                    data = Uri.parse("package:$packageName")
-                }
-            )
-        }
+        overlayPermissionGranted = Settings.canDrawOverlays(this)
 
         lifecycleScope.launch {
             MicrosoftAuthManager.authState.collect { state ->
@@ -128,11 +132,18 @@ class DashboardActivity : ComponentActivity() {
                         onSignIn      = { MicrosoftAuthManager.startSignIn() },
                         onSignOut     = { MicrosoftAuthManager.signOut() },
                         onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() },
-                        onSelectAccount = { account -> MicrosoftAuthManager.switchAccount(account) }
+                        onSelectAccount = { account -> MicrosoftAuthManager.switchAccount(account) },
+                        overlayPermissionGranted   = overlayPermissionGranted,
+                        onRequestOverlayPermission = { requestOverlayPermission() }
                     )
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        overlayPermissionGranted = Settings.canDrawOverlays(this)
     }
 
     private fun startRelay(targetPkg: String) {
@@ -259,7 +270,9 @@ fun DashboardScreen(
     onSignIn      : () -> Unit,
     onSignOut     : () -> Unit,
     onCancelAuth  : () -> Unit,
-    onSelectAccount : (SavedAccount) -> Unit
+    onSelectAccount : (SavedAccount) -> Unit,
+    overlayPermissionGranted   : Boolean = true,
+    onRequestOverlayPermission : () -> Unit = {}
 ) {
     val authState     by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
     val scope          = rememberCoroutineScope()
@@ -317,7 +330,9 @@ fun DashboardScreen(
                             recentServers        = recentServers,
                             onSaveServer         = { h, p -> scope.launch { ServerConfig.save(h, p) }; showServerPanel = false },
                             onResetServer        = { scope.launch { ServerConfig.reset() } },
-                            onDismissServerPanel = { showServerPanel = false }
+                            onDismissServerPanel = { showServerPanel = false },
+                            overlayPermissionGranted   = overlayPermissionGranted,
+                            onRequestOverlayPermission = onRequestOverlayPermission
                         )
                         DashTab.ACCOUNTS -> AccountsTab(
                             accounts         = savedAccounts,
@@ -385,12 +400,25 @@ private fun DashboardTab(
     recentServers        : List<Pair<String, Int>>,
     onSaveServer         : (String, Int) -> Unit,
     onResetServer        : () -> Unit,
-    onDismissServerPanel : () -> Unit
+    onDismissServerPanel : () -> Unit,
+    overlayPermissionGranted   : Boolean = true,
+    onRequestOverlayPermission : () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "OxClient V1.1") {
             IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
                 MoreVertGlyph(tint = if (showServerPanel) OxAccentLight else OxOnSurfaceDim)
+            }
+        }
+
+        AnimatedVisibility(
+            visible = !overlayPermissionGranted,
+            enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
+            exit    = fadeOut(tween(150)) + shrinkVertically(tween(200))
+        ) {
+            Column {
+                OverlayPermissionWarning(onClick = onRequestOverlayPermission)
+                Spacer(Modifier.height(16.dp))
             }
         }
 
@@ -437,6 +465,30 @@ private fun DashboardTab(
 }
 
 @Composable
+private fun OverlayPermissionWarning(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(OxSurface)
+            .border(1.dp, OxOutlineStrong, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("⚠️", fontSize = 16.sp)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            "Overlay Permission Required",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = OxOnSurface,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
 private fun ConnectedBanner(onLaunchApp: () -> Unit) {
     var showLaunchButton by remember { mutableStateOf(true) }
 
@@ -467,15 +519,13 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
         ) {
             Text(
                 "Launch App",
-                fontSize = 12.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = OxAccent,
                 fontFamily = FontFamily.Monospace,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(OxAccent)
                     .clickable { onLaunchApp() }
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .padding(horizontal = 4.dp, vertical = 4.dp)
             )
         }
     }
