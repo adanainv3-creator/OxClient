@@ -67,22 +67,18 @@ import com.oxclient.config.ServerConfig
 import com.oxclient.config.Config
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.events.PacketEventBus
-import com.oxclient.module.ModuleManager
 import com.oxclient.session.SessionManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-// Supported target packages - no longer user-selectable, chosen automatically
 val SUPPORTED_PACKAGES = listOf(
     "com.mojang.minecraftpe"      to "Minecraft",
     "com.netease.mc"              to "Minecraft (China)",
     "com.mojang.minecrafttrialpe" to "Minecraft Trial",
 )
 
-// SETTINGS was removed as a standalone tab - server configuration now lives
-// behind the top-right overflow menu on the Dashboard tab instead.
 private enum class DashTab { RELAY, CONFIG, ACCOUNTS }
 
 class DashboardActivity : ComponentActivity() {
@@ -94,8 +90,6 @@ class DashboardActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Edge-to-edge so the bottom tab bar can be pulled up above the
-        // system navigation bar with its own inset padding.
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         if (!Settings.canDrawOverlays(this)) {
@@ -106,8 +100,6 @@ class DashboardActivity : ComponentActivity() {
             )
         }
 
-        // Observe WaitingForWebView state — open the WebView activity here
-        // (from the Activity, not from Compose, for correct lifecycle handling)
         lifecycleScope.launch {
             MicrosoftAuthManager.authState.collect { state ->
                 if (state is AuthState.WaitingForWebView) {
@@ -118,19 +110,26 @@ class DashboardActivity : ComponentActivity() {
 
         setContent {
             OxClientTheme {
-                val authState   by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
-                val relayActive by SessionManager.isActive.collectAsStateWithLifecycle()
+                var unlocked by remember { mutableStateOf(false) }
 
-                DashboardScreen(
-                    installedApps = getInstalledGames(),
-                    relayActive   = relayActive,
-                    onConnect     = { pkg -> startRelay(pkg) },
-                    onDisconnect  = { stopRelay() },
-                    onSignIn      = { MicrosoftAuthManager.startSignIn() },
-                    onSignOut     = { MicrosoftAuthManager.signOut() },
-                    onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() },
-                    onSelectAccount = { account -> MicrosoftAuthManager.switchAccount(account) }
-                )
+                if (!unlocked) {
+                    PasswordGateScreen(onUnlock = { unlocked = true })
+                } else {
+                    val authState   by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
+                    val relayActive by SessionManager.isActive.collectAsStateWithLifecycle()
+
+                    DashboardScreen(
+                        installedApps = getInstalledGames(),
+                        relayActive   = relayActive,
+                        onConnect     = { pkg -> startRelay(pkg) },
+                        onDisconnect  = { stopRelay() },
+                        onLaunchApp   = { pkg -> launchApp(pkg) },
+                        onSignIn      = { MicrosoftAuthManager.startSignIn() },
+                        onSignOut     = { MicrosoftAuthManager.signOut() },
+                        onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() },
+                        onSelectAccount = { account -> MicrosoftAuthManager.switchAccount(account) }
+                    )
+                }
             }
         }
     }
@@ -144,19 +143,19 @@ class DashboardActivity : ComponentActivity() {
         }
 
         OverlayService.start(this)
+    }
 
-        window.decorView.postDelayed({
-            val intent = packageManager.getLaunchIntentForPackage(targetPkg)
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                startActivity(intent)
-            } else {
-                startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$targetPkg"))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
-        }, 800)
+    private fun launchApp(targetPkg: String) {
+        val intent = packageManager.getLaunchIntentForPackage(targetPkg)
+        if (intent != null) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            startActivity(intent)
+        } else {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$targetPkg"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
     }
 
     private fun stopRelay() {
@@ -183,6 +182,71 @@ class DashboardActivity : ComponentActivity() {
         }
 }
 
+private const val APP_PASSWORD = "ayclan06"
+
+@Composable
+private fun PasswordGateScreen(onUnlock: () -> Unit) {
+    var input by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+
+    fun trySubmit() {
+        if (input == APP_PASSWORD) onUnlock() else { error = true; input = "" }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize().background(OxBackground),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                "OxClient",
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                color = OxOnBackground,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                "Enter password",
+                fontSize = 13.sp,
+                color = OxOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it; error = false },
+                singleLine = true,
+                isError = error,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { trySubmit() }),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(6.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = OxAccent,
+                    unfocusedBorderColor = OxOutlineStrong,
+                    cursorColor = OxAccentLight
+                ),
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground),
+                supportingText = if (error) {
+                    { Text("Wrong password", color = OxError, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                } else null
+            )
+            Button(
+                onClick = { trySubmit() },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(6.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = OxAccent)
+            ) {
+                Text("UNLOCK", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun DashboardScreen(
@@ -190,6 +254,7 @@ fun DashboardScreen(
     relayActive   : Boolean = false,
     onConnect     : (String) -> Unit,
     onDisconnect  : () -> Unit,
+    onLaunchApp   : (String) -> Unit,
     onSignIn      : () -> Unit,
     onSignOut     : () -> Unit,
     onCancelAuth  : () -> Unit,
@@ -209,10 +274,8 @@ fun DashboardScreen(
     val pagerState = rememberPagerState(pageCount = { DashTab.values().size })
     val currentTab = DashTab.values()[pagerState.currentPage]
 
-    // Target package is no longer asked from the user, it's picked automatically
     val targetApp = remember(installedApps) { installedApps.firstOrNull() ?: SUPPORTED_PACKAGES.first() }
 
-    // Close the dialog once WaitingForWebView state is reached (WebView opened)
     LaunchedEffect(authState) {
         if (authState is AuthState.WaitingForWebView) showSignIn = false
     }
@@ -245,6 +308,7 @@ fun DashboardScreen(
                         DashTab.RELAY -> DashboardTab(
                             relayActive          = relayActive,
                             onToggle             = { if (relayActive) onDisconnect() else onConnect(targetApp.first) },
+                            onLaunchApp          = { onLaunchApp(targetApp.first) },
                             showServerPanel      = showServerPanel,
                             onToggleServerPanel  = { showServerPanel = !showServerPanel },
                             serverHost           = serverHost,
@@ -272,10 +336,6 @@ fun DashboardScreen(
     }
 }
 
-// ---------------------------------------------------------------------
-// Shared screen header - identical title style/spacing on every tab so
-// Dashboard, Accounts and Configs all read as one consistent surface.
-// ---------------------------------------------------------------------
 
 @Composable
 private fun ScreenHeader(
@@ -316,6 +376,7 @@ private fun AddIconButton(onClick: () -> Unit) {
 private fun DashboardTab(
     relayActive          : Boolean,
     onToggle             : () -> Unit,
+    onLaunchApp          : () -> Unit,
     showServerPanel      : Boolean,
     onToggleServerPanel  : () -> Unit,
     serverHost           : String,
@@ -355,9 +416,15 @@ private fun DashboardTab(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.weight(1f))
-            if (relayActive) {
-                LiveStatsCard()
-                Spacer(Modifier.height(16.dp))
+            AnimatedVisibility(
+                visible = relayActive,
+                enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
+                exit    = fadeOut(tween(150)) + shrinkVertically(tween(200))
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    ConnectedBanner(onLaunchApp = onLaunchApp)
+                    Spacer(Modifier.height(16.dp))
+                }
             }
             Spacer(Modifier.weight(1f))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -365,6 +432,34 @@ private fun DashboardTab(
             }
             Spacer(Modifier.height(12.dp))
         }
+    }
+}
+
+@Composable
+private fun ConnectedBanner(onLaunchApp: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(OxSurface)
+            .border(1.dp, OxOutline, RoundedCornerShape(14.dp))
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "Connected to MITM proxy",
+            fontSize = 15.sp,
+            color = OxOnSurface,
+            fontFamily = FontFamily.Monospace
+        )
+        Text(
+            "Launch App",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = OxAccentLight,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.clickable { onLaunchApp() }
+        )
     }
 }
 
@@ -466,8 +561,6 @@ private fun ConfigTab() {
     var showSaveDialog by remember { mutableStateOf(false) }
     var newProfileName by remember { mutableStateOf("") }
 
-    // Dışa aktarma: "Export" tıklandığında bu isim set edilir, launcher
-    // dosya kaydetme dialog'unu açar açmaz onResult'ta kullanılır.
     var pendingExportName by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -547,7 +640,6 @@ private fun ConfigTab() {
         }
     }
 
-    // Yeni profil kaydetme dialog'u
     if (showSaveDialog) {
         AlertDialog(
             onDismissRequest = { showSaveDialog = false },
@@ -664,10 +756,6 @@ private fun InactiveNotice() {
     }
 }
 
-// ---------------------------------------------------------------------
-// Bottom navigation - icon-only for inactive tabs, a highlighted pill
-// with a label for the active tab. Same three destinations everywhere.
-// ---------------------------------------------------------------------
 
 @Composable
 private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
@@ -733,58 +821,12 @@ private fun TabItem(
 }
 
 @Composable
-private fun LiveStatsCard() {
-    var entityCount by remember { mutableIntStateOf(0) }
-    var playerCount by remember { mutableIntStateOf(0) }
-    var selfHp      by remember { mutableFloatStateOf(20f) }
-    var activeCount by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            entityCount = EntityTracker.count()
-            playerCount = EntityTracker.playerCount()
-            selfHp      = EntityTracker.selfHealth
-            activeCount = ModuleManager.enabledCount()
-            kotlinx.coroutines.delay(1000L)
-        }
-    }
-
-    Card(
-        modifier  = Modifier.fillMaxWidth(),
-        shape     = RoundedCornerShape(8.dp),
-        colors    = CardDefaults.cardColors(containerColor = OxSurface),
-        border    = BorderStroke(1.dp, OxOutline)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            LiveStatChip("HP",  "%.0f".format(selfHp),
-                if (selfHp <= 6f) OxError else OxSuccess)
-            LiveStatChip("ENT", "$entityCount", OxOnSurface)
-            LiveStatChip("PLR", "$playerCount", OxAccentLight)
-            LiveStatChip("MOD", "$activeCount", OxAccentLight)
-        }
-    }
-}
-
-@Composable
-private fun LiveStatChip(label: String, value: String, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-            color = OxOnSurfaceDim, fontFamily = FontFamily.Monospace)
-        Spacer(Modifier.height(2.dp))
-        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-            color = color, fontFamily = FontFamily.Monospace)
-    }
-}
-
-@Composable
 private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {
     val bgColor by animateColorAsState(
-        targetValue   = if (running) OxError else OxConnectIdle,
+        targetValue   = if (running) OxAccent else OxConnectIdle,
         animationSpec = tween(300), label = "btnColor"
     )
+    val contentColor = if (running) Color.White else OxOnBackground
     Button(
         onClick        = onToggle,
         shape          = RoundedCornerShape(50),
@@ -793,12 +835,12 @@ private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {
         contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
         modifier       = Modifier.height(52.dp)
     ) {
-        RouterGlyph(tint = OxOnBackground)
+        RouterGlyph(tint = contentColor)
         Spacer(Modifier.width(10.dp))
         Text(
             if (running) "Disconnect" else "Connect",
             fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace, color = OxOnBackground
+            fontFamily = FontFamily.Monospace, color = contentColor
         )
     }
 }
@@ -938,7 +980,6 @@ private fun AuthDialog(
                         }
                     }
                     is AuthState.WaitingForWebView, is AuthState.Loading -> {
-                        // WebView opening or token being processed
                         CircularProgressIndicator(color = OxAccentLight, strokeWidth = 2.dp)
                         Text(
                             if (authState is AuthState.WaitingForWebView)
@@ -964,7 +1005,6 @@ private fun AuthDialog(
                         }
                     }
                     else -> {
-                        // Idle or WaitingForUser (legacy flow compatibility)
                         Text("Sign in with your Xbox/Microsoft account.\nThe sign-in page will open inside the app.",
                             color = OxOnSurface, fontFamily = FontFamily.Monospace,
                             textAlign = TextAlign.Center, fontSize = 13.sp)
@@ -982,10 +1022,6 @@ private fun AuthDialog(
     }
 }
 
-// ---------------------------------------------------------------------
-// Hand-drawn glyphs (Canvas) - avoids depending on the material-icons-
-// extended artifact, which may not be pulled in by the CI build.
-// ---------------------------------------------------------------------
 
 @Composable
 private fun RouterGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {

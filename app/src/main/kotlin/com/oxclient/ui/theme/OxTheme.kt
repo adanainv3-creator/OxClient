@@ -1,37 +1,37 @@
 package com.oxclient.ui.theme
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-val OxBackground     = Color(0xFF0E1020)
-val OxSurface        = Color(0xFF1E2340)
-val OxSurfaceVar     = Color(0xFF2D3561)
-val OxSurfaceRaised  = Color(0xFF3A4580)
+val OxBackground     = Color(0xFFFFFFFF)
+val OxSurface        = Color(0xFFF1F1F3)
+val OxSurfaceVar     = Color(0xFFE3E3E7)
+val OxSurfaceRaised  = Color(0xFFFFFFFF)
 
-val OxAccent         = Color(0xFF4A5899)
-val OxAccentLight    = Color(0xFF6B7EC2)
-val OxAccentDark     = Color(0xFF1A1F3A)
+val OxAccent         = Color(0xFF1C1C1E)
+val OxAccentLight    = Color(0xFF48484A)
+val OxAccentDark     = Color(0xFFEAEAEC)
 
-val OxOnBackground   = Color(0xFFDDE2F0)
-val OxOnSurface      = Color(0xFFB8C0D8)
-val OxOnSurfaceDim   = Color(0xFF6B7499)
+val OxOnBackground   = Color(0xFF1C1C1E)
+val OxOnSurface      = Color(0xFF3A3A3C)
+val OxOnSurfaceDim   = Color(0xFF8A8A8E)
 
-val OxOutline        = Color(0xFF2D3561)
-val OxOutlineStrong  = Color(0xFF3A4580)
+val OxOutline        = Color(0xFFD5D5D9)
+val OxOutlineStrong  = Color(0xFFB8B8BD)
 
-val OxError          = Color(0xFFB1423C)
-val OxSuccess        = Color(0xFF3F9A5B)
-val OxWarning        = Color(0xFFB8863B)
+val OxError          = Color(0xFF1C1C1E)
+val OxSuccess        = Color(0xFF6E6E73)
+val OxWarning        = Color(0xFF8A8A8E)
 
-val OxConnectIdle    = Color(0xFF2D3561)
+val OxConnectIdle    = Color(0xFFE3E3E7)
 
 val OxPurple      = OxAccent
 val OxPurpleLight = OxAccentLight
 val OxPurpleDark  = OxAccentDark
 
-private val Scheme = darkColorScheme(
+private val Scheme = lightColorScheme(
     primary          = OxAccent,
     onPrimary        = Color.White,
     primaryContainer = OxAccentDark,
