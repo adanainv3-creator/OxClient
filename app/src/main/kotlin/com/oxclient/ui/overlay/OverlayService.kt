@@ -1,11 +1,15 @@
+
 package com.oxclient.ui.overlay
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.PixelFormat
+import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import androidx.compose.animation.*
@@ -85,23 +89,41 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private lateinit var wm: android.view.WindowManager
     private var isAttached = false
 
-    private var fabView  : ComposeView? = null
     private var menuView : ComposeView? = null
     private var totemView : ComposeView? = null
     private var targetView: ComposeView? = null
     private var espView  : ESPOverlayView? = null
     private val shortcutViews = mutableMapOf<String, ComposeView>()
 
-    private var fabX = 50f; private var fabY = 300f
     private var totemX = 16f; private var totemY = 16f
     private var targetX = 16f; private var targetY = 64f
     private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
+
+    private lateinit var audioManager: AudioManager
+    private var lastMusicVolume = 0
+    private val volumeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != "android.media.VOLUME_CHANGED_ACTION") return
+            val streamType = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1)
+            if (streamType != AudioManager.STREAM_MUSIC) return
+            val newVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (newVolume > lastMusicVolume) {
+                try { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, lastMusicVolume, 0) } catch (_: Exception) {}
+                toggleMenu()
+            } else {
+                lastMusicVolume = newVolume
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         ssrCtrl.performRestore(null)
         lcReg.currentState = Lifecycle.State.CREATED
         wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        lastMusicVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        registerReceiver(volumeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"))
         createChannel()
     }
 
@@ -117,6 +139,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     override fun onDestroy() {
         lcReg.currentState = Lifecycle.State.DESTROYED
         OverlayState.setOverlayVisible(false)
+        try { unregisterReceiver(volumeReceiver) } catch (_: Exception) {}
         removeAllOverlays()
         super.onDestroy()
     }
@@ -183,23 +206,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             espView = ESPOverlayView(this)
             wm.addView(espView, espParams)
             espView?.startRenderLoop()
-
-            val fabParams = overlayParams(
-                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                fabX, fabY
-            )
-            fabView = composeView {
-                FabButton(
-                    onDrag  = { dx, dy ->
-                        fabX += dx; fabY += dy
-                        fabParams.x = fabX.roundToInt(); fabParams.y = fabY.roundToInt()
-                        safeUpdate(fabView, fabParams)
-                    },
-                    onClick = { toggleMenu() }
-                )
-            }
-            wm.addView(fabView, fabParams)
 
             val totemParams = overlayParams(
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
@@ -315,10 +321,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun removeAllOverlays() {
         hideMenu()
-        listOfNotNull(fabView, totemView, targetView, espView).plus(shortcutViews.values).forEach { v ->
+        listOfNotNull(totemView, targetView, espView).plus(shortcutViews.values).forEach { v ->
             try { wm.removeViewImmediate(v) } catch (_: Exception) {}
         }
-        fabView = null; totemView = null; targetView = null; espView = null; shortcutViews.clear(); isAttached = false
+        totemView = null; targetView = null; espView = null; shortcutViews.clear(); isAttached = false
     }
 
     private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
@@ -426,42 +432,6 @@ private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
                 )
             )
         )
-    }
-}
-
-// ── FAB ───────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun FabButton(onDrag: (Float, Float) -> Unit, onClick: () -> Unit) {
-    var totalDist  by remember { mutableFloatStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
-    val activeCount = OverlayState.activeModuleCount
-
-    Box(
-        modifier = Modifier
-            .size(52.dp)
-            .clip(CircleShape)
-            .background(
-                Brush.radialGradient(listOf(OxAccent, OxAccentDark))
-            )
-            .border(2.dp, OxAccentLight.copy(0.7f), CircleShape)
-            .pointerInput(Unit) { detectTapGestures(onTap = { if (!isDragging) onClick() }) }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { isDragging = true; totalDist = 0f },
-                    onDragEnd   = { isDragging = false; if (totalDist < 15f) onClick() },
-                    onDrag      = { c, o -> c.consume(); totalDist += abs(o.x) + abs(o.y); onDrag(o.x, o.y) }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Ox", color = Color.White, fontSize = 13.sp,
-                fontWeight = FontWeight.ExtraBold, fontFamily = FontFamily.Monospace)
-            if (activeCount > 0)
-                Text("$activeCount", color = OxOnBackground.copy(0.8f),
-                    fontSize = 7.sp, fontFamily = FontFamily.Monospace)
-        }
     }
 }
 
