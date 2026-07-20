@@ -316,7 +316,8 @@ fun DashboardScreen(
 
                 HorizontalPager(
                     state    = pagerState,
-                    modifier = Modifier.weight(1f).fillMaxWidth()
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    beyondBoundsPageCount = 1
                 ) { page ->
                     when (DashTab.values()[page]) {
                         DashTab.RELAY -> DashboardTab(
@@ -346,7 +347,14 @@ fun DashboardScreen(
             }
             BottomTabBar(
                 current  = currentTab,
-                onSelect = { tab -> scope.launch { pagerState.animateScrollToPage(tab.ordinal) } }
+                onSelect = { tab ->
+                    scope.launch {
+                        pagerState.animateScrollToPage(
+                            page = tab.ordinal,
+                            animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)
+                        )
+                    }
+                }
             )
         }
     }
@@ -455,7 +463,6 @@ private fun DashboardTab(
                     Spacer(Modifier.height(16.dp))
                 }
             }
-            Spacer(Modifier.weight(1f))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 ConnectButton(running = relayActive, onToggle = onToggle)
             }
@@ -499,10 +506,9 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
 
     Row(
         modifier = Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(OxSurface)
-            .border(1.dp, OxOutline, RoundedCornerShape(14.dp))
-            .padding(horizontal = 20.dp, vertical = 18.dp),
+            .padding(horizontal = (-24).dp)
+            .background(OxSurfaceRaised)
+            .padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -510,7 +516,10 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
             "Connected to MITM proxy",
             fontSize = 15.sp,
             color = OxOnSurface,
-            fontFamily = FontFamily.Monospace
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
         )
         AnimatedVisibility(
             visible = showLaunchButton,
@@ -523,7 +532,10 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
                 fontWeight = FontWeight.Bold,
                 color = OxAccent,
                 fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false,
                 modifier = Modifier
+                    .padding(start = 12.dp)
                     .clickable { onLaunchApp() }
                     .padding(horizontal = 4.dp, vertical = 4.dp)
             )
@@ -830,7 +842,7 @@ private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
     Column {
         HorizontalDivider(color = OxOutline)
         Row(
-            modifier = Modifier.fillMaxWidth().background(OxSurface)
+            modifier = Modifier.fillMaxWidth().background(OxSkinTone)
                 .navigationBarsPadding()
                 .padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,

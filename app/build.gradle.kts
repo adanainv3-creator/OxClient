@@ -110,6 +110,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.savedstate:savedstate-ktx:1.2.1")
+    implementation("androidx.media:media:1.7.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")

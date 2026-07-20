@@ -27,6 +27,9 @@ val OxWarning        = Color(0xFF8A8A8E)
 
 val OxConnectIdle    = Color(0xFFC7C7CC)
 
+// Alt gezinme çubuğu için açık ten rengi
+val OxSkinTone       = Color(0xFFF1D7B8)
+
 // Aktif/açık modül kartları için grimsi tonlar (yeşil yerine)
 val OxModuleActive       = Color(0xFFAEAEB4)
 val OxModuleActiveBorder = Color(0xFF7D7D83)

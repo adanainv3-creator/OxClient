@@ -4,16 +4,17 @@ package com.oxclient.ui.overlay
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -102,21 +103,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
 
     private lateinit var audioManager: AudioManager
-    private var lastMusicVolume = 0
-    private val volumeReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != "android.media.VOLUME_CHANGED_ACTION") return
-            val streamType = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1)
-            if (streamType != AudioManager.STREAM_MUSIC) return
-            val newVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            if (newVolume > lastMusicVolume) {
-                try { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, lastMusicVolume, 0) } catch (_: Exception) {}
-                toggleMenu()
-            } else {
-                lastMusicVolume = newVolume
-            }
-        }
-    }
+    private var mediaSession: android.support.v4.media.session.MediaSessionCompat? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -124,8 +111,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         lcReg.currentState = Lifecycle.State.CREATED
         wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        lastMusicVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        registerReceiver(volumeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"))
+        setupVolumeInterceptor()
         createChannel()
     }
 
@@ -141,7 +127,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     override fun onDestroy() {
         lcReg.currentState = Lifecycle.State.DESTROYED
         OverlayState.setOverlayVisible(false)
-        try { unregisterReceiver(volumeReceiver) } catch (_: Exception) {}
+        try { mediaSession?.isActive = false; mediaSession?.release() } catch (_: Exception) {}
         removeAllOverlays()
         super.onDestroy()
     }
@@ -296,14 +282,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xAA000000))
                     .pointerInput(Unit) { detectTapGestures { hideMenu() } }
             ) {
                 HileMenu(
                     onClose           = { hideMenu() },
                     moduleVersion     = moduleVersion,
                     onShortcutChanged = { refreshShortcuts() },
-                    modifier          = Modifier.align(Alignment.CenterEnd)
+                    modifier          = Modifier.align(Alignment.CenterStart)
                 )
             }
         }
@@ -339,6 +324,31 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             setViewTreeSavedStateRegistryOwner(this@OverlayService)
             setContent(content)
         }
+
+    private fun setupVolumeInterceptor() {
+        val max = 20
+        val start = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) *
+                max / audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+
+        val provider = object : androidx.media.VolumeProviderCompat(
+            VOLUME_CONTROL_ABSOLUTE, max, start
+        ) {
+            override fun onAdjustVolume(direction: Int) {
+                if (direction != 0) toggleMenu()
+            }
+        }
+
+        mediaSession = android.support.v4.media.session.MediaSessionCompat(this, "OxOverlayVolume").apply {
+            setPlaybackToRemote(provider)
+            setPlaybackState(
+                android.support.v4.media.session.PlaybackStateCompat.Builder()
+                    .setState(android.support.v4.media.session.PlaybackStateCompat.STATE_PLAYING, 0, 1f)
+                    .setActions(android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY)
+                    .build()
+            )
+            isActive = true
+        }
+    }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -534,12 +544,14 @@ private fun HileMenu(
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .width(320.dp)
+            .width(300.dp)
             .background(
-                Brush.verticalGradient(listOf(OxBackground, Color(0xFF141830)))
+                Brush.verticalGradient(
+                    listOf(OxBackground.copy(alpha = 0.72f), Color(0xFF141830).copy(alpha = 0.72f))
+                )
             )
-            .border(1.dp, OxOutlineStrong, RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-            .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+            .border(1.dp, OxOutlineStrong, RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
+            .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
             .pointerInput(Unit) { detectTapGestures { } }
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -626,9 +638,9 @@ private fun HileMenu(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        contentPadding = PaddingValues(vertical = 10.dp)
+                            .padding(horizontal = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp)
                     ) {
                         items(mods) { mod ->
                             ModuleCard(module = mod, onShortcutChanged = onShortcutChanged)
@@ -888,9 +900,10 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .animateContentSize(animationSpec = tween(280, easing = FastOutSlowInEasing))
+            .clip(RoundedCornerShape(11.dp))
             .background(cardBg)
-            .border(if (enabled) 1.5.dp else 1.dp, borderColor, RoundedCornerShape(14.dp))
+            .border(if (enabled) 1.5.dp else 1.dp, borderColor, RoundedCornerShape(11.dp))
     ) {
         Row(
             modifier = Modifier
@@ -899,13 +912,13 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                     if (module.settings.isNotEmpty()) expanded = !expanded
                     else ModuleManager.toggle(module)
                 }
-                .padding(horizontal = 18.dp, vertical = 18.dp),
+                .padding(horizontal = 14.dp, vertical = 11.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 module.name,
-                fontSize = 17.sp,
+                fontSize = 13.sp,
                 fontWeight = if (enabled) FontWeight.Bold else FontWeight.Medium,
                 color = textColor,
                 modifier = Modifier.weight(1f)
@@ -920,23 +933,29 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                     uncheckedThumbColor = OxOnSurfaceDim
                 ),
                 modifier = Modifier
-                    .scale(1.3f)
-                    .height(26.dp)
+                    .scale(0.8f)
+                    .height(18.dp)
             )
         }
 
         // Ayarlar paneli: satıra basınca animasyonlu şekilde aşağı doğru açılır.
         AnimatedVisibility(
             visible = expanded && module.settings.isNotEmpty(),
-            enter   = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(220)),
-            exit    = shrinkVertically(animationSpec = tween(180)) + fadeOut(animationSpec = tween(150))
+            enter   = expandVertically(
+                          animationSpec = tween(320, easing = FastOutSlowInEasing),
+                          expandFrom    = Alignment.Top
+                      ) + fadeIn(animationSpec = tween(280, delayMillis = 40, easing = LinearOutSlowInEasing)),
+            exit    = shrinkVertically(
+                          animationSpec = tween(260, easing = FastOutSlowInEasing),
+                          shrinkTowards = Alignment.Top
+                      ) + fadeOut(animationSpec = tween(160, easing = LinearEasing))
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color(0x22000000))
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 module.settings.forEach { s ->
                     SettingRow(setting = s, onShortcutChanged = onShortcutChanged)
