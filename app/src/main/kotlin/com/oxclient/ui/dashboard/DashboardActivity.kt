@@ -71,6 +71,7 @@ import com.oxclient.session.SessionManager
 import com.oxclient.ui.overlay.OverlayService
 import com.oxclient.ui.theme.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 val SUPPORTED_PACKAGES = listOf(
@@ -437,6 +438,13 @@ private fun DashboardTab(
 
 @Composable
 private fun ConnectedBanner(onLaunchApp: () -> Unit) {
+    var showLaunchButton by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        delay(5000)
+        showLaunchButton = false
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
@@ -452,14 +460,24 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
             color = OxOnSurface,
             fontFamily = FontFamily.Monospace
         )
-        Text(
-            "Launch App",
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = OxAccentLight,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.clickable { onLaunchApp() }
-        )
+        AnimatedVisibility(
+            visible = showLaunchButton,
+            enter   = fadeIn(tween(150)),
+            exit    = fadeOut(tween(200))
+        ) {
+            Text(
+                "Launch App",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(OxAccent)
+                    .clickable { onLaunchApp() }
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            )
+        }
     }
 }
 
