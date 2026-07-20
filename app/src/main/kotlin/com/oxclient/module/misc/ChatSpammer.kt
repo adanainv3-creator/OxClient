@@ -8,6 +8,7 @@ import com.oxclient.module.ModuleCategory
 import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.MobEffectPacket
+import org.cloudburstmc.protocol.bedrock.packet.PlayerListPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
@@ -29,12 +30,11 @@ class ChatSpammer : BaseModule(
     private val shortcut = bool("Shortcut", false)
 
     private val popCounts = ConcurrentHashMap<String, Int>()
-    // Aynı totem pop'unu hem EntityEventPacket hem LevelEventPacket'ten
-    // iki kere saymamak için: entity runtimeId -> son sayım zamanı
     private val recentPopMs = ConcurrentHashMap<Long, Long>()
-    // 3. yedek yol: Regeneration + Absorption neredeyse aynı anda gelirse totem say
     private val pendingRegen      = ConcurrentHashMap<Long, Long>()
     private val pendingAbsorption = ConcurrentHashMap<Long, Long>()
+    private val recentDeathMs  = ConcurrentHashMap<Long, Long>()
+    private val recentLogoutMs = ConcurrentHashMap<Long, Long>()
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
@@ -56,14 +56,16 @@ class ChatSpammer : BaseModule(
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
-                if (!typeStr.contains("TOTEM")) return
 
+                if (typeStr.contains("DEATH")) {
+                    handleDeath(event.session, p.runtimeEntityId)
+                    return
+                }
+
+                if (!typeStr.contains("TOTEM")) return
                 handleTotemPop(event.session, p.runtimeEntityId)
             }
 
-            // Yedek tespit yolu: EntityEventPacket bir sebeple gelmezse/eşleşmezse,
-            // totem patladığında sunucunun her zaman yaydığı SOUND_TOTEM_USED
-            // ses olayından yakala (LevelEvent enum'unda "particle" değil "sound" olarak geçiyor).
             is LevelEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
 
@@ -71,15 +73,6 @@ class ChatSpammer : BaseModule(
                 if (!typeStr.contains("TOTEM")) return
 
                 val pos = p.position ?: return
-
-                // Önce bu bizim kendi totemimiz mi diye bak — patlama pozisyonu
-                // bize rakipten daha yakınsa (ya da 3 blok içindeyse) muhtemelen
-                // bizimdir, rakibe atfedip yanlış sayma.
-                val selfDx = EntityTracker.selfX - pos.x
-                val selfDy = EntityTracker.selfY - pos.y
-                val selfDz = EntityTracker.selfZ - pos.z
-                val selfDistSq = selfDx * selfDx + selfDy * selfDy + selfDz * selfDz
-                if (selfDistSq <= 9f) return
 
                 val nearest = EntityTracker.getAll()
                     .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
@@ -89,29 +82,31 @@ class ChatSpammer : BaseModule(
                     } ?: return
 
                 val dx = nearest.x - pos.x; val dy = nearest.y - pos.y; val dz = nearest.z - pos.z
-                if (dx * dx + dy * dy + dz * dz > 9f) return // 3 blok içinde değilse eşleştirme
+                val nearestDistSq = dx * dx + dy * dy + dz * dz
+                if (nearestDistSq > 9f) return
+
+                val selfDx = EntityTracker.selfX - pos.x
+                val selfDy = EntityTracker.selfY - pos.y
+                val selfDz = EntityTracker.selfZ - pos.z
+                val selfDistSq = selfDx * selfDx + selfDy * selfDy + selfDz * selfDz
+                if (selfDistSq <= nearestDistSq) return
 
                 handleTotemPop(event.session, nearest.runtimeId)
             }
 
-            // 3. yedek yol: totem patladığında oyuncuya (neredeyse) aynı anda
-            // Regeneration + Absorption efekti veriliyor — vanilla'da bu ikilinin
-            // aynı anda gelmesi pratikte sadece totem tepkisinde olur.
-            // MobEffectPacket'te effect bir enum değil, ham Bedrock effect ID'si (effectId):
-            // 10 = Regeneration, 22 = Absorption.
             is MobEffectPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
 
                 val eventStr = runCatching { p.event?.toString()?.uppercase() ?: "" }.getOrElse { "" }
-                if (!eventStr.contains("ADD")) return // sadece yeni eklenen efekt
+                if (!eventStr.contains("ADD")) return
 
                 val now = System.currentTimeMillis()
                 val rid = p.runtimeEntityId
 
                 when (p.effectId) {
-                    10 -> pendingRegen[rid] = now      // Regeneration
-                    22 -> pendingAbsorption[rid] = now // Absorption
+                    10 -> pendingRegen[rid] = now
+                    22 -> pendingAbsorption[rid] = now
                 }
 
                 val regenAt  = pendingRegen[rid]
@@ -120,6 +115,17 @@ class ChatSpammer : BaseModule(
                     pendingRegen.remove(rid)
                     pendingAbsorption.remove(rid)
                     handleTotemPop(event.session, rid)
+                }
+            }
+
+            is PlayerListPacket -> {
+                if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
+                if (p.action != PlayerListPacket.Action.REMOVE) return
+
+                p.entries.forEach { entry ->
+                    if (entry.entityId == EntityTracker.selfUniqueId) return@forEach
+                    val name = EntityTracker.getByUniqueId(entry.entityId)?.name?.takeIf { it.isNotEmpty() } ?: return@forEach
+                    handleLogout(event.session, entry.entityId, name)
                 }
             }
         }
@@ -131,6 +137,8 @@ class ChatSpammer : BaseModule(
         recentPopMs.clear()
         pendingRegen.clear()
         pendingAbsorption.clear()
+        recentDeathMs.clear()
+        recentLogoutMs.clear()
     }
 
     override fun onDisable() {
@@ -139,12 +147,14 @@ class ChatSpammer : BaseModule(
         recentPopMs.clear()
         pendingRegen.clear()
         pendingAbsorption.clear()
+        recentDeathMs.clear()
+        recentLogoutMs.clear()
     }
 
     private fun handleTotemPop(session: com.oxclient.core.relay.OxRelaySession, runtimeId: Long) {
         val now = System.currentTimeMillis()
         val last = recentPopMs[runtimeId]
-        if (last != null && now - last < 1500L) return // aynı pop iki kaynaktan da geldiyse tekrar sayma
+        if (last != null && now - last < 1500L) return
         recentPopMs[runtimeId] = now
 
         val entity = EntityTracker.getById(runtimeId)
@@ -154,7 +164,35 @@ class ChatSpammer : BaseModule(
 
         if (!session.isServerReady) return
 
-        val message = "> @$name Popped $count Totem $PVP_TAIL | ${randomJunk()}"
+        val message = "> @here @$name Popped $count Totem $PVP_TAIL | ${randomJunk()}"
+        session.sendToServer(buildTextPacket(message))
+    }
+
+    private fun handleDeath(session: com.oxclient.core.relay.OxRelaySession, runtimeId: Long) {
+        val now = System.currentTimeMillis()
+        val last = recentDeathMs[runtimeId]
+        if (last != null && now - last < 1500L) return
+        recentDeathMs[runtimeId] = now
+
+        val entity = EntityTracker.getById(runtimeId) ?: return
+        if (!entity.isPlayer) return
+        val name = entity.name.takeIf { it.isNotEmpty() } ?: return
+
+        if (!session.isServerReady) return
+
+        val message = "> @here GGS @$name killed by OxClient | ${randomJunk()}"
+        session.sendToServer(buildTextPacket(message))
+    }
+
+    private fun handleLogout(session: com.oxclient.core.relay.OxRelaySession, uniqueId: Long, name: String) {
+        val now = System.currentTimeMillis()
+        val last = recentLogoutMs[uniqueId]
+        if (last != null && now - last < 1500L) return
+        recentLogoutMs[uniqueId] = now
+
+        if (!session.isServerReady) return
+
+        val message = "> @$name Ez Logged | ${randomJunk()}"
         session.sendToServer(buildTextPacket(message))
     }
 

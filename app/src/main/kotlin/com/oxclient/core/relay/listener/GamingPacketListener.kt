@@ -5,6 +5,12 @@ import com.oxclient.core.relay.ConnectionManager
 import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.utils.BlockTracker
 import com.oxclient.utils.ChunkParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.launch
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleNamedDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
@@ -24,6 +30,11 @@ class GamingPacketListener : OxPacketListener {
 
     @Volatile private var itemComponentsApplied = false
 
+    // Chunk parse işlemi ağır olabiliyor (özellikle ışınlanma sonrası gelen chunk
+    // patlamasında) — bunu ağ paket işleme thread'inden ayırıp arka planda yapıyoruz
+    // ki relay paket akışını bloklamasın.
+    private val parserScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     override fun onSessionStart(session: OxRelaySession) {
         active = true
         itemComponentsApplied = false
@@ -32,6 +43,7 @@ class GamingPacketListener : OxPacketListener {
     override fun onSessionEnd(session: OxRelaySession) {
         active = false
         EntityTracker.reset()
+        parserScope.coroutineContext[Job]?.cancelChildren()
     }
 
     override fun onClientPacket(packet: BedrockPacket, session: OxRelaySession): Boolean {
@@ -133,14 +145,29 @@ class GamingPacketListener : OxPacketListener {
     }
 
     private fun handleChunk(pkt: LevelChunkPacket) {
-        val entities = try { ChunkParser.extractBlockEntities(pkt) } catch (e: Exception) {
-            return
-        }
-        if (entities.isEmpty()) return
-        for (be in entities) {
-            val id = be.tag.getString("id") ?: continue
-            val type = BlockTracker.resolveBlockName(id) ?: continue
-            BlockTracker.add(be.x, be.y, be.z, type)
+        // pkt.data, Netty'nin havuzlanmış ByteBuf'ı — bu handler döndükten sonra
+        // pipeline onu serbest bırakabilir/yeniden kullanabilir. Arka planda güvenle
+        // okuyabilmek için burada retain() ediyoruz, iş bitince release() ediyoruz.
+        val buf = try { pkt.data } catch (_: Throwable) { null }
+        if (buf == null) return
+        buf.retain()
+
+        parserScope.launch {
+            try {
+                val entities = try {
+                    ChunkParser.extractBlockEntities(pkt)
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                if (entities.isEmpty()) return@launch
+                for (be in entities) {
+                    val id = be.tag.getString("id") ?: continue
+                    val type = BlockTracker.resolveBlockName(id) ?: continue
+                    BlockTracker.add(be.x, be.y, be.z, type)
+                }
+            } finally {
+                buf.release()
+            }
         }
     }
 
