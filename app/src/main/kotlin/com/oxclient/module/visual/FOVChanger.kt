@@ -12,25 +12,15 @@ import org.cloudburstmc.protocol.bedrock.data.command.CommandPermission
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateAbilitiesPacket
 
-/**
- * ✅ EXTREME FOV CHANGER
- * 
- * GÜÇLENDIRMELER:
- *  - FOV: 110-300 → 110-540 (EXTREME wide)
- *  - walkSpeed: 0.1 → 0.01 base (10x daha agresif)
- *  - serverBound() + clientBound() dual sending
- *  - Multiplier tuning: daha agresif FOV→speed mapping
- */
 class FOVChanger : BaseModule(
     name        = "FOVChanger",
     category    = ModuleCategory.VISUAL,
     description = "Çok geniş görüş açısı (EXTREME FOV)"
 ) {
-    // ✅ FOV: 110 → 540 (5x daha geniş!)
     private val fov = float("FOV", 110f, 10f, 540f)
 
-    private val DEFAULT_FOV   = GameFov.VANILLA_DEFAULT  // Genellikle 70
-    private val DEFAULT_SPEED = 0.01f  // 0.1 → 0.01 (daha agresif)
+    private val DEFAULT_FOV   = GameFov.VANILLA_DEFAULT
+    private val DEFAULT_SPEED = 0.01f
 
     private var isFovApplied  = false
     private var appliedSpeed  = DEFAULT_SPEED
@@ -40,10 +30,8 @@ class FOVChanger : BaseModule(
         if (packet !is PlayerAuthInputPacket) return
 
         if (isEnabled) {
-            // ✅ AGRESIF HESAPLAMA: FOV → walkSpeed
-            // Formula: walkSpeed = baseSpeed * (FOV / vanillaFOV) * multiplier
             val fovRatio = (fov.value / DEFAULT_FOV).coerceAtLeast(1f)
-            val targetSpeed = DEFAULT_SPEED * fovRatio * 1.5f  // 1.5x extra multiplier
+            val targetSpeed = DEFAULT_SPEED * fovRatio * 1.5f
             
             if (!isFovApplied || appliedSpeed != targetSpeed) {
                 applySpeed(targetSpeed)
@@ -62,15 +50,12 @@ class FOVChanger : BaseModule(
     private fun applySpeed(speedValue: Float) {
         val session = PacketEventBus.currentSession ?: return
         
-        // ✅ DUO PAKET: clientBound + serverBound (tutarlılık için)
         try {
-            // Client→Server: player abilities update
             session.serverBound(buildAbilitiesPacket(EntityTracker.selfUniqueId, speedValue))
         } catch (e: Exception) {
         }
         
         try {
-            // Server→Client: visual feedback (clientBound fallback)
             session.clientBound(buildAbilitiesPacket(EntityTracker.selfUniqueId, speedValue))
         } catch (e: Exception) {
         }
@@ -85,7 +70,6 @@ class FOVChanger : BaseModule(
                 layerType = AbilityLayer.Type.BASE
                 abilitiesSet.addAll(Ability.entries.toTypedArray())
                 
-                // ✅ ALL ABILITIES ENABLED
                 abilityValues.addAll(
                     arrayOf(
                         Ability.BUILD,
@@ -99,11 +83,8 @@ class FOVChanger : BaseModule(
                     )
                 )
                 
-                // ✅ AGRESIF SPEED SETTING
-                this.walkSpeed = speedValue.coerceAtLeast(0.001f)  // Min 0.001f
-                this.flySpeed = speedValue * 2f  // Uçabilirse daha hızlı
-                this.mineSpeed = speedValue
-                this.buildSpeed = speedValue
+                this.walkSpeed = speedValue.coerceAtLeast(0.001f)
+                this.flySpeed = speedValue * 2f
             })
         }
     }
