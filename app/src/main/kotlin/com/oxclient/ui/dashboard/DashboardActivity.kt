@@ -37,6 +37,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -506,8 +507,13 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
 
     Row(
         modifier = Modifier.fillMaxWidth()
-            .padding(horizontal = (-24).dp)
-            .background(OxSurfaceRaised)
+            .drawBehind {
+                drawRect(
+                    color   = OxSurfaceRaised,
+                    topLeft = Offset(-24.dp.toPx(), 0f),
+                    size    = Size(size.width + 48.dp.toPx(), size.height)
+                )
+            }
             .padding(horizontal = 24.dp, vertical = 18.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -842,7 +848,7 @@ private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
     Column {
         HorizontalDivider(color = OxOutline)
         Row(
-            modifier = Modifier.fillMaxWidth().background(OxSkinTone)
+            modifier = Modifier.fillMaxWidth().background(Color.Black)
                 .navigationBarsPadding()
                 .padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
