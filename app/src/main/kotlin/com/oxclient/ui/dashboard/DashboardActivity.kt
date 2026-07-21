@@ -1057,6 +1057,11 @@ private fun AuthDialog(
                             fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         Text(authState.gamertag, fontSize = 18.sp, fontWeight = FontWeight.Bold,
                             color = OxOnBackground, fontFamily = FontFamily.Monospace)
+                        Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = OxAccent),
+                            shape = RoundedCornerShape(6.dp)
+                        ) { Text("SIGN IN WITH ANOTHER ACCOUNT", fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold, fontSize = 12.sp, textAlign = TextAlign.Center) }
                         Button(onClick = onSignOut, modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = OxError),
                             shape = RoundedCornerShape(6.dp)

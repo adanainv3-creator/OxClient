@@ -111,12 +111,12 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         lcReg.currentState = Lifecycle.State.CREATED
         wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        setupVolumeInterceptor()
         createChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotif())
+        if (mediaSession == null) setupVolumeInterceptor()
         showOverlay()
         lcReg.currentState = Lifecycle.State.RESUMED
         OverlayState.setOverlayVisible(true)
@@ -339,14 +339,21 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
 
         mediaSession = android.support.v4.media.session.MediaSessionCompat(this, "OxOverlayVolume").apply {
-            setPlaybackToRemote(provider)
+            setFlags(
+                android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
+                android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
             setPlaybackState(
                 android.support.v4.media.session.PlaybackStateCompat.Builder()
                     .setState(android.support.v4.media.session.PlaybackStateCompat.STATE_PLAYING, 0, 1f)
-                    .setActions(android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY)
+                    .setActions(
+                        android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY or
+                        android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY_PAUSE
+                    )
                     .build()
             )
             isActive = true
+            setPlaybackToRemote(provider)
         }
     }
 
@@ -366,7 +373,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         .build()
 }
 
-// ── Totem counter (sürüklenebilir) ───────────────────────────────────────────
 
 @Composable
 private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
@@ -425,7 +431,6 @@ private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
     }
 }
 
-// ── Hedef göstergesi (saydam, sürüklenebilir) ─────────────────────────────────
 
 @Composable
 private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
@@ -471,7 +476,6 @@ private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
     }
 }
 
-// ── Shortcut button (modern pill) ─────────────────────────────────────────────
 
 @Composable
 private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, onToggle: () -> Unit) {
@@ -512,7 +516,6 @@ private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, o
     }
 }
 
-// ── Menü sekmeleri (modül kategorileri + Config) ──────────────────────────────
 
 private enum class MenuSection(val displayName: String) {
     COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), FRIENDS("Friends"), CONFIG("Config")
@@ -527,7 +530,6 @@ private fun MenuSection.toModuleCategory(): ModuleCategory? = when (this) {
     MenuSection.CONFIG   -> null
 }
 
-// ── Ana menü ──────────────────────────────────────────────────────────────────
 
 @Composable
 private fun HileMenu(
@@ -556,7 +558,6 @@ private fun HileMenu(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
 
-            // ── Header ────────────────────────────────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -578,7 +579,7 @@ private fun HileMenu(
                                 RoundedCornerShape(20.dp))
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
-                        Text(if (relayActive) "Bagli" else "Bagli degil",
+                        Text(if (relayActive) "Connected" else "Disconnected",
                             fontSize = 9.sp,
                             color = if (relayActive) OxSuccess else OxError,
                             fontWeight = FontWeight.SemiBold)
@@ -599,7 +600,6 @@ private fun HileMenu(
 
             HorizontalDivider(color = OxOutlineStrong)
 
-            // ── Kategori sekmeler (yatay scroll) ──────────────────────────────
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -628,7 +628,6 @@ private fun HileMenu(
 
             HorizontalDivider(color = OxOutlineStrong)
 
-            // ── İçerik: modül listesi ya da Config ────────────────────────────
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 if (section == MenuSection.CONFIG) {
                     ConfigSection()
@@ -652,7 +651,6 @@ private fun HileMenu(
     }
 }
 
-// ── Config sekmesi (overlay içinden profil kaydet/yükle/sil) ──────────────────
 
 @Composable
 private fun ConfigSection() {
@@ -761,7 +759,6 @@ private fun ConfigProfileRow(
     }
 }
 
-// ── Friends sekmesi (isme göre ekle/çıkar, kill/tp aura'yı etkiler) ────────────
 
 @Composable
 private fun FriendsSection() {
@@ -783,7 +780,7 @@ private fun FriendsSection() {
                 value = newName,
                 onValueChange = { newName = it },
                 singleLine = true,
-                placeholder = { Text("Oyuncu adı", fontSize = 11.sp, color = OxOnSurfaceDim) },
+                placeholder = { Text("Player name", fontSize = 11.sp, color = OxOnSurfaceDim) },
                 modifier = Modifier.weight(1f),
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = OxOnSurface),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -805,7 +802,7 @@ private fun FriendsSection() {
                     }
                     .padding(horizontal = 14.dp, vertical = 12.dp)
             ) {
-                Text("Ekle", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text("Add", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
             }
         }
 
@@ -815,7 +812,7 @@ private fun FriendsSection() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "${friends.size} arkadaş • KillAura ve TPAura hedef almaz",
+                "${friends.size} friends • ignored by KillAura and TPAura",
                 fontSize = 10.sp,
                 color = OxOnSurfaceDim
             )
@@ -824,7 +821,7 @@ private fun FriendsSection() {
                     onClick = { FriendManager.clear(); refresh() },
                     colors = ButtonDefaults.textButtonColors(contentColor = OxError)
                 ) {
-                    Text("Tümünü sil", fontSize = 11.sp)
+                    Text("Clear all", fontSize = 11.sp)
                 }
             }
         }
@@ -833,7 +830,7 @@ private fun FriendsSection() {
 
         if (friends.isEmpty()) {
             Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("Henüz arkadaş eklenmedi.", fontSize = 12.sp, color = OxOnSurfaceDim)
+                Text("No friends added yet.", fontSize = 12.sp, color = OxOnSurfaceDim)
             }
         } else {
             LazyColumn(
@@ -872,12 +869,11 @@ private fun FriendRow(name: String, onRemove: () -> Unit) {
             modifier = Modifier.weight(1f)
         )
         TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = OxError)) {
-            Text("Sil", fontSize = 11.sp)
+            Text("Remove", fontSize = 11.sp)
         }
     }
 }
 
-// ── Modül kartı ───────────────────────────────────────────────────────────────
 
 @Composable
 private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
@@ -885,7 +881,6 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
 
-    // Aktif/açık kartlar için grimsi ton (yeşil değil); açıkken bir tık daha koyu gri.
     val cardBg = when {
         expanded -> OxModuleExpanded
         enabled  -> OxModuleActive
@@ -938,7 +933,6 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
             )
         }
 
-        // Ayarlar paneli: satıra basınca animasyonlu şekilde aşağı doğru açılır.
         AnimatedVisibility(
             visible = expanded && module.settings.isNotEmpty(),
             enter   = expandVertically(
@@ -965,7 +959,6 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
     }
 }
 
-// ── Ayar satırları ────────────────────────────────────────────────────────────
 
 @Composable
 private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit) {
@@ -1099,7 +1092,6 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
     }
 }
 
-// ── Shortcut toggle (modern pill checkbox) ────────────────────────────────────
 
 @Composable
 private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
