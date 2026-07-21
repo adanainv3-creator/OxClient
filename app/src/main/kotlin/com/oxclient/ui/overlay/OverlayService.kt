@@ -442,9 +442,8 @@ private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             color      = when {
-                count <= 0 -> OxError
-                count <= 2 -> Color(0xFFFFB347)
-                else       -> OxOnBackground
+                count > 5 -> Color.White
+                else      -> Color(0xFFFF453A)
             }
         )
     }
