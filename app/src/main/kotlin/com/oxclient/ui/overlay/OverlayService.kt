@@ -527,6 +527,7 @@ private fun MenuFab(onClick: () -> Unit, onDrag: (Float, Float) -> Unit) {
     }
 }
 
+@Composable
 private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, onToggle: () -> Unit) {
     var enabled    by remember { mutableStateOf(module.isEnabled) }
     var totalDrag  by remember { mutableFloatStateOf(0f) }
