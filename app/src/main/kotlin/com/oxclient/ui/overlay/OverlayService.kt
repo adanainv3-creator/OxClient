@@ -95,11 +95,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var menuView : ComposeView? = null
     private var totemView : ComposeView? = null
     private var targetView: ComposeView? = null
+    private var fabView   : ComposeView? = null
     private var espView  : ESPOverlayView? = null
     private val shortcutViews = mutableMapOf<String, ComposeView>()
 
     private var totemX = 16f; private var totemY = 16f
     private var targetX = 16f; private var targetY = 64f
+    private var fabX = 16f; private var fabY = 120f
     private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
 
     private lateinit var audioManager: AudioManager
@@ -229,6 +231,24 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             }
             wm.addView(targetView, targetParams)
 
+            val fabParams = overlayParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                fabX, fabY
+            )
+            fabView = composeView {
+                MenuFab(
+                    onClick = { toggleMenu() },
+                    onDrag  = { dx, dy ->
+                        fabX += dx; fabY += dy
+                        fabParams.x = fabX.roundToInt()
+                        fabParams.y = fabY.roundToInt()
+                        safeUpdate(fabView, fabParams)
+                    }
+                )
+            }
+            wm.addView(fabView, fabParams)
+
             refreshShortcuts()
             isAttached = true
         } catch (_: Exception) {}
@@ -308,10 +328,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun removeAllOverlays() {
         hideMenu()
-        listOfNotNull(totemView, targetView, espView).plus(shortcutViews.values).forEach { v ->
+        listOfNotNull(totemView, targetView, fabView, espView).plus(shortcutViews.values).forEach { v ->
             try { wm.removeViewImmediate(v) } catch (_: Exception) {}
         }
-        totemView = null; targetView = null; espView = null; shortcutViews.clear(); isAttached = false
+        totemView = null; targetView = null; fabView = null; espView = null; shortcutViews.clear(); isAttached = false
     }
 
     private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
@@ -478,6 +498,35 @@ private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
 
 
 @Composable
+private fun MenuFab(onClick: () -> Unit, onDrag: (Float, Float) -> Unit) {
+    var totalDrag  by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(Color(0xDD1C1C1E))
+            .border(1.5.dp, Color.White.copy(alpha = 0.55f), CircleShape)
+            .pointerInput(Unit) { detectTapGestures(onTap = { if (!isDragging) onClick() }) }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { isDragging = true; totalDrag = 0f },
+                    onDragEnd   = { isDragging = false; if (totalDrag < 12f) onClick() },
+                    onDrag      = { c, o -> c.consume(); totalDrag += abs(o.x) + abs(o.y); onDrag(o.x, o.y) }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "Ox",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+    }
+}
+
 private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, onToggle: () -> Unit) {
     var enabled    by remember { mutableStateOf(module.isEnabled) }
     var totalDrag  by remember { mutableFloatStateOf(0f) }
