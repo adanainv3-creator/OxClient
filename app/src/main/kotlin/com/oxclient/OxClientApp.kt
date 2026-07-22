@@ -1,4 +1,3 @@
-
 package com.oxclient
 
 import android.app.Application
@@ -18,6 +17,7 @@ import com.oxclient.module.combat.CrystalAura
 import com.oxclient.module.combat.KillAura
 import com.oxclient.module.combat.KillAuraPro
 import com.oxclient.module.misc.ChatSpammer
+import com.oxclient.module.misc.ChatAdvertiser
 import com.oxclient.module.misc.Disconnect
 import com.oxclient.module.movement.AntiKnockback
 import com.oxclient.module.movement.CreativeFly
@@ -90,6 +90,7 @@ class OxClientApp : Application() {
             ArrayListModule(),
             AutoArmor(),
             ChatSpammer(),
+            ChatAdvertiser(),
             Disconnect()
         )
     }
