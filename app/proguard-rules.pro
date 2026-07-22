@@ -1,0 +1,23 @@
+-dontwarn io.netty.**
+-keep class io.netty.** { *; }
+-keep class io.netty.util.internal.** { *; }
+-dontwarn org.cloudburstmc.**
+-keep class org.cloudburstmc.** { *; }
+-keepclassmembers class org.cloudburstmc.** { *; }
+-dontwarn org.bitbucket.b_c.jose4j.**
+-keep class org.bitbucket.b_c.jose4j.** { *; }
+-dontwarn com.google.gson.**
+-keep class com.google.gson.** { *; }
+-keep class * implements com.google.gson.TypeAdapterFactory
+-keep class * implements com.google.gson.JsonSerializer
+-keep class * implements com.google.gson.JsonDeserializer
+-keepattributes Signature, *Annotation*
+-keep class com.oxclient.**.model.** { *; }
+-keep class com.oxclient.**.config.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-keep class kotlinx.coroutines.** { *; }
+-dontwarn kotlinx.coroutines.**
+-keepattributes InnerClasses, EnclosingMethod
+-keep class com.oxclient.OxClientApp { *; }
+-keepclassmembers enum * { *; }
