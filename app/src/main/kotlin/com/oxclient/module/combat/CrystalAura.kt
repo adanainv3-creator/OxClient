@@ -47,6 +47,7 @@ class CrystalAura : BaseModule(
     private val autoObby        = true
     private val autoObbyDelay   = 50
     private val multiTarget     = bool ("Multi Target",   false)
+    private val shortcut        = bool ("Shortcut",       true)
     private val smartBreakRange = true
     private val smartBreakBoost = 5f
     private val autoReplace     = true
@@ -65,7 +66,7 @@ class CrystalAura : BaseModule(
     private val blockDefCache = ConcurrentHashMap<String, BlockDefinition>()
 
     private fun resolveCrystalSlot(): Pair<Int, ItemData>? {
-        if (!noSwitch.value) {
+        if (noSwitch.value) {
             val held = EntityTracker.getHeldItem() ?: return null
             if (held.count <= 0) return null
             val id = runCatching { held.definition?.identifier }.getOrNull()
