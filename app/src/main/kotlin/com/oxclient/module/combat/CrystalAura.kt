@@ -27,9 +27,15 @@ import kotlin.math.floor
 class CrystalAura : BaseModule(
     name        = "CrystalAura",
     category    = ModuleCategory.COMBAT,
-    description = "Rakip oyuncunun etrafına otomatik kristal yerleştirir ve patlatır"
+    description = "Rakip oyuncunun etrafına akıllı kristal yerleştirir ve patlatır"
 ) {
-    enum class Mode { Single, Full5x5, Square5, Nuke }
+    companion object {
+        private const val TICK_INTERVAL_MS = 10L
+        private const val CRYSTAL_POWER    = 6f
+        private const val CRYSTAL_RADIUS   = 15f
+        private const val MIN_DAMAGE        = 0.5f
+        private const val SINGLE_SEARCH_RADIUS = 2
+    }
 
     private val range           = 10f
     private val placeRange      = 8f
@@ -41,12 +47,9 @@ class CrystalAura : BaseModule(
     private val placeDelay      = 20
     private val breakDelay      = 20
     private val removeParticles = true
-    private val placeMode       = enum ("Place Mode",     Mode.Single)
-    private val breakMode       = enum ("Break Mode",     Mode.Single)
     private val noSwitch        = bool ("No Switch",      false)
     private val autoObby        = true
     private val autoObbyDelay   = 50
-    private val multiTarget     = bool ("Multi Target",   false)
     private val shortcut        = bool ("Shortcut",       true)
     private val smartBreakRange = true
     private val smartBreakBoost = 5f
@@ -155,18 +158,23 @@ class CrystalAura : BaseModule(
 
                 if (breakCrystals && breakAnywhere) doBreakAnywhere()
 
-                val targets = if (multiTarget.value) selectTargets() else listOfNotNull(selectTarget())
-                for (target in targets) {
-                    if (placeMode.value == Mode.Nuke) {
-                        doNuke(target)
-                    } else {
-                        if (breakCrystals && !breakAnywhere) doBreak(target)
-                        if (place)                doPlace(target)
-                    }
+                selectTarget()?.let { target ->
+                    if (breakCrystals && !breakAnywhere) doBreak(target)
+                    if (place) doPlace(target)
                 }
             }
-            delay(1L)
+            delay(TICK_INTERVAL_MS)
         }
+    }
+
+    private fun calculateCrystalDamage(crystalX: Float, crystalY: Float, crystalZ: Float, targetX: Float, targetY: Float, targetZ: Float): Float {
+        val dx = crystalX - targetX
+        val dy = crystalY - targetY
+        val dz = crystalZ - targetZ
+        val distance = kotlin.math.sqrt(dx*dx + dy*dy + dz*dz)
+        
+        if (distance >= CRYSTAL_RADIUS) return 0f
+        return ((1f - (distance / CRYSTAL_RADIUS)) * CRYSTAL_POWER).coerceAtLeast(0f)
     }
 
     private fun doBreakAnywhere() {
@@ -176,6 +184,8 @@ class CrystalAura : BaseModule(
 
         val session = PacketEventBus.currentSession ?: return
         val bRangeSq = breakRange * breakRange
+        
+        val selfHealth = EntityTracker.getSelfEntity()?.health ?: 20f
 
         val inRange = activeCrystals.entries.filter { (_, pos) ->
             val dx = pos.x - EntityTracker.selfX
@@ -187,9 +197,18 @@ class CrystalAura : BaseModule(
 
         lastBreakMsMap[-1L] = now
 
-        for ((rid, _) in inRange) {
+        // Filter high-damage crystals only
+        val highDamage = inRange.mapNotNull { (rid, pos) ->
+            val damage = calculateCrystalDamage(pos.x + 0.5f, pos.y + 1f, pos.z + 0.5f, 
+                EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+            if (damage >= MIN_DAMAGE || (suicide && selfHealth < 5f)) {
+                rid
+            } else null
+        }
+
+        // Break all high-damage crystals
+        for (rid in highDamage) {
             attackCrystal(rid, session)
-            activeCrystals.remove(rid)
         }
     }
 
@@ -245,7 +264,19 @@ class CrystalAura : BaseModule(
 
         lastPlaceMsMap[target.runtimeId] = now
 
-        for (pos in positions) tryPlaceAt(session, pos)
+        // Filter positions: only place crystals that deal damage to target
+        for (pos in positions) {
+            val crystalX = pos.x + 0.5f
+            val crystalY = pos.y + 1f
+            val crystalZ = pos.z + 0.5f
+            
+            val damage = calculateCrystalDamage(crystalX, crystalY, crystalZ, target.x, target.y, target.z)
+            
+            // Place only if damage >= MIN_DAMAGE or suicide mode and target low health
+            if (damage >= MIN_DAMAGE || (suicide && target.health < 5f)) {
+                tryPlaceAt(session, pos)
+            }
+        }
     }
 
     private fun tryPlaceAt(session: OxRelaySession, pos: PlacePos, ignorePending: Boolean = false): Boolean {
@@ -297,44 +328,6 @@ class CrystalAura : BaseModule(
         } catch (_: Exception) { false }
     }
 
-    private fun doNuke(target: EntityTracker.TrackedEntity) {
-        val session = PacketEventBus.currentSession ?: return
-
-        if (place && resolveCrystalSlot() != null) {
-            for (pos in getNukePositions(target)) tryPlaceAt(session, pos)
-        }
-
-        if (breakCrystals) {
-            val bRangeSq = effectiveBreakRange(target).let { it * it }
-            val inRange = activeCrystals.entries.filter { (_, pos) ->
-                val dx = pos.x - target.x; val dy = pos.y - target.y; val dz = pos.z - target.z
-                dx*dx + dy*dy + dz*dz <= bRangeSq
-            }
-            for ((rid, _) in inRange) {
-                attackCrystal(rid, session)
-                activeCrystals.remove(rid)
-            }
-        }
-    }
-
-    private fun getNukePositions(target: EntityTracker.TrackedEntity): List<PlacePos> {
-        val result = mutableListOf<PlacePos>()
-        val tx = floor(target.x).toInt()
-        val ty = floor(target.y).toInt()
-        val tz = floor(target.z).toInt()
-        val radius = kotlin.math.ceil(placeRange).toInt().coerceAtLeast(1)
-
-        for (dx in -radius..radius) {
-            for (dz in -radius..radius) {
-                val bx = tx + dx
-                val bz = tz + dz
-                val hit = findSurface(bx, ty, bz) ?: continue
-                result.add(PlacePos(bx, hit.y, bz, hit.blockId))
-            }
-        }
-        return result
-    }
-
     private fun crystalExistsAt(bx: Int, by: Int, bz: Int): Boolean {
         val cx = bx + 0.5f
         val cy = by + 1.0f
@@ -347,32 +340,7 @@ class CrystalAura : BaseModule(
     }
 
     private fun getPlacePositions(target: EntityTracker.TrackedEntity): List<PlacePos> {
-        if (placeMode.value == Mode.Square5) return getSquare5Positions(target)
-        if (placeMode.value == Mode.Single)  return getBestSinglePosition(target)
-
-        val result = mutableListOf<PlacePos>()
-        val tx = floor(target.x).toInt()
-        val ty = floor(target.y).toInt()
-        val tz = floor(target.z).toInt()
-        val radius = if (placeMode.value == Mode.Full5x5) 2 else 1
-
-        for (dx in -radius..radius) {
-            for (dz in -radius..radius) {
-                val bx = tx + dx
-                val bz = tz + dz
-
-                val hit = findSurface(bx, ty, bz) ?: continue
-
-                val distToTarget = MathUtil.dist3(
-                    bx + 0.5f, hit.y + 1f, bz + 0.5f,
-                    target.x, target.y + 1f, target.z
-                )
-                if (distToTarget > 5f) continue
-
-                result.add(PlacePos(bx, hit.y, bz, hit.blockId))
-            }
-        }
-        return result
+        return getBestSinglePosition(target)
     }
 
     private fun getBestSinglePosition(target: EntityTracker.TrackedEntity): List<PlacePos> {
@@ -381,26 +349,107 @@ class CrystalAura : BaseModule(
         val tz = floor(target.z).toInt()
 
         var best: PlacePos? = null
-        var bestDistSq = Float.MAX_VALUE
+        var bestDamage = -1f
 
-        for (dx in -1..1) {
-            for (dz in -1..1) {
+        for (dx in -SINGLE_SEARCH_RADIUS..SINGLE_SEARCH_RADIUS) {
+            for (dz in -SINGLE_SEARCH_RADIUS..SINGLE_SEARCH_RADIUS) {
                 val bx = tx + dx
                 val bz = tz + dz
-                val hit = findSurface(bx, ty, bz) ?: continue
 
-                val cx = bx + 0.5f
-                val cy = hit.y + 1f
-                val cz = bz + 0.5f
-                val d = MathUtil.dist3(cx, cy, cz, target.x, target.y + 1f, target.z)
-                val distSq = d * d
-                if (distSq < bestDistSq) {
-                    bestDistSq = distSq
-                    best = PlacePos(bx, hit.y, bz, hit.blockId)
+                for (hit in findSurfaceCandidates(bx, ty, bz)) {
+                    val cx = bx + 0.5f
+                    val cy = hit.y + 1f
+                    val cz = bz + 0.5f
+
+                    val distSelf = MathUtil.dist3(
+                        cx, cy, cz,
+                        EntityTracker.selfX, EntityTracker.selfY + 1.62f, EntityTracker.selfZ
+                    )
+                    if (distSelf > placeRange) continue
+
+                    val damage = estimateDamage(cx, cy, cz, target)
+                    if (damage <= 0f) continue
+
+                    if (damage > bestDamage) {
+                        bestDamage = damage
+                        best = PlacePos(bx, hit.y, bz, hit.blockId)
+                    }
                 }
             }
         }
         return listOfNotNull(best)
+    }
+
+    private fun findSurfaceCandidates(bx: Int, ty: Int, bz: Int): List<SurfaceHit> {
+        if (!WorldBlockTracker.hasAnyTerrainData()) {
+            return listOf(SurfaceHit(ty - 1, "minecraft:obsidian"))
+        }
+
+        val hits = mutableListOf<SurfaceHit>()
+        for (by in (ty - 3)..(ty + 2)) {
+            val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue
+            if (here != "minecraft:obsidian" && here != "minecraft:bedrock") continue
+
+            val above  = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)
+            val above2 = WorldBlockTracker.getBlockIdentifier(bx, by + 2, bz)
+            val clear1 = above  == null || above  == "minecraft:air"
+            val clear2 = above2 == null || above2 == "minecraft:air"
+            if (!clear1 || !clear2) continue
+
+            hits.add(SurfaceHit(by, here))
+        }
+        return hits
+    }
+
+    private fun estimateDamage(cx: Float, cy: Float, cz: Float, target: EntityTracker.TrackedEntity): Float {
+        val diameter = CRYSTAL_POWER * 2f
+        val dist = MathUtil.dist3(cx, cy, cz, target.x, target.y + 0.9f, target.z)
+        if (dist >= diameter) return 0f
+
+        val exposure = estimateExposure(cx, cy, cz, target)
+        if (exposure <= 0f) return 0f
+
+        val normalizedDist = dist / diameter
+        val impact = (1f - normalizedDist) * exposure
+        return (impact * impact + impact) / 2f * 7f * diameter + 1f
+    }
+
+    private val exposureOffsets = arrayOf(
+        floatArrayOf(0f, 0.1f, 0f),
+        floatArrayOf(0f, 0.9f, 0f),
+        floatArrayOf(0f, 1.6f, 0f),
+        floatArrayOf(0.3f, 0.9f, 0.3f),
+        floatArrayOf(-0.3f, 0.9f, -0.3f)
+    )
+
+    private fun estimateExposure(cx: Float, cy: Float, cz: Float, target: EntityTracker.TrackedEntity): Float {
+        if (!WorldBlockTracker.hasAnyTerrainData()) return 1f
+
+        var clear = 0
+        for (off in exposureOffsets) {
+            val tx = target.x + off[0]
+            val ty = target.y + off[1]
+            val tz = target.z + off[2]
+            if (hasLineOfSight(cx, cy, cz, tx, ty, tz)) clear++
+        }
+        return clear.toFloat() / exposureOffsets.size
+    }
+
+    private fun hasLineOfSight(x0: Float, y0: Float, z0: Float, x1: Float, y1: Float, z1: Float): Boolean {
+        val dx = x1 - x0; val dy = y1 - y0; val dz = z1 - z0
+        val dist = MathUtil.dist3(x0, y0, z0, x1, y1, z1)
+        if (dist < 0.1f) return true
+
+        val steps = (dist / 0.5f).toInt().coerceAtLeast(1)
+        for (i in 1 until steps) {
+            val t = i.toFloat() / steps
+            val bx = floor(x0 + dx * t).toInt()
+            val by = floor(y0 + dy * t).toInt()
+            val bz = floor(z0 + dz * t).toInt()
+            val id = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue
+            if (id != "minecraft:air") return false
+        }
+        return true
     }
 
     private fun getSquare5Positions(target: EntityTracker.TrackedEntity): List<PlacePos> {
@@ -473,23 +522,19 @@ class CrystalAura : BaseModule(
 
         lastBreakMsMap[target.runtimeId] = now
 
-        when (breakMode.value) {
-            Mode.Single -> {
-                val nearest = inRange.minByOrNull { (_, pos) ->
-                    val dx = pos.x - target.x; val dy = pos.y - target.y; val dz = pos.z - target.z
-                    dx*dx + dy*dy + dz*dz
-                }
-                nearest?.let { (rid, _) ->
-                    attackCrystal(rid, session)
-                    activeCrystals.remove(rid)
-                }
-            }
-            Mode.Full5x5, Mode.Square5, Mode.Nuke -> {
-                for ((rid, _) in inRange) {
-                    attackCrystal(rid, session)
-                    activeCrystals.remove(rid)
-                }
-            }
+        // Filter: only break crystals that deal significant damage to target
+        val highDamage = inRange.mapNotNull { (rid, pos) ->
+            val damage = calculateCrystalDamage(pos.x + 0.5f, pos.y + 1f, pos.z + 0.5f, target.x, target.y, target.z)
+            if (damage >= MIN_DAMAGE || (suicide && target.health < 5f)) {
+                rid to damage
+            } else null
+        }
+        
+        if (highDamage.isEmpty()) return
+
+        // Break all high-damage crystals (sorted by damage for optimal burst order)
+        highDamage.sortByDescending { (_, dmg) -> dmg }.forEach { (rid, _) ->
+            attackCrystal(rid, session)
         }
     }
 

@@ -17,7 +17,7 @@ class FOVChanger : BaseModule(
     category    = ModuleCategory.VISUAL,
     description = "Çok geniş görüş açısı (EXTREME FOV)"
 ) {
-    private val fov = float("FOV", 110f, 10f, 540f)
+    private val fov = float("FOV", 110f, -40f, 540f)
 
     private val DEFAULT_FOV   = GameFov.VANILLA_DEFAULT
     private val DEFAULT_SPEED = 0.01f
