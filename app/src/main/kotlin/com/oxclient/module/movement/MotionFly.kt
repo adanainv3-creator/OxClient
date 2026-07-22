@@ -1,3 +1,4 @@
+
 package com.oxclient.module.movement
 
 import com.oxclient.core.proxy.EntityTracker
@@ -49,6 +50,7 @@ class MotionFly : BaseModule(
                     Ability.ATTACK_MOBS,
                     Ability.OPERATOR_COMMANDS,
                     Ability.MAY_FLY,
+                    Ability.FLYING,
                     Ability.FLY_SPEED,
                     Ability.WALK_SPEED
                 )

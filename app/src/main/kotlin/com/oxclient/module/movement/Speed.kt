@@ -92,7 +92,17 @@ class Speed : BaseModule(
             abilityLayers.add(AbilityLayer().apply {
                 layerType = AbilityLayer.Type.BASE
                 abilitiesSet.addAll(Ability.entries.toTypedArray())
-                abilityValues.addAll(arrayOf(Ability.WALK_SPEED))
+                abilityValues.addAll(
+                    arrayOf(
+                        Ability.BUILD,
+                        Ability.MINE,
+                        Ability.DOORS_AND_SWITCHES,
+                        Ability.OPEN_CONTAINERS,
+                        Ability.ATTACK_PLAYERS,
+                        Ability.ATTACK_MOBS,
+                        Ability.WALK_SPEED
+                    )
+                )
                 walkSpeed = 0.1f
                 flySpeed  = 0.05f
             })
