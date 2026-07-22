@@ -184,8 +184,6 @@ class CrystalAura : BaseModule(
 
         val session = PacketEventBus.currentSession ?: return
         val bRangeSq = breakRange * breakRange
-        
-        val selfHealth = EntityTracker.getSelfEntity()?.health ?: 20f
 
         val inRange = activeCrystals.entries.filter { (_, pos) ->
             val dx = pos.x - EntityTracker.selfX
@@ -201,7 +199,7 @@ class CrystalAura : BaseModule(
         val highDamage = inRange.mapNotNull { (rid, pos) ->
             val damage = calculateCrystalDamage(pos.x + 0.5f, pos.y + 1f, pos.z + 0.5f, 
                 EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-            if (damage >= MIN_DAMAGE || (suicide && selfHealth < 5f)) {
+            if (damage >= MIN_DAMAGE || suicide) {
                 rid
             } else null
         }
@@ -533,7 +531,7 @@ class CrystalAura : BaseModule(
         if (highDamage.isEmpty()) return
 
         // Break all high-damage crystals (sorted by damage for optimal burst order)
-        highDamage.sortByDescending { (_, dmg) -> dmg }.forEach { (rid, _) ->
+        highDamage.sortedByDescending { (_, dmg) -> dmg }.forEach { (rid, _) ->
             attackCrystal(rid, session)
         }
     }
