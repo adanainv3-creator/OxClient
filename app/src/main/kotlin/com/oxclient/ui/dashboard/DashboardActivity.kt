@@ -6,6 +6,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -48,6 +51,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,9 +122,12 @@ class DashboardActivity : ComponentActivity() {
         setContent {
             OxClientTheme {
                 var unlocked by remember { mutableStateOf(false) }
+                var adsWatched by remember { mutableStateOf(false) }
 
                 if (!unlocked) {
                     PasswordGateScreen(onUnlock = { unlocked = true })
+                } else if (!adsWatched) {
+                    AdGateScreen(onContinue = { adsWatched = true })
                 } else {
                     val authState   by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
                     val relayActive by SessionManager.isActive.collectAsStateWithLifecycle()
@@ -286,6 +293,35 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun AdGateScreen(onContinue: () -> Unit) {
+    var handled by remember { mutableStateOf(false) }
+
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            WebView(context).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                webViewClient = WebViewClient()
+                addJavascriptInterface(
+                    object {
+                        @JavascriptInterface
+                        fun continueToApp() {
+                            if (!handled) {
+                                handled = true
+                                android.os.Handler(android.os.Looper.getMainLooper()).post { onContinue() }
+                            }
+                        }
+                    },
+                    "AdBridge"
+                )
+                loadUrl("https://oxclient.com.tr/ads.html")
+            }
+        }
+    )
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
