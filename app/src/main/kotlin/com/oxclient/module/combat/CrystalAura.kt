@@ -32,11 +32,12 @@ class CrystalAura : BaseModule(
     description = "Multi-target auto crystal placement with self-sustaining obsidian supply"
 ) {
     companion object {
-        private const val TICK_INTERVAL_MS = 10L
+        private const val TICK_INTERVAL_MS = 40L
         private const val CRYSTAL_POWER    = 6f
         private const val MIN_DAMAGE       = 0.5f
         private const val SEARCH_RADIUS    = 2
         private const val SELF_EYE_HEIGHT  = 1.62f
+        private const val MAX_BREAKS_PER_TICK = 3
     }
 
     private val place            = bool("Place",              true)
@@ -45,11 +46,12 @@ class CrystalAura : BaseModule(
     private val suicide          = bool("Suicide",              true)
     private val noSwitch         = bool("No Switch",           true)
     private val noParticles      = bool("No Particle",         true)
+    private val shortcut         = bool("Shortcut",            true)
 
     private val targetRange      = int ("Target Range",   14, 4, 30)
     private val placeRange       = int ("Place Range",      8, 2, 16)
-    private val placeDelayMs     = int ("Place Delay",     100, 20, 2000)
-    private val maxPlacePerSec   = int ("Max Place/Sec",    10, 1, 30)
+    private val placeDelayMs     = int ("Place Delay",     120, 40, 2000)
+    private val maxPlacePerSec   = int ("Max Place/Sec",     8, 1, 30)
     private val placeRetryMs     = int ("Place Retry Ms",  400, 100, 3000)
     private val predictMovement  = bool("Predict Movement",  true)
     private val predictAheadMs   = int ("Predict Ahead Ms", 150, 0, 500)
@@ -60,18 +62,18 @@ class CrystalAura : BaseModule(
 
     private val burstOnLowHpTotem   = bool("Burst LowHp/Totem",    true)
     private val burstHealth         = int ("Burst Health Threshold", 8, 1, 20)
-    private val burstMaxPlacePerSec = int ("Burst Max Place/Sec",   20, 1, 40)
+    private val burstMaxPlacePerSec = int ("Burst Max Place/Sec",   15, 1, 40)
     private val burstDurationMs     = int ("Burst Duration Ms",   1500, 200, 5000)
     private val friendSkip          = bool("Friend Skip",           true)
 
     private val autoObsidian        = bool("Auto Obsidian",        true)
-    private val autoObsidianDelayMs = int ("Auto Obsidian Delay", 150, 50, 1000)
+    private val autoObsidianDelayMs = int ("Auto Obsidian Delay", 180, 50, 1000)
 
     private val selfSurround        = bool("Self Surround",        true)
-    private val selfSurroundDelayMs = int ("Self Surround Delay", 200, 50, 2000)
+    private val selfSurroundDelayMs = int ("Self Surround Delay", 250, 50, 2000)
 
     private val breakRange       = int ("Break Range",     10, 2, 20)
-    private val breakDelayMs     = int ("Break Delay",       0, 0, 300)
+    private val breakDelayMs     = int ("Break Delay",      60, 30, 300)
     private val breakAll         = bool("Break All",          true)
 
     private val activeCrystals   = ConcurrentHashMap<Long, Vector3f>()
@@ -201,11 +203,18 @@ class CrystalAura : BaseModule(
     }
 
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
+        if (EntityTracker.selfRuntimeId <= 0L) return emptyList()
         val rangeSq = targetRange.value.toFloat().let { it * it }
         return EntityTracker.getAll()
             .asSequence()
             .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { !friendSkip.value || !it.isFriendEntity }
+            .filter { e ->
+                // Ek güvenlik: ID eşleşmesi (respawn sonrası selfRuntimeId bayatlamış olabilir)
+                // bozulsa bile, kendi anlık pozisyonunla çakışan bir entity asla hedef olmasın.
+                val selfDist = MathUtil.dist3(e.x, e.y, e.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                selfDist > 0.15f
+            }
             .filter { e ->
                 val dx = e.x - EntityTracker.selfX
                 val dy = e.y - EntityTracker.selfY
@@ -420,7 +429,7 @@ class CrystalAura : BaseModule(
                     EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
                 if (dmg >= MIN_DAMAGE || suicide.value) rid else null
             }
-        }
+        }.take(MAX_BREAKS_PER_TICK)
         for (rid in toBreak) attackCrystal(rid, session)
     }
 
