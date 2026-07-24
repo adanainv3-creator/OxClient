@@ -76,6 +76,19 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val uniqueToRuntime = ConcurrentHashMap<Long, Long>()
     private val playerNames     = ConcurrentHashMap<Long, String>()
 
+    private val playerCounter  = java.util.concurrent.atomic.AtomicInteger(0)
+    private val hostileCounter = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private fun trackAdd(e: TrackedEntity) {
+        if (e.isPlayer) playerCounter.incrementAndGet()
+        else if (e.isHostile) hostileCounter.incrementAndGet()
+    }
+
+    private fun trackRemove(e: TrackedEntity) {
+        if (e.isPlayer) playerCounter.decrementAndGet()
+        else if (e.isHostile) hostileCounter.decrementAndGet()
+    }
+
     private val selfInventory = ConcurrentHashMap<Int, ItemData>()
 
     @Volatile var selfRuntimeId  : Long    = 0L
@@ -113,6 +126,7 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
+        playerCounter.set(0); hostileCounter.set(0)
         selfInventory.clear()
         selfRuntimeId = 0L; selfUniqueId = 0L
         selfX = 0f; selfY = 0f; selfZ = 0f; selfYaw = 0f; selfPitch = 0f
@@ -124,12 +138,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         _entityCountFlow.value = 0; _selfHealthFlow.value = 20f
     }
 
-    private val seenPacketTypes = ConcurrentHashMap<String, Boolean>()
-
     override fun onPacket(event: PacketEvent) {
-        val typeName = event.packetName
-        seenPacketTypes.putIfAbsent(typeName, true)
-
         when (val p = event.packet) {
             is StartGamePacket          -> handleStartGame(p)
             is AddEntityPacket          -> handleAddEntity(p)
@@ -189,6 +198,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         )
         // Önce entity'yi kaydet, metadata'yı IO thread dışında decode et
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
+        trackAdd(e)
         notifyUpdate()
         val meta = try { p.metadata } catch (_: Exception) { null }
         if (meta != null) {
@@ -216,6 +226,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         )
         // Önce entity'yi kaydet, metadata'yı IO thread dışında decode et
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
+        trackAdd(e)
         notifyUpdate()
         val meta = try { p.metadata } catch (_: Exception) { null }
         if (meta != null) {
@@ -225,7 +236,10 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     private fun handleRemoveEntity(p: RemoveEntityPacket) {
         val rid = uniqueToRuntime.remove(p.uniqueEntityId)
-        if (rid != null) { entities.remove(rid); notifyUpdate() }
+        if (rid != null) {
+            entities.remove(rid)?.let { trackRemove(it) }
+            notifyUpdate()
+        }
     }
 
     private fun handleMoveAbsolute(p: MoveEntityAbsolutePacket) {
@@ -243,8 +257,12 @@ object EntityTracker : PacketEventBus.PacketListener {
         val flags: Set<*>? = try { p.flags } catch (_: Exception) { null }
 
         if (flags != null && flags.isNotEmpty()) {
+            // Bu paket her hareket eden entity için her tick'te geliyor - flag başına
+            // toString()+uppercase() eskiden her tick her entity için yeni bir String
+            // allocate ediyordu (GC baskısı = FPS düşüşü). Enum sabit isimleri zaten
+            // büyük harf olduğundan uppercase() gereksizdi, kaldırıldı.
             for (flag in flags) {
-                when (flag.toString().uppercase()) {
+                when (flag.toString()) {
                     "HAS_X"        -> e.x       += p.x
                     "HAS_Y"        -> e.y       += p.y
                     "HAS_Z"        -> e.z       += p.z
@@ -344,6 +362,33 @@ object EntityTracker : PacketEventBus.PacketListener {
         }
     }
 
+    // PlayerListEntry sınıfı için ping alanı reflection'ı bir kere çözülüp cache'leniyor.
+    // Öncesinde her oyuncu girişi için, her PlayerListPacket'te getDeclaredField() ile
+    // yeniden çözülüyordu — reflection lookup pahalıdır ve tekrar tekrar yapılmasına
+    // gerek yok, alan adı/tipi paket boyunca değişmiyor.
+    private object PingFieldCache {
+        @Volatile private var resolved = false
+        @Volatile private var field: java.lang.reflect.Field? = null
+
+        fun getPing(entry: Any): Int {
+            if (!resolved) {
+                synchronized(this) {
+                    if (!resolved) {
+                        field = runCatching {
+                            entry.javaClass.getDeclaredField("latencyMs").also { it.isAccessible = true }
+                        }.getOrElse {
+                            runCatching {
+                                entry.javaClass.getDeclaredField("latency").also { it.isAccessible = true }
+                            }.getOrNull()
+                        }
+                        resolved = true
+                    }
+                }
+            }
+            return runCatching { field?.getInt(entry) ?: 0 }.getOrElse { 0 }
+        }
+    }
+
     private fun handlePlayerList(p: PlayerListPacket) {
         if (p.action != PlayerListPacket.Action.ADD) {
             p.entries.forEach { playerNames.remove(it.entityId) }
@@ -354,20 +399,10 @@ object EntityTracker : PacketEventBus.PacketListener {
             val name = entry.name ?: return@forEach
             playerNames[entry.entityId] = name
             if (rid != null) {
-                entities[rid]?.name = name
-
-                val ping = runCatching {
-                    entry.javaClass.getDeclaredField("latencyMs")
-                        .also { it.isAccessible = true }
-                        .getInt(entry)
-                }.getOrElse {
-                    runCatching {
-                        entry.javaClass.getDeclaredField("latency")
-                            .also { it.isAccessible = true }
-                            .getInt(entry)
-                    }.getOrElse { 0 }
+                entities[rid]?.let {
+                    it.name   = name
+                    it.pingMs = PingFieldCache.getPing(entry)
                 }
-                entities[rid]?.pingMs = ping
             }
         }
     }
@@ -375,7 +410,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     private fun handleEntityEvent(p: EntityEventPacket) {
         val e = entities[p.runtimeEntityId] ?: return
         try {
-            val typeName = p.type?.toString()?.uppercase() ?: return
+            val typeName = p.type?.toString() ?: return
             when {
                 typeName.contains("HURT")  -> e.hurtTime  = 10
                 typeName.contains("DEATH") -> e.deathAnim = true
@@ -387,6 +422,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfDimension = p.dimension
         selfX = p.position.x; selfY = p.position.y; selfZ = p.position.z
         entities.clear(); uniqueToRuntime.clear()
+        playerCounter.set(0); hostileCounter.set(0)
         notifyUpdate()
     }
 
@@ -396,7 +432,7 @@ object EntityTracker : PacketEventBus.PacketListener {
 
             val riderRid  = uniqueToRuntime[link.to]   ?: return
             val rider     = entities[riderRid]          ?: return
-            val typeStr   = link.type?.toString()?.uppercase() ?: ""
+            val typeStr   = link.type?.toString() ?: ""
 
             when {
                 typeStr.contains("RIDER") || typeStr.contains("PASSENGER") || typeStr.contains("VEHICLE") -> {
@@ -513,17 +549,39 @@ object EntityTracker : PacketEventBus.PacketListener {
     fun getByUniqueId(uid: Long) = uniqueToRuntime[uid]?.let { entities[it] }
     fun getByName(name: String)  = entities.values.firstOrNull { it.name.equals(name, ignoreCase = true) }
 
-    fun getEntitiesInRange(range: Float): List<TrackedEntity> {
+    // Bu sorgular render/combat modülleri tarafından her frame çağrılabiliyor. Eskiden
+    // range + type için ayrı ayrı .filter{} zincirleri her çağrıda birden fazla ArrayList
+    // allocate ediyordu. Şimdi tek geçişte (single-pass), gereksiz ara liste olmadan filtreleniyor.
+    fun getEntitiesInRange(range: Float, predicate: (TrackedEntity) -> Boolean = { true }): List<TrackedEntity> {
         val r2 = range * range
-        return entities.values.filter { MathUtil.dist3sq(it.x, it.y, it.z, selfX, selfY, selfZ) <= r2 }
+        val out = ArrayList<TrackedEntity>()
+        for (e in entities.values) {
+            if (MathUtil.dist3sq(e.x, e.y, e.z, selfX, selfY, selfZ) <= r2 && predicate(e)) out.add(e)
+        }
+        return out
     }
 
-    fun getPlayers (range: Float = Float.MAX_VALUE) = getEntitiesInRange(range).filter { it.isPlayer }
-    fun getHostiles(range: Float = Float.MAX_VALUE) = getEntitiesInRange(range).filter { it.isHostile }
-    fun getCrystals(range: Float = Float.MAX_VALUE) = getEntitiesInRange(range).filter { it.isCrystal }
+    fun getPlayers (range: Float = Float.MAX_VALUE) = getEntitiesInRange(range) { it.isPlayer }
+    fun getHostiles(range: Float = Float.MAX_VALUE) = getEntitiesInRange(range) { it.isHostile }
+    fun getCrystals(range: Float = Float.MAX_VALUE) = getEntitiesInRange(range) { it.isCrystal }
 
-    fun getNearestPlayer (range: Float) = getPlayers(range) .minByOrNull { distanceTo(it) }
-    fun getNearestHostile(range: Float) = getHostiles(range).minByOrNull { distanceTo(it) }
+    // Sadece en yakını bulmak için gerçek mesafe (sqrt) gerekmez — sıralama karesi alınmış
+    // mesafeyle aynıdır. sqrt() maliyeti ve ara liste allokasyonu tamamen kaldırıldı: tek
+    // geçişte, allocation yapmadan hem filtreleme hem "en yakın" karşılaştırması yapılıyor.
+    private inline fun nearestInRange(range: Float, predicate: (TrackedEntity) -> Boolean): TrackedEntity? {
+        val r2 = range * range
+        var best: TrackedEntity? = null
+        var bestD2 = Float.MAX_VALUE
+        for (e in entities.values) {
+            if (!predicate(e)) continue
+            val d2 = MathUtil.dist3sq(e.x, e.y, e.z, selfX, selfY, selfZ)
+            if (d2 <= r2 && d2 < bestD2) { bestD2 = d2; best = e }
+        }
+        return best
+    }
+
+    fun getNearestPlayer (range: Float) = nearestInRange(range) { it.isPlayer }
+    fun getNearestHostile(range: Float) = nearestInRange(range) { it.isHostile }
 
     fun distanceTo(e: TrackedEntity)             = MathUtil.dist3(e.x, e.y, e.z, selfX, selfY, selfZ)
     fun distanceTo(x: Float, y: Float, z: Float) = MathUtil.dist3(x, y, z, selfX, selfY, selfZ)
@@ -540,14 +598,17 @@ object EntityTracker : PacketEventBus.PacketListener {
     fun isLowHealth(t: Float = 6f)      = selfHealth <= t
     fun isCriticalHealth(t: Float = 3f) = selfHealth <= t
 
+    // playerCount()/hostileCount() her çağrıda tüm entity haritasını taramak yerine
+    // artık add/remove noktalarında güncellenen sayaçları okuyor (O(1), her frame HUD
+    // tarafından çağrılsa bile maliyetsiz).
     fun count()        = entities.size
-    fun playerCount()  = entities.values.count { it.isPlayer }
-    fun hostileCount() = entities.values.count { it.isHostile }
+    fun playerCount()  = playerCounter.get()
+    fun hostileCount() = hostileCounter.get()
 
     fun removeStale(maxAgeMs: Long = 30_000L) {
         val cutoff = System.currentTimeMillis() - maxAgeMs
         val stale  = entities.entries.filter { it.value.lastUpdateMs < cutoff }
-        stale.forEach { (rid, e) -> entities.remove(rid); uniqueToRuntime.remove(e.uniqueId) }
+        stale.forEach { (rid, e) -> entities.remove(rid); uniqueToRuntime.remove(e.uniqueId); trackRemove(e) }
         if (stale.isNotEmpty()) { notifyUpdate() }
     }
 

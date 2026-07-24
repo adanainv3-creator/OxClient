@@ -5,6 +5,7 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
+import com.oxclient.module.social.isFriendEntity
 import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.MobEffectPacket
@@ -16,6 +17,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 class ChatSpammer : BaseModule(
@@ -29,6 +31,9 @@ class ChatSpammer : BaseModule(
         private const val PVP_TAIL     = "by OxClient | Best Mobile Client"
         private const val QUEUE_DELAY_MS = 2000L
         private const val MAX_QUEUE_SIZE = 20
+        private const val LOGOUT_RANGE = 256f
+        private const val TOTEM_EVENT_RADIUS = 3f
+        private const val SELF_MARGIN = 1.5f
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
         private val JUNK_RANGE = 12..22
     }
@@ -95,14 +100,14 @@ class ChatSpammer : BaseModule(
                     } ?: return
 
                 val dx = nearest.x - pos.x; val dy = nearest.y - pos.y; val dz = nearest.z - pos.z
-                val nearestDistSq = dx * dx + dy * dy + dz * dz
-                if (nearestDistSq > 9f) return
+                val nearestDist = sqrt(dx * dx + dy * dy + dz * dz)
+                if (nearestDist > TOTEM_EVENT_RADIUS) return
 
                 val selfDx = EntityTracker.selfX - pos.x
                 val selfDy = EntityTracker.selfY - pos.y
                 val selfDz = EntityTracker.selfZ - pos.z
-                val selfDistSq = selfDx * selfDx + selfDy * selfDy + selfDz * selfDz
-                if (selfDistSq <= nearestDistSq) return
+                val selfDist = sqrt(selfDx * selfDx + selfDy * selfDy + selfDz * selfDz)
+                if (selfDist <= nearestDist + SELF_MARGIN) return
 
                 handleTotemPop(nearest.runtimeId)
             }
@@ -144,7 +149,18 @@ class ChatSpammer : BaseModule(
 
                 p.entries.forEach { entry ->
                     if (entry.entityId == EntityTracker.selfUniqueId) return@forEach
-                    val name = EntityTracker.getByUniqueId(entry.entityId)?.name?.takeIf { it.isNotEmpty() }
+
+                    val tracked = EntityTracker.getByUniqueId(entry.entityId)
+                    if (tracked == null || EntityTracker.distanceTo(tracked) > LOGOUT_RANGE) {
+                        knownPlayerNames.remove(entry.entityId)
+                        return@forEach
+                    }
+                    if (tracked.isFriendEntity) {
+                        knownPlayerNames.remove(entry.entityId)
+                        return@forEach
+                    }
+
+                    val name = tracked.name.takeIf { it.isNotEmpty() }
                         ?: knownPlayerNames[entry.entityId]
                         ?: return@forEach
                     knownPlayerNames.remove(entry.entityId)
@@ -198,12 +214,14 @@ class ChatSpammer : BaseModule(
     }
 
     private fun handleTotemPop(runtimeId: Long) {
+        val entity = EntityTracker.getById(runtimeId)
+        if (entity?.isFriendEntity == true) return
+
         val now = System.currentTimeMillis()
         val last = recentPopMs[runtimeId]
         if (last != null && now - last < 1500L) return
         recentPopMs[runtimeId] = now
 
-        val entity = EntityTracker.getById(runtimeId)
         val name  = entity?.name?.takeIf { it.isNotEmpty() } ?: "unknown"
         val count = (popCounts[name] ?: 0) + 1
         popCounts[name] = count
@@ -212,16 +230,18 @@ class ChatSpammer : BaseModule(
     }
 
     private fun handleDeath(runtimeId: Long) {
+        val entity = EntityTracker.getById(runtimeId) ?: return
+        if (!entity.isPlayer) return
+        if (entity.isFriendEntity) return
+
         val now = System.currentTimeMillis()
         val last = recentDeathMs[runtimeId]
         if (last != null && now - last < 1500L) return
         recentDeathMs[runtimeId] = now
 
-        val entity = EntityTracker.getById(runtimeId) ?: return
-        if (!entity.isPlayer) return
         val name = entity.name.takeIf { it.isNotEmpty() } ?: return
 
-        enqueue("> @here GGS @$name killed by OxClient | ${randomJunk()}")
+        enqueue("> @here EZ @$name killed by OxClient | ${randomJunk()}")
     }
 
     private fun handleLogout(uniqueId: Long, name: String) {

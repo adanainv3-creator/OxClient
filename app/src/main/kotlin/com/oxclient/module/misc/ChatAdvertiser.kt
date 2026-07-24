@@ -6,7 +6,11 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
+import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginData
+import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginType
+import org.cloudburstmc.protocol.bedrock.packet.CommandRequestPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -27,7 +31,17 @@ class ChatAdvertiser : BaseModule(
         "> @here tpa pvp 1v1 little kiddos | %RANDOM% | OxClient",
         "> @here 1v1 tpa pvp all ez | %RANDOM% | OxClient",
         "> @here tpa to pvp nns | %RANDOM% | OxClient",
-        "> @here tpa for pvp all EZZ | %RANDOM% | OxClient"
+        "> @here tpa for pvp all EZZ | %RANDOM% | OxClient",
+        "> @here tpa 1v1 im bored fr | %RANDOM% | OxClient",
+        "> @here anyone tpa pvp cant be that scared | %RANDOM% | OxClient",
+        "> @here tpa pvp free win here | %RANDOM% | OxClient",
+        "> @here tpa 1v1 no crystal easy | %RANDOM% | OxClient",
+        "> @here tpa pvp lets go who wants smoke | %RANDOM% | OxClient",
+        "> @here tpa all cracked pvpers welcome | %RANDOM% | OxClient",
+        "> @here tpa pvp best client wins obviously | %RANDOM% | OxClient",
+        "> @here tpa 1v1 quick fight nobody scared right | %RANDOM% | OxClient",
+        "> @here tpa pvp bring your best totem | %RANDOM% | OxClient",
+        "> @here tpa pvp all skill issue if you decline | %RANDOM% | OxClient"
     )
 
     private val junkChars = "abcdefghjklmnopqrstuvwxyz0123456789"
@@ -47,7 +61,7 @@ class ChatAdvertiser : BaseModule(
         scheduler = Executors.newSingleThreadScheduledExecutor().also { exec ->
             when (mode.value) {
                 Mode.TPA -> {
-                    exec.scheduleAtFixedRate({ sendTpaMessage() }, 0, 500, TimeUnit.MILLISECONDS)
+                    exec.scheduleAtFixedRate({ sendTpaCommand() }, 0, 500, TimeUnit.MILLISECONDS)
                 }
                 Mode.PVP -> {
                     exec.scheduleAtFixedRate({ sendPvpMessage() }, 0, 3000, TimeUnit.MILLISECONDS)
@@ -72,13 +86,13 @@ class ChatAdvertiser : BaseModule(
         activeSession = event.session
     }
 
-    private fun sendTpaMessage() {
+    private fun sendTpaCommand() {
         val session = activeSession ?: return
         val randomLetter = junkChars[Random.nextInt(junkChars.length)]
-        val message = "/tpa $randomLetter"
+        val command = "tpa $randomLetter"
 
         try {
-            session.sendToServer(buildTextPacket(message))
+            session.sendToServer(buildCommandPacket(command))
         } catch (e: Exception) {
         }
     }
@@ -104,7 +118,7 @@ class ChatAdvertiser : BaseModule(
             .forEach { player ->
                 val currentDist = EntityTracker.distanceTo(player)
                 val lastDist = playerLastDistances[player.runtimeId] ?: currentDist
-                
+
                 playerLastDistances[player.runtimeId] = currentDist
 
                 // Oyuncu 2 blok+ uzaklaşıyorsa "kaçıyor"
@@ -120,7 +134,7 @@ class ChatAdvertiser : BaseModule(
 
                         val selectedMsg = messages[Random.nextInt(messages.size)]
                             .replace("%RANDOM%", randomJunk())
-                        
+
                         try {
                             session.sendToServer(buildTextPacket(selectedMsg))
                         } catch (e: Exception) {
@@ -138,6 +152,16 @@ class ChatAdvertiser : BaseModule(
         platformChatId     = ""
         setMessage(message)
         setFilteredMessage("")
+    }
+
+    private fun buildCommandPacket(command: String): CommandRequestPacket = CommandRequestPacket().apply {
+        this.command = command
+        this.commandOriginData = CommandOriginData().apply {
+            type = CommandOriginType.PLAYER
+            uuid = UUID.randomUUID()
+            requestId = ""
+        }
+        isInternal = false
     }
 
     private fun randomJunk(): String {
