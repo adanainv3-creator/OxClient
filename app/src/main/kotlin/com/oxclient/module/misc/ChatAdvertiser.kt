@@ -156,11 +156,12 @@ class ChatAdvertiser : BaseModule(
 
     private fun buildCommandPacket(command: String): CommandRequestPacket = CommandRequestPacket().apply {
         this.command = command
-        this.commandOriginData = CommandOriginData().apply {
-            type = CommandOriginType.PLAYER
-            uuid = UUID.randomUUID()
-            requestId = ""
-        }
+        this.commandOriginData = CommandOriginData(
+            CommandOriginType.PLAYER,
+            UUID.randomUUID(),
+            "",
+            0L
+        )
         isInternal = false
     }
 
