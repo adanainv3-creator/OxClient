@@ -203,7 +203,7 @@ class DashboardActivity : ComponentActivity() {
         }
 }
 
-private fun verifyPasswordRemote(password: String): Boolean {
+private fun verifyPasswordRemote(email: String, password: String): Boolean {
     return try {
         val conn = java.net.URL("https://oxclient.com.tr/verify")
             .openConnection() as java.net.HttpURLConnection
@@ -213,7 +213,13 @@ private fun verifyPasswordRemote(password: String): Boolean {
         conn.readTimeout = 8000
         conn.setRequestProperty("Content-Type", "application/json")
         conn.outputStream.use {
-            it.write(org.json.JSONObject().put("password", password).toString().toByteArray())
+            it.write(
+                org.json.JSONObject()
+                    .put("email", email)
+                    .put("password", password)
+                    .toString()
+                    .toByteArray()
+            )
         }
         val body = conn.inputStream.bufferedReader().use { it.readText() }
         org.json.JSONObject(body).optBoolean("valid", false)
@@ -224,17 +230,18 @@ private fun verifyPasswordRemote(password: String): Boolean {
 
 @Composable
 private fun PasswordGateScreen(onUnlock: () -> Unit) {
+    var email by remember { mutableStateOf("") }
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun trySubmit() {
-        if (loading || input.isBlank()) return
+        if (loading || input.isBlank() || email.isBlank()) return
         loading = true
         error = false
         scope.launch {
-            val valid = withContext(Dispatchers.IO) { verifyPasswordRemote(input) }
+            val valid = withContext(Dispatchers.IO) { verifyPasswordRemote(email.trim(), input) }
             loading = false
             if (valid) onUnlock() else { error = true; input = "" }
         }
@@ -261,6 +268,22 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                 fontSize = 13.sp,
                 color = OxOnSurfaceDim,
                 fontFamily = FontFamily.Monospace
+            )
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it; error = false },
+                singleLine = true,
+                isError = error,
+                label = { Text("Email", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(6.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = OxAccent,
+                    unfocusedBorderColor = OxOutlineStrong,
+                    cursorColor = OxAccentLight
+                ),
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground)
             )
             OutlinedTextField(
                 value = input,
