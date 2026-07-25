@@ -1,3 +1,4 @@
+
 package com.oxclient
 
 import android.app.Application
@@ -25,6 +26,7 @@ import com.oxclient.module.movement.CreativeFly
 import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.MotionFly
 import com.oxclient.module.movement.Speed
+import com.oxclient.module.movement.Timer
 import com.oxclient.module.movement.TPAura
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
@@ -80,6 +82,7 @@ class OxClientApp : Application() {
             CreativeFly(),
             Speed(),
             Jetpack(),
+            Timer(),
             TPAura(),
             AntiKnockback(),
             FullBright(),

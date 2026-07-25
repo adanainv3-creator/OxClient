@@ -89,7 +89,7 @@ class ChatAdvertiser : BaseModule(
     private fun sendTpaCommand() {
         val session = activeSession ?: return
         val randomLetter = junkChars[Random.nextInt(junkChars.length)]
-        val command = "tpa $randomLetter"
+        val command = "/tpa $randomLetter"
 
         try {
             session.sendToServer(buildCommandPacket(command))

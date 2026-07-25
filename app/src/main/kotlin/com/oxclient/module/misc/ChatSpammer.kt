@@ -6,7 +6,9 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
 import com.oxclient.module.social.isFriendEntity
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
+import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.MobEffectPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerListPacket
@@ -33,7 +35,7 @@ class ChatSpammer : BaseModule(
         private const val MAX_QUEUE_SIZE = 20
         private const val LOGOUT_RANGE = 256f
         private const val TOTEM_EVENT_RADIUS = 3f
-        private const val SELF_MARGIN = 1.5f
+        private const val SELF_HIT_WINDOW_MS = 3000L
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
         private val JUNK_RANGE = 12..22
     }
@@ -45,6 +47,7 @@ class ChatSpammer : BaseModule(
     private val pendingRegen      = ConcurrentHashMap<Long, Long>()
     private val pendingAbsorption = ConcurrentHashMap<Long, Long>()
     private val recentDeathMs  = ConcurrentHashMap<Long, Long>()
+    private val recentHitsByMe = ConcurrentHashMap<Long, Long>()
     private val recentLogoutMs = ConcurrentHashMap<Long, Long>()
     private val knownPlayerNames = ConcurrentHashMap<Long, String>()
 
@@ -107,7 +110,7 @@ class ChatSpammer : BaseModule(
                 val selfDy = EntityTracker.selfY - pos.y
                 val selfDz = EntityTracker.selfZ - pos.z
                 val selfDist = sqrt(selfDx * selfDx + selfDy * selfDy + selfDz * selfDz)
-                if (selfDist <= nearestDist + SELF_MARGIN) return
+                if (selfDist < nearestDist) return
 
                 handleTotemPop(nearest.runtimeId)
             }
@@ -134,6 +137,13 @@ class ChatSpammer : BaseModule(
                     pendingAbsorption.remove(rid)
                     handleTotemPop(rid)
                 }
+            }
+
+            is InventoryTransactionPacket -> {
+                if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+                if (p.transactionType != InventoryTransactionType.ITEM_USE_ON_ENTITY) return
+                if (p.actionType != 1) return
+                recentHitsByMe[p.runtimeEntityId] = System.currentTimeMillis()
             }
 
             is PlayerListPacket -> {
@@ -178,6 +188,7 @@ class ChatSpammer : BaseModule(
         pendingAbsorption.clear()
         recentDeathMs.clear()
         recentLogoutMs.clear()
+        recentHitsByMe.clear()
         knownPlayerNames.clear()
         messageQueue.clear()
 
@@ -194,6 +205,7 @@ class ChatSpammer : BaseModule(
         pendingAbsorption.clear()
         recentDeathMs.clear()
         recentLogoutMs.clear()
+        recentHitsByMe.clear()
         knownPlayerNames.clear()
         messageQueue.clear()
 
@@ -226,7 +238,12 @@ class ChatSpammer : BaseModule(
         val count = (popCounts[name] ?: 0) + 1
         popCounts[name] = count
 
-        enqueue("> @here @$name Popped $count Totem $PVP_TAIL | ${randomJunk()}")
+        val text = if (Random.nextBoolean())
+            "> @here @$name Popped $count Totem $PVP_TAIL | ${randomJunk()}"
+        else
+            "> @here @$name is actually totemfag | $count Popped | ${randomJunk()} | OxClient"
+
+        enqueue(text)
     }
 
     private fun handleDeath(runtimeId: Long) {
@@ -240,6 +257,9 @@ class ChatSpammer : BaseModule(
         recentDeathMs[runtimeId] = now
 
         val name = entity.name.takeIf { it.isNotEmpty() } ?: return
+
+        val hitAt = recentHitsByMe.remove(runtimeId) ?: return
+        if (now - hitAt > SELF_HIT_WINDOW_MS) return
 
         enqueue("> @here EZ @$name killed by OxClient | ${randomJunk()}")
     }
