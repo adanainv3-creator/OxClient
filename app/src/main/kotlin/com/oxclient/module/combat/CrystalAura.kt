@@ -7,11 +7,13 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.module.social.isFriendEntity
+import com.oxclient.utils.CritLock
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
 import com.oxclient.utils.WorldBlockTracker
-import kotlinx.coroutines.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.data.LevelEvent
@@ -25,86 +27,102 @@ import org.cloudburstmc.protocol.common.DefinitionRegistry
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.floor
+import kotlin.math.max
 
 class CrystalAura : BaseModule(
     name        = "CrystalAura",
     category    = ModuleCategory.COMBAT,
-    description = "Multi-target auto crystal placement with self-sustaining obsidian supply"
+    description = "Çok hedefli otomatik kristal yerleştirme/kırma — self-koruma, kritik ve LOS kontrolüyle"
 ) {
+    enum class CritMode      { None, MovePacket, Vanilla }
+    enum class PlaceStrategy { Closest, HighestDamage, MultiTarget }
+
     companion object {
-        private const val TICK_INTERVAL_MS = 40L
-        private const val CRYSTAL_POWER    = 6f
-        private const val MIN_DAMAGE       = 0.5f
-        private const val SEARCH_RADIUS    = 2
-        private const val SELF_EYE_HEIGHT  = 1.62f
+        private const val CRYSTAL_POWER   = 6f
+        private const val MIN_DAMAGE      = 0.5f
+        private const val SEARCH_RADIUS   = 2
+        private const val SELF_EYE_HEIGHT = 1.62f
         private const val MAX_BREAKS_PER_TICK = 3
+        private const val MAX_PLACES_PER_TICK = 4
     }
 
+    // --- Genel ---
     private val place            = bool("Place",              true)
     private val breakCrystals    = bool("Break",               true)
-    private val multiTarget      = bool("Multi Target",        true)
-    private val suicide          = bool("Suicide",              true)
-    private val noSwitch         = bool("No Switch",           true)
-    private val noParticles      = bool("No Particle",         true)
+    private val strategy         = enum("Strategy",            PlaceStrategy.MultiTarget)
     private val shortcut         = bool("Shortcut",            true)
+    private val tickIntervalMs   = int ("Tick Interval",       40, 20, 200)
 
+    // --- Hedefleme ---
     private val targetRange      = int ("Target Range",   14, 4, 30)
-    private val placeRange       = int ("Place Range",      8, 2, 16)
-    private val placeDelayMs     = int ("Place Delay",     120, 40, 2000)
-    private val maxPlacePerSec   = int ("Max Place/Sec",     8, 1, 30)
-    private val placeRetryMs     = int ("Place Retry Ms",  400, 100, 3000)
+    private val friendSkip       = bool("Friend Skip",           true)
     private val predictMovement  = bool("Predict Movement",  true)
     private val predictAheadMs   = int ("Predict Ahead Ms", 150, 0, 500)
+
+    // --- Yerleştirme ---
+    private val placeRange       = int ("Place Range",      8, 2, 16)
+    private val placeDelayMs     = int ("Place Delay",     120, 40, 2000)
+    private val placeRetryMs     = int ("Place Retry Ms",  400, 100, 3000)
+    private val maxPlacePerSec   = int ("Max Place/Sec",     8, 1, 30)
     private val minDamageX10     = int ("Min Damage x10",    5, 0, 200)
     private val minDamage: Float get() = minDamageX10.value / 10f
     private val searchYBelow     = int ("Search Y Below",     3, 1, 8)
     private val searchYAbove     = int ("Search Y Above",     2, 1, 8)
+    private val requireLOS       = bool("Require LOS",         false)
 
+    // --- Self koruma ---
+    private val maxSelfDamageX10 = int ("Max Self Damage x10", 90, 0, 200)
+    private val maxSelfDamage: Float get() = maxSelfDamageX10.value / 10f
+    private val suicide          = bool("Suicide",              false)
+
+    // --- Burst (düşük can / totem sonrası) ---
     private val burstOnLowHpTotem   = bool("Burst LowHp/Totem",    true)
     private val burstHealth         = int ("Burst Health Threshold", 8, 1, 20)
     private val burstMaxPlacePerSec = int ("Burst Max Place/Sec",   15, 1, 40)
     private val burstDurationMs     = int ("Burst Duration Ms",   1500, 200, 5000)
-    private val friendSkip          = bool("Friend Skip",           true)
 
+    // --- Obsidian ---
     private val autoObsidian        = bool("Auto Obsidian",        true)
     private val autoObsidianDelayMs = int ("Auto Obsidian Delay", 180, 50, 1000)
-
     private val selfSurround        = bool("Self Surround",        true)
     private val selfSurroundDelayMs = int ("Self Surround Delay", 250, 50, 2000)
 
+    // --- Kırma ---
     private val breakRange       = int ("Break Range",     10, 2, 20)
     private val breakDelayMs     = int ("Break Delay",      60, 30, 300)
     private val breakAll         = bool("Break All",          true)
+    private val breakCrit        = enum("Break Crit",         CritMode.MovePacket)
 
-    private val activeCrystals   = ConcurrentHashMap<Long, Vector3f>()
-    private val uniqueToRuntime  = ConcurrentHashMap<Long, Long>()
+    // --- Görünmezlik / legit davranış ---
+    private val noSwitch         = bool("No Switch",           true)
+    private val noParticles      = bool("No Particle",         true)
+    private val silentRotation   = bool("Silent Rotation",     true)
+
     private val pendingPositions = ConcurrentHashMap<Long, Long>()
     private val pendingObsidian  = ConcurrentHashMap<Long, Long>()
-    private val placedBlockIds   = ConcurrentHashMap<Long, String>()
     private val totemBurstUntil  = ConcurrentHashMap<Long, Long>()
-
     private val lastPlaceMsMap   = ConcurrentHashMap<Long, Long>()
+
     @Volatile private var lastBreakMs        = 0L
     @Volatile private var lastSelfSurroundMs = 0L
-    private var tickJob: Job? = null
 
     private val blockDefCache = ConcurrentHashMap<String, BlockDefinition>()
 
-    private val placeTokens      = AtomicInteger(0)
+    private val placeTokens        = AtomicInteger(0)
     @Volatile private var tokenWindowStart = 0L
     @Volatile private var currentWindowCap = 0
+    @Volatile private var tickJob: kotlinx.coroutines.Job? = null
 
     private fun takePlaceToken(burst: Boolean): Boolean {
         val now = System.currentTimeMillis()
-        val burstCap = if (burst) burstMaxPlacePerSec.value else maxPlacePerSec.value
+        val cap = if (burst) burstMaxPlacePerSec.value else maxPlacePerSec.value
         if (now - tokenWindowStart >= 1000L) {
             tokenWindowStart = now
-            currentWindowCap = burstCap
-            placeTokens.set(currentWindowCap)
-        } else if (burstCap > currentWindowCap) {
-            val delta = burstCap - currentWindowCap
-            currentWindowCap = burstCap
-            placeTokens.addAndGet(delta)
+            currentWindowCap = cap
+            placeTokens.set(cap)
+        } else if (cap > currentWindowCap) {
+            placeTokens.addAndGet(cap - currentWindowCap)
+            currentWindowCap = cap
         }
         return placeTokens.getAndUpdate { if (it > 0) it - 1 else it } > 0
     }
@@ -118,19 +136,17 @@ class CrystalAura : BaseModule(
 
     override fun onEnable() {
         super.onEnable()
-        activeCrystals.clear(); uniqueToRuntime.clear(); pendingPositions.clear()
-        pendingObsidian.clear(); blockDefCache.clear(); placedBlockIds.clear()
-        lastPlaceMsMap.clear()
+        pendingPositions.clear(); pendingObsidian.clear()
+        blockDefCache.clear(); lastPlaceMsMap.clear(); totemBurstUntil.clear()
         placeTokens.set(0); tokenWindowStart = 0L
         tickJob?.cancel()
-        tickJob = scope.launch { tickLoop() }
+        tickJob = launchTickLoop(tickIntervalMs.value.toLong()) { tick() }
     }
 
     override fun onDisable() {
-        tickJob?.cancel()
+        tickJob?.cancel(); tickJob = null
         super.onDisable()
-        activeCrystals.clear(); uniqueToRuntime.clear(); pendingPositions.clear()
-        pendingObsidian.clear(); placedBlockIds.clear(); lastPlaceMsMap.clear()
+        pendingPositions.clear(); pendingObsidian.clear(); lastPlaceMsMap.clear()
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -138,8 +154,6 @@ class CrystalAura : BaseModule(
         when (val pkt = event.packet) {
             is AddEntityPacket -> {
                 if (pkt.identifier.contains("crystal", ignoreCase = true)) {
-                    activeCrystals[pkt.runtimeEntityId] = pkt.position
-                    uniqueToRuntime[pkt.uniqueEntityId] = pkt.runtimeEntityId
                     val key = posKey(
                         floor(pkt.position.x - 0.5f).toInt(),
                         floor(pkt.position.y - 1f).toInt(),
@@ -147,10 +161,6 @@ class CrystalAura : BaseModule(
                     )
                     pendingPositions.remove(key)
                 }
-            }
-            is RemoveEntityPacket -> {
-                val rid = uniqueToRuntime.remove(pkt.uniqueEntityId)
-                if (rid != null) activeCrystals.remove(rid)
             }
             is UpdateBlockPacket -> {
                 val id = runCatching { pkt.definition?.runtimeId }.getOrNull()
@@ -185,48 +195,33 @@ class CrystalAura : BaseModule(
         }
     }
 
-    private suspend fun tickLoop() {
-        while (currentCoroutineContext().isActive) {
-            if (isEnabled) {
-                if (selfSurround.value) doSelfSurround()
+    private suspend fun tick() {
+        if (selfSurround.value) doSelfSurround()
+        if (breakCrystals.value) doBreakInRange()
 
-                if (breakCrystals.value) doBreakAnywhere()
+        val targets = selectTargets()
+        if (targets.isEmpty()) return
 
-                val targets = selectTargets()
-                for (target in targets) {
-                    if (place.value) doPlace(target)
-                    if (!multiTarget.value) break
+        if (place.value) {
+            when (strategy.value) {
+                PlaceStrategy.Closest -> doPlace(targets.first())
+                PlaceStrategy.HighestDamage -> {
+                    val best = targets.maxByOrNull { estimatedBestDamage(it) } ?: targets.first()
+                    doPlace(best)
                 }
+                PlaceStrategy.MultiTarget -> for (t in targets) doPlace(t)
             }
-            delay(TICK_INTERVAL_MS)
         }
     }
 
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
         if (EntityTracker.selfRuntimeId <= 0L) return emptyList()
-        val rangeSq = targetRange.value.toFloat().let { it * it }
-        return EntityTracker.getAll()
+        return EntityTracker.getPlayers(targetRange.value.toFloat())
             .asSequence()
-            .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
+            .filter { it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { !friendSkip.value || !it.isFriendEntity }
-            .filter { e ->
-                // Ek güvenlik: ID eşleşmesi (respawn sonrası selfRuntimeId bayatlamış olabilir)
-                // bozulsa bile, kendi anlık pozisyonunla çakışan bir entity asla hedef olmasın.
-                val selfDist = MathUtil.dist3(e.x, e.y, e.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                selfDist > 0.15f
-            }
-            .filter { e ->
-                val dx = e.x - EntityTracker.selfX
-                val dy = e.y - EntityTracker.selfY
-                val dz = e.z - EntityTracker.selfZ
-                dx * dx + dy * dy + dz * dz <= rangeSq
-            }
-            .sortedBy { e ->
-                val dx = e.x - EntityTracker.selfX
-                val dy = e.y - EntityTracker.selfY
-                val dz = e.z - EntityTracker.selfZ
-                dx * dx + dy * dy + dz * dz
-            }
+            .filter { MathUtil.dist3(it.x, it.y, it.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) > 0.15f }
+            .sortedBy { EntityTracker.distanceTo(it) }
             .toList()
     }
 
@@ -238,6 +233,19 @@ class CrystalAura : BaseModule(
         return Triple(target.x + vx * (t * 20f), target.y, target.z + vz * (t * 20f))
     }
 
+    private fun estimatedBestDamage(target: EntityTracker.TrackedEntity): Float {
+        val (px, py, pz) = predictedPos(target)
+        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()
+        var best = 0f
+        for (dx in -SEARCH_RADIUS..SEARCH_RADIUS) for (dz in -SEARCH_RADIUS..SEARCH_RADIUS) {
+            val hit = findSurface(tx + dx, ty, tz + dz) ?: continue
+            val cx = tx + dx + 0.5f; val cy = hit.y + 1f; val cz = tz + dz + 0.5f
+            val dmg = estimateDamage(cx, cy, cz, target)
+            if (dmg > best) best = dmg
+        }
+        return best
+    }
+
     private fun doPlace(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         val last = lastPlaceMsMap[target.runtimeId] ?: 0L
@@ -246,36 +254,46 @@ class CrystalAura : BaseModule(
         val session = PacketEventBus.currentSession ?: return
 
         val (px, py, pz) = predictedPos(target)
-        val tx = floor(px).toInt()
-        val ty = floor(py).toInt()
-        val tz = floor(pz).toInt()
+        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()
 
         var placedAny = false
+        var placedThisTick = 0
         val burst = isBurstTarget(target)
+
+        // Yerleşim adaylarını hasara göre sırala — en çok hasar veren pozisyona önce dene
+        data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val dmg: Float, val selfDmg: Float)
+        val candidates = mutableListOf<Candidate>()
 
         for (dx in -SEARCH_RADIUS..SEARCH_RADIUS) {
             for (dz in -SEARCH_RADIUS..SEARCH_RADIUS) {
-                val bx = tx + dx
-                val bz = tz + dz
+                val bx = tx + dx; val bz = tz + dz
+                val hit = findSurface(bx, ty, bz) ?: run {
+                    if (autoObsidian.value) tryPlaceObsidianSupportAt(session, bx, ty, bz)
+                    null
+                } ?: continue
 
-                val hit = findSurface(bx, ty, bz)
-                if (hit != null) {
-                    val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f
-                    val damage = estimateDamage(cx, cy, cz, target)
-                    if (damage < minDamage && !(suicide.value && target.health < 5f)) continue
+                val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f
+                val damage = estimateDamage(cx, cy, cz, target)
+                if (damage < minDamage && !(suicide.value && target.health < 5f)) continue
 
-                    if (!takePlaceToken(burst)) return
+                val selfDamage = estimateDamage(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                if (!suicide.value && selfDamage > maxSelfDamage) continue
 
-                    if (tryPlaceCrystalAt(session, PlacePos(bx, hit.y, bz, hit.blockId))) {
-                        lastPlaceMsMap[target.runtimeId] = now
-                        placedAny = true
-                    }
-                } else if (autoObsidian.value) {
-                    tryPlaceObsidianSupportAt(session, bx, ty, bz)
-                }
+                if (requireLOS.value && !hasLineOfSight(cx, cy, cz)) continue
+
+                candidates.add(Candidate(bx, bz, hit.y, hit.blockId, damage, selfDamage))
             }
         }
-        if (!placedAny) return
+
+        for (c in candidates.sortedByDescending { it.dmg }) {
+            if (placedThisTick >= MAX_PLACES_PER_TICK) break
+            if (!takePlaceToken(burst)) break
+            if (tryPlaceCrystalAt(session, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) {
+                lastPlaceMsMap[target.runtimeId] = now
+                placedAny = true
+                placedThisTick++
+            }
+        }
     }
 
     private fun tryPlaceCrystalAt(session: OxRelaySession, pos: PlacePos): Boolean {
@@ -287,7 +305,7 @@ class CrystalAura : BaseModule(
             if (now - pendingTime < placeRetryMs.value) return false
             pendingPositions.remove(key)
         }
-        if (crystalExistsAt(pos.x, pos.y, pos.z)) return false
+        if (crystalExistsNear(pos.x + 0.5f, pos.y + 1f, pos.z + 0.5f)) return false
 
         val centerX = pos.x + 0.5f; val centerY = pos.y + 1.0f; val centerZ = pos.z + 0.5f
         val distSelf = MathUtil.dist3(centerX, centerY, centerZ, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ)
@@ -312,7 +330,6 @@ class CrystalAura : BaseModule(
                 clientCooldownState      = 0
             })
             pendingPositions[key] = now
-            placedBlockIds[key] = pos.blockId
             true
         } catch (_: Exception) { false }
     }
@@ -322,7 +339,6 @@ class CrystalAura : BaseModule(
         val key = posKey(bx, ty, bz)
         val pendingTime = pendingObsidian[key]
         if (pendingTime != null && now - pendingTime < autoObsidianDelayMs.value) return
-
         if (!WorldBlockTracker.hasAnyTerrainData()) return
 
         var supportY: Int? = null
@@ -405,39 +421,56 @@ class CrystalAura : BaseModule(
         }
     }
 
-    private fun doBreakAnywhere() {
+    private fun doBreakInRange() {
         val now = System.currentTimeMillis()
         if (now - lastBreakMs < breakDelayMs.value) return
 
         val session = PacketEventBus.currentSession ?: return
-        val bRangeSq = breakRange.value.toFloat().let { it * it }
-
-        val inRange = activeCrystals.entries.filter { (_, pos) ->
-            val dx = pos.x - EntityTracker.selfX
-            val dy = pos.y - EntityTracker.selfY
-            val dz = pos.z - EntityTracker.selfZ
-            dx * dx + dy * dy + dz * dz <= bRangeSq
-        }
-        if (inRange.isEmpty()) return
+        val crystals = EntityTracker.getCrystals(breakRange.value.toFloat())
+        if (crystals.isEmpty()) return
         lastBreakMs = now
 
         val toBreak = if (breakAll.value) {
-            inRange.map { it.key }
+            crystals
         } else {
-            inRange.mapNotNull { (rid, pos) ->
-                val dmg = calculateCrystalDamage(pos.x + 0.5f, pos.y + 1f, pos.z + 0.5f,
-                    EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                if (dmg >= MIN_DAMAGE || suicide.value) rid else null
+            crystals.filter { c ->
+                val dmg = calculateCrystalDamage(c.x, c.y, c.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                dmg >= MIN_DAMAGE || suicide.value
             }
-        }.take(MAX_BREAKS_PER_TICK)
-        for (rid in toBreak) attackCrystal(rid, session)
+        }.sortedBy { EntityTracker.distanceTo(it) }.take(MAX_BREAKS_PER_TICK)
+
+        for (c in toBreak) scope.launch { attackCrystal(c.runtimeId, session) }
     }
 
-    private fun attackCrystal(rid: Long, session: OxRelaySession) {
-        val pos = activeCrystals[rid] ?: return
-        val r = RotationUtil.toPoint(pos.x, pos.y, pos.z)
-        PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
-        PacketUtil.sendSwingAndAttack(session, rid)
+    private suspend fun attackCrystal(rid: Long, session: OxRelaySession) {
+        val target = EntityTracker.getById(rid) ?: return
+        val r = RotationUtil.toPoint(target.x, target.y + 0.5f, target.z)
+
+        CritLock.tryRun(name) { injectCrit(session) }
+
+        if (silentRotation.value) PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch, onGround = true)
+
+        PacketUtil.sendSwing(session)
+        PacketUtil.sendAttack(session, rid)
+    }
+
+    private suspend fun injectCrit(s: OxRelaySession) {
+        try {
+            when (breakCrit.value) {
+                CritMode.None -> {}
+                CritMode.MovePacket -> {
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
+                    delay(15L)
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f, onGround = true)
+                }
+                CritMode.Vanilla -> {
+                    listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
+                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
+                        delay(25L)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun calculateCrystalDamage(crystalX: Float, crystalY: Float, crystalZ: Float, targetX: Float, targetY: Float, targetZ: Float): Float {
@@ -468,20 +501,39 @@ class CrystalAura : BaseModule(
         return null
     }
 
-    private fun estimateDamage(cx: Float, cy: Float, cz: Float, target: EntityTracker.TrackedEntity): Float {
+    private fun estimateDamage(cx: Float, cy: Float, cz: Float, target: EntityTracker.TrackedEntity): Float =
+        estimateDamage(cx, cy, cz, target.x, target.y + 0.9f, target.z)
+
+    private fun estimateDamage(cx: Float, cy: Float, cz: Float, tx: Float, ty: Float, tz: Float): Float {
         val diameter = CRYSTAL_POWER * 2f
-        val dist = MathUtil.dist3(cx, cy, cz, target.x, target.y + 0.9f, target.z)
+        val dist = MathUtil.dist3(cx, cy, cz, tx, ty + 0.9f, tz)
         if (dist >= diameter) return 0f
         val normalizedDist = dist / diameter
         val impact = 1f - normalizedDist
         return (impact * impact + impact) / 2f * 7f * diameter + 1f
     }
 
-    private fun crystalExistsAt(bx: Int, by: Int, bz: Int): Boolean {
-        val cx = bx + 0.5f; val cy = by + 1.0f; val cz = bz + 0.5f
-        return activeCrystals.values.any { v ->
-            Math.abs(v.x - cx) < 0.9f && Math.abs(v.y - cy) < 1.3f && Math.abs(v.z - cz) < 0.9f
+    private fun crystalExistsNear(cx: Float, cy: Float, cz: Float): Boolean =
+        EntityTracker.getCrystals(3f).any { c ->
+            kotlin.math.abs(c.x - cx) < 0.9f && kotlin.math.abs(c.y - cy) < 1.3f && kotlin.math.abs(c.z - cz) < 0.9f
         }
+
+    // Basit örneklenmiş raycast — self göz hizasından hedef noktaya kadar aradaki
+    // bloklardan biri katıysa (hava değilse) görüş hattı kapalı sayılır.
+    private fun hasLineOfSight(tx: Float, ty: Float, tz: Float): Boolean {
+        if (!WorldBlockTracker.hasAnyTerrainData()) return true
+        val ex = EntityTracker.selfX; val ey = EntityTracker.selfY + SELF_EYE_HEIGHT; val ez = EntityTracker.selfZ
+        val dist = MathUtil.dist3(ex, ey, ez, tx, ty, tz)
+        val steps = max(4, (dist * 2f).toInt())
+        for (i in 1 until steps) {
+            val t = i.toFloat() / steps
+            val sx = floor(ex + (tx - ex) * t).toInt()
+            val sy = floor(ey + (ty - ey) * t).toInt()
+            val sz = floor(ez + (tz - ez) * t).toInt()
+            val id = WorldBlockTracker.getBlockIdentifier(sx, sy, sz) ?: continue
+            if (id != "minecraft:air") return false
+        }
+        return true
     }
 
     private fun resolveItemSlot(identifier: String): Pair<Int, ItemData>? {
