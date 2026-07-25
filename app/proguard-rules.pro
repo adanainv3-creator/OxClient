@@ -8,6 +8,9 @@
 -dontwarn org.bitbucket.b_c.jose4j.**
 -keepclassmembers class org.bitbucket.b_c.jose4j.** { *; }
 
+-dontwarn org.slf4j.**
+-dontwarn reactor.blockhound.**
+
 -dontwarn com.google.gson.**
 -keep class com.google.gson.stream.** { *; }
 -keep class * implements com.google.gson.TypeAdapterFactory
