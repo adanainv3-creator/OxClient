@@ -2,7 +2,12 @@
 package com.oxclient
 
 import android.app.Application
+import android.content.ContentValues
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
+import java.io.File
 import com.oxclient.auth.AccountManager
 import com.oxclient.auth.MicrosoftAuthManager
 import com.oxclient.config.Config
@@ -49,6 +54,8 @@ class OxClientApp : Application() {
         super.onCreate()
         instance = this
 
+        installCrashLogger()
+
         ServerConfig.init(applicationContext)
         Config.init(applicationContext)
         AccountManager.init(applicationContext)
@@ -68,6 +75,40 @@ class OxClientApp : Application() {
 
         WorldBlockTracker.init()
         registerModules()
+    }
+
+    /** Yakalanmamış hataları Downloads/baba.txt dosyasına yazar, sonra normal çökme akışına devam eder. */
+    private fun installCrashLogger() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val content = "${java.util.Date()}\n\n${Log.getStackTraceString(throwable)}"
+                writeCrashToDownloads(content)
+            } catch (e: Exception) {
+                Log.e(TAG, "Crash log yazılamadı: ${e.message}", e)
+            }
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+    }
+
+    private fun writeCrashToDownloads(content: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = applicationContext.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, "baba.txt")
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
+            resolver.openOutputStream(uri)?.use { it.write(content.toByteArray()) }
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            @Suppress("DEPRECATION")
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            File(downloadsDir, "baba.txt").writeText(content)
+        }
     }
 
     private fun registerModules() {
