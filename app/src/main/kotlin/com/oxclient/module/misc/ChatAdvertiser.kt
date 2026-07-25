@@ -61,7 +61,7 @@ class ChatAdvertiser : BaseModule(
         scheduler = Executors.newSingleThreadScheduledExecutor().also { exec ->
             when (mode.value) {
                 Mode.TPA -> {
-                    exec.scheduleAtFixedRate({ sendTpaCommand() }, 0, 500, TimeUnit.MILLISECONDS)
+                    exec.scheduleAtFixedRate({ sendTpaCommand() }, 0, 2000, TimeUnit.MILLISECONDS)
                 }
                 Mode.PVP -> {
                     exec.scheduleAtFixedRate({ sendPvpMessage() }, 0, 3000, TimeUnit.MILLISECONDS)
