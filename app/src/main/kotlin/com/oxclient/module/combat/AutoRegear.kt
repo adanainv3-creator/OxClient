@@ -145,7 +145,7 @@ class AutoRegear : BaseModule(
         val cx = pos.x + 0.5f
         val cy = pos.y + 0.5f
         val cz = pos.z + 0.5f
-        val r = RotationUtil.toPoint(cx.toDouble(), cy.toDouble(), cz.toDouble())
+        val r = RotationUtil.toPoint(cx, cy, cz)
         PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)
 
         val heldItem = EntityTracker.getHeldItem() ?: ItemData.AIR

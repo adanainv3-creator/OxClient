@@ -8,6 +8,7 @@ import com.oxclient.events.PacketEventBus
 import com.oxclient.module.*
 import com.oxclient.module.social.isFriendEntity
 import com.oxclient.utils.CritLock
+import com.oxclient.utils.InventoryUtil
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.RotationUtil
@@ -19,6 +20,7 @@ import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
+import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
@@ -311,27 +313,9 @@ class CrystalAura : BaseModule(
         val distSelf = MathUtil.dist3(centerX, centerY, centerZ, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ)
         if (distSelf > placeRange.value) return false
 
-        val (slot, item) = resolveItemSlot("minecraft:end_crystal") ?: return false
-        val blockDef = getBlockDefinition(session, pos.blockId) ?: return false
-
-        return try {
-            session.serverBound(InventoryTransactionPacket().apply {
-                transactionType          = InventoryTransactionType.ITEM_USE
-                actionType               = 0
-                blockPosition            = Vector3i.from(pos.x, pos.y, pos.z)
-                blockFace                = 1
-                hotbarSlot               = slot
-                itemInHand               = item
-                playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
-                blockDefinition          = blockDef
-                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                clientCooldownState      = 0
-            })
-            pendingPositions[key] = now
-            true
-        } catch (_: Exception) { false }
+        val ok = sendPlacementUse(session, "minecraft:end_crystal", Vector3i.from(pos.x, pos.y, pos.z), pos.blockId)
+        if (ok) pendingPositions[key] = now
+        return ok
     }
 
     private fun tryPlaceObsidianSupportAt(session: OxRelaySession, bx: Int, ty: Int, bz: Int) {
@@ -355,26 +339,9 @@ class CrystalAura : BaseModule(
         val distSelf = MathUtil.dist3(centerX, centerY, centerZ, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ)
         if (distSelf > placeRange.value) return
 
-        val (slot, item) = resolveItemSlot("minecraft:obsidian") ?: return
-        val blockDef = getBlockDefinition(session, "minecraft:obsidian") ?: return
-
-        try {
-            session.serverBound(InventoryTransactionPacket().apply {
-                transactionType          = InventoryTransactionType.ITEM_USE
-                actionType               = 0
-                blockPosition            = Vector3i.from(bx, sy, bz)
-                blockFace                = 1
-                hotbarSlot               = slot
-                itemInHand               = item
-                playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
-                blockDefinition          = blockDef
-                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                clientCooldownState      = 0
-            })
+        if (sendPlacementUse(session, "minecraft:obsidian", Vector3i.from(bx, sy, bz), "minecraft:obsidian")) {
             pendingObsidian[key] = now
-        } catch (_: Exception) {}
+        }
     }
 
     private fun doSelfSurround() {
@@ -382,7 +349,6 @@ class CrystalAura : BaseModule(
         if (now - lastSelfSurroundMs < selfSurroundDelayMs.value) return
 
         val session = PacketEventBus.currentSession ?: return
-        val (slot, item) = resolveItemSlot("minecraft:obsidian") ?: return
 
         val fx = floor(EntityTracker.selfX).toInt()
         val fy = floor(EntityTracker.selfY).toInt() - 1
@@ -400,24 +366,7 @@ class CrystalAura : BaseModule(
                 ?: "minecraft:obsidian"
             if (supportId == "minecraft:air") continue
 
-            val blockDef = getBlockDefinition(session, "minecraft:obsidian") ?: continue
-
-            try {
-                session.serverBound(InventoryTransactionPacket().apply {
-                    transactionType          = InventoryTransactionType.ITEM_USE
-                    actionType               = 0
-                    blockPosition            = Vector3i.from(tx, ty - 1, tz)
-                    blockFace                = 1
-                    hotbarSlot               = slot
-                    itemInHand               = item
-                    playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                    clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
-                    blockDefinition          = blockDef
-                    triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                    clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                    clientCooldownState      = 0
-                })
-            } catch (_: Exception) {}
+            sendPlacementUse(session, "minecraft:obsidian", Vector3i.from(tx, ty - 1, tz), "minecraft:obsidian")
         }
     }
 
@@ -536,24 +485,67 @@ class CrystalAura : BaseModule(
         return true
     }
 
-    private fun resolveItemSlot(identifier: String): Pair<Int, ItemData>? {
+    private data class PreparedItem(val slot: Int, val item: ItemData, val revertTo: Int?)
+
+    // Bedrock'ta "seçili olmayan slottaki item'ı kullanıyormuş gibi paket gönder" mümkün değil —
+    // server hotbarSlot + itemInHand ikilisini kendi bildiği seçili slot/item ile karşılaştırıp
+    // eşleşmezse transaction'ı reddediyor. Bu yüzden burada GERÇEKTEN slot seçiyoruz / swap ediyoruz.
+    private fun prepareItemForUse(session: OxRelaySession, identifier: String): PreparedItem? {
         EntityTracker.getHeldItem()?.let { held ->
             val id = runCatching { held.definition?.identifier }.getOrNull()
-            if (id == identifier && held.count > 0) return EntityTracker.selfHotbarSlot to held
+            if (id == identifier && held.count > 0) return PreparedItem(EntityTracker.selfHotbarSlot, held, null)
         }
+
         for (slot in 0..8) {
             val item = EntityTracker.getInventoryItem(slot) ?: continue
             if (item.count <= 0) continue
             val id = runCatching { item.definition?.identifier }.getOrNull()
-            if (id == identifier) return (if (noSwitch.value) EntityTracker.selfHotbarSlot else slot) to item
+            if (id == identifier) {
+                val original = EntityTracker.selfHotbarSlot
+                InventoryUtil.sendHotbarSelect(session, slot)
+                return PreparedItem(slot, item, if (noSwitch.value) original else null)
+            }
         }
+
         for (slot in 9..35) {
             val item = EntityTracker.getInventoryItem(slot) ?: continue
             if (item.count <= 0) continue
             val id = runCatching { item.definition?.identifier }.getOrNull()
-            if (id == identifier) return EntityTracker.selfHotbarSlot to item
+            if (id == identifier) {
+                val destSlot = EntityTracker.selfHotbarSlot
+                val destItem = EntityTracker.getInventoryItem(destSlot) ?: ItemData.AIR
+                InventoryUtil.sendSlotSwap(
+                    session, slot, item.netId,
+                    ContainerSlotType.HOTBAR_AND_INVENTORY, destSlot, destItem.netId
+                )
+                return PreparedItem(destSlot, item, null)
+            }
         }
         return null
+    }
+
+    private fun sendPlacementUse(session: OxRelaySession, identifier: String, blockPos: Vector3i, blockId: String): Boolean {
+        val prepared = prepareItemForUse(session, identifier) ?: return false
+        val blockDef = getBlockDefinition(session, blockId) ?: return false
+
+        return try {
+            session.serverBound(InventoryTransactionPacket().apply {
+                transactionType          = InventoryTransactionType.ITEM_USE
+                actionType               = 0
+                blockPosition            = blockPos
+                blockFace                = 1
+                hotbarSlot               = prepared.slot
+                itemInHand               = prepared.item
+                playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
+                blockDefinition          = blockDef
+                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                clientCooldownState      = 0
+            })
+            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it) }
+            true
+        } catch (_: Exception) { false }
     }
 
     private fun getBlockDefinition(session: OxRelaySession, targetId: String): BlockDefinition? {
