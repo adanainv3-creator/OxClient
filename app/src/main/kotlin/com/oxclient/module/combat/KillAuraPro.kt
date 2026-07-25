@@ -33,8 +33,8 @@ class KillAuraPro : BaseModule(
     description = "Silent, burst-attack, garantili kritik — profesyonel KillAura varyantı"
 ), PacketEventBus.PacketListener {
 
-    private val cpsMin        = int  ("CPS Min",       22,   1,  30)
-    private val cpsMax        = int  ("CPS Max",       28,   1,  30)
+    private val cpsMin        = int  ("CPS Min",       28,   1,  30)
+    private val cpsMax        = int  ("CPS Max",       30,   1,  30)
     private val range         = float("Range",         10f, 1f,  10f)
     private val maxTargets    = int  ("Max Targets",   1,    1,  15)
     private val predictDelay  = float("Predict Delay", 0.05f, 0.05f, 0.5f)
@@ -113,10 +113,11 @@ class KillAuraPro : BaseModule(
     // kaydetmemesine sebep oluyordu — burada delay'ler bilinçli olarak var.
     private suspend fun injectCritTimed(s: OxRelaySession) {
         try {
-            listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
-                PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
-                delay(25L)
-            }
+            PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
+            delay(10L)
+            PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = false)
+            delay(5L)
+            PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = true)
         } catch (_: Exception) {}
     }
 }

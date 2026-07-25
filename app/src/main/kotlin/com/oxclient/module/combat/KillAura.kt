@@ -24,8 +24,8 @@ class KillAura : BaseModule(
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
     enum class CritMode     { Vanilla, MovePacket, Jump }
 
-    private val cpsMin          = int  ("CPS Min",          16,   1,  30)
-    private val cpsMax          = int  ("CPS Max",          20,   1,  30)
+    private val cpsMin          = int  ("CPS Min",          28,   1,  30)
+    private val cpsMax          = int  ("CPS Max",          30,   1,  30)
     private val range           = float("Range",            10f, 1f,  10f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
@@ -38,7 +38,7 @@ class KillAura : BaseModule(
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
     private val headLockSmooth  = float("Head Lock Smooth", 0.65f, 0.01f, 1f)
-    private val critMode        = enum ("Crit Mode",        CritMode.Vanilla)
+    private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)
     private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         true)
@@ -179,6 +179,7 @@ class KillAura : BaseModule(
 
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
         return EntityTracker.getEntitiesInRange(range.value)
+            .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
             .toMutableList()
@@ -251,8 +252,8 @@ class KillAura : BaseModule(
             when (critMode.value) {
                 CritMode.MovePacket -> {
                     PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
-                    delay(30L)
-                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = false)
+                    delay(15L)
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = true)
                 }
                 
                 CritMode.Vanilla -> {
