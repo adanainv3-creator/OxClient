@@ -1,7 +1,9 @@
 package com.oxclient.ui.dashboard
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,12 +22,15 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -43,8 +48,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -83,11 +91,32 @@ val SUPPORTED_PACKAGES = listOf(
     "com.mojang.minecrafttrialpe" to "Minecraft Trial",
 )
 
+data class InstalledAppInfo(
+    val packageName : String,
+    val label        : String
+)
+
+/** Remembers which app the relay should target, across app restarts. */
+private object SelectedAppStore {
+    private const val PREFS_NAME = "oxclient_prefs"
+    private const val KEY_SELECTED_PACKAGE = "selected_package"
+
+    fun get(context: Context): String? =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_SELECTED_PACKAGE, null)
+
+    fun set(context: Context, packageName: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(KEY_SELECTED_PACKAGE, packageName).apply()
+    }
+}
+
 private enum class DashTab { RELAY, CONFIG, ACCOUNTS }
 
 class DashboardActivity : ComponentActivity() {
 
     private var overlayPermissionGranted by mutableStateOf(false)
+    private var selectedPackage by mutableStateOf("com.mojang.minecraftpe")
 
     private val overlayLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -108,6 +137,12 @@ class DashboardActivity : ComponentActivity() {
 
         overlayPermissionGranted = Settings.canDrawOverlays(this)
 
+        // Restore the last app the user picked; fall back to whichever
+        // supported package is actually installed, then plain Minecraft.
+        selectedPackage = SelectedAppStore.get(this)
+            ?: getInstalledGames().firstOrNull()?.first
+            ?: SUPPORTED_PACKAGES.first().first
+
         lifecycleScope.launch {
             MicrosoftAuthManager.authState.collect { state ->
                 if (state is AuthState.WaitingForWebView) {
@@ -127,7 +162,13 @@ class DashboardActivity : ComponentActivity() {
                     val relayActive by SessionManager.isActive.collectAsStateWithLifecycle()
 
                     DashboardScreen(
-                        installedApps = getInstalledGames(),
+                        installedApps   = getInstalledGames(),
+                        allApps         = getAllInstalledApps(),
+                        selectedPackage = selectedPackage,
+                        onSelectApp     = { pkg ->
+                            selectedPackage = pkg
+                            SelectedAppStore.set(this, pkg)
+                        },
                         relayActive   = relayActive,
                         onConnect     = { pkg -> startRelay(pkg) },
                         onDisconnect  = { stopRelay() },
@@ -195,6 +236,29 @@ class DashboardActivity : ComponentActivity() {
                 true
             } catch (_: PackageManager.NameNotFoundException) { false }
         }
+
+    /** Every launchable app on the device, for the "Select an Application" picker. */
+    private fun getAllInstalledApps(): List<InstalledAppInfo> {
+        val launcherIntent = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
+        val resolveInfos =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                packageManager.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0))
+            else
+                @Suppress("DEPRECATION") packageManager.queryIntentActivities(launcherIntent, 0)
+
+        return resolveInfos
+            .asSequence()
+            .filter { it.activityInfo.packageName != packageName }
+            .map { info ->
+                InstalledAppInfo(
+                    packageName = info.activityInfo.packageName,
+                    label       = info.loadLabel(packageManager).toString()
+                )
+            }
+            .distinctBy { it.packageName }
+            .sortedBy { it.label.lowercase() }
+            .toList()
+    }
 }
 
 private fun verifyPasswordRemote(email: String, password: String): Boolean {
@@ -317,6 +381,9 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
 @Composable
 fun DashboardScreen(
     installedApps : List<Pair<String, String>>,
+    allApps         : List<InstalledAppInfo> = emptyList(),
+    selectedPackage : String,
+    onSelectApp     : (String) -> Unit,
     relayActive   : Boolean = false,
     onConnect     : (String) -> Unit,
     onDisconnect  : () -> Unit,
@@ -338,11 +405,10 @@ fun DashboardScreen(
 
     var showSignIn      by remember { mutableStateOf(false) }
     var showServerPanel by remember { mutableStateOf(false) }
+    var showAppPicker   by remember { mutableStateOf(false) }
 
     val pagerState = rememberPagerState(pageCount = { DashTab.values().size })
     val currentTab = DashTab.values()[pagerState.currentPage]
-
-    val targetApp = remember(installedApps) { installedApps.firstOrNull() ?: SUPPORTED_PACKAGES.first() }
 
     LaunchedEffect(authState) {
         if (authState is AuthState.WaitingForWebView) showSignIn = false
@@ -376,8 +442,10 @@ fun DashboardScreen(
                     when (DashTab.values()[page]) {
                         DashTab.RELAY -> DashboardTab(
                             relayActive          = relayActive,
-                            onToggle             = { if (relayActive) onDisconnect() else onConnect(targetApp.first) },
-                            onLaunchApp          = { onLaunchApp(targetApp.first) },
+                            selectedPackage      = selectedPackage,
+                            onOpenAppPicker      = { showAppPicker = true },
+                            onToggle             = { if (relayActive) onDisconnect() else onConnect(selectedPackage) },
+                            onLaunchApp          = { onLaunchApp(selectedPackage) },
                             showServerPanel      = showServerPanel,
                             onToggleServerPanel  = { showServerPanel = !showServerPanel },
                             serverHost           = serverHost,
@@ -409,6 +477,19 @@ fun DashboardScreen(
                         )
                     }
                 }
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showAppPicker,
+            enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
+            exit    = fadeOut(tween(150)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            AppPickerScreen(
+                apps       = allApps,
+                onSelect   = { pkg -> onSelectApp(pkg); showAppPicker = false },
+                onDismiss  = { showAppPicker = false }
             )
         }
     }
@@ -453,6 +534,8 @@ private fun AddIconButton(onClick: () -> Unit) {
 @Composable
 private fun DashboardTab(
     relayActive          : Boolean,
+    selectedPackage      : String,
+    onOpenAppPicker      : () -> Unit,
     onToggle             : () -> Unit,
     onLaunchApp          : () -> Unit,
     showServerPanel      : Boolean,
@@ -483,6 +566,9 @@ private fun DashboardTab(
                 Spacer(Modifier.height(16.dp))
             }
         }
+
+        SelectedApplicationCard(packageName = selectedPackage, onClick = onOpenAppPicker)
+        Spacer(Modifier.height(16.dp))
 
         AnimatedVisibility(
             visible = showServerPanel,
@@ -521,6 +607,198 @@ private fun DashboardTab(
                 ConnectButton(running = relayActive, onToggle = onToggle)
             }
             Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun rememberAppIcon(packageName: String): ImageBitmap? {
+    val context = LocalContext.current
+    return remember(packageName) {
+        try {
+            context.packageManager.getApplicationIcon(packageName)
+                .toBitmap(width = 96, height = 96)
+                .asImageBitmap()
+        } catch (_: Exception) { null }
+    }
+}
+
+private fun appLabelOf(context: Context, packageName: String): String = try {
+    val appInfo = context.packageManager.getApplicationInfo(packageName, 0)
+    context.packageManager.getApplicationLabel(appInfo).toString()
+} catch (_: Exception) { packageName }
+
+private fun versionNameOf(context: Context, packageName: String): String? = try {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+        context.packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+    else
+        @Suppress("DEPRECATION") context.packageManager.getPackageInfo(packageName, 0).versionName
+} catch (_: Exception) { null }
+
+@Composable
+private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
+    val context   = LocalContext.current
+    val icon      = rememberAppIcon(packageName)
+    val label     = remember(packageName) { appLabelOf(context, packageName) }
+    val version   = remember(packageName) { versionNameOf(context, packageName) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(OxSurface)
+            .border(1.dp, OxOutlineStrong, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(16.dp)
+    ) {
+        Text(
+            "Selected Application",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = OxOnSurfaceDim,
+            fontFamily = FontFamily.Monospace
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(OxBackground),
+                contentAlignment = Alignment.Center
+            ) {
+                if (icon != null) {
+                    Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(32.dp))
+                } else {
+                    Text("📦", fontSize = 16.sp)
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    label,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = OxOnSurface,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    packageName,
+                    fontSize = 11.sp,
+                    color = OxOnSurfaceDim,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text("Change ›", fontSize = 12.sp, color = OxAccentLight, fontFamily = FontFamily.Monospace)
+        }
+        if (version != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Current: v$version",
+                fontSize = 12.sp,
+                color = OxOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppPickerScreen(
+    apps      : List<InstalledAppInfo>,
+    onSelect  : (String) -> Unit,
+    onDismiss : () -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(apps, query) {
+        if (query.isBlank()) apps
+        else apps.filter {
+            it.label.contains(query, ignoreCase = true) || it.packageName.contains(query, ignoreCase = true)
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().background(OxBackground).padding(horizontal = 24.dp)) {
+        Spacer(Modifier.height(28.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Text("‹", fontSize = 24.sp, color = OxOnBackground)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Select an Application",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = OxOnBackground,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            placeholder = { Text("Search for applications", fontFamily = FontFamily.Monospace, fontSize = 14.sp) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(999.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = OxAccent,
+                unfocusedBorderColor = OxOutlineStrong,
+                cursorColor = OxAccentLight
+            ),
+            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground)
+        )
+        Spacer(Modifier.height(16.dp))
+
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(filtered, key = { it.packageName }) { app ->
+                AppPickerRow(app = app, onClick = { onSelect(app.packageName) })
+                Spacer(Modifier.height(4.dp))
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun AppPickerRow(app: InstalledAppInfo, onClick: () -> Unit) {
+    val icon = rememberAppIcon(app.packageName)
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(OxSurface),
+            contentAlignment = Alignment.Center
+        ) {
+            if (icon != null) {
+                Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(34.dp))
+            } else {
+                Text("📦", fontSize = 16.sp)
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column {
+            Text(
+                app.label,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = OxOnBackground,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                app.packageName,
+                fontSize = 12.sp,
+                color = OxOnSurfaceDim,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

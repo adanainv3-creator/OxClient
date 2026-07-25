@@ -1,29 +1,37 @@
 package com.oxclient.utils
 
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Criticals, KillAura ve KillAuraPro aynı anda (birden fazla hedefe karşı)
- * kendi sahte "düşüş" paket dizilerini tetikleyebiliyordu. Her dizi birkaç
- * paket + delay içerdiğinden, 3-4 hedef aynı tick'te saldırıya girince
- * onlarca paket üst üste binip hem gerçek ağ trafiğini şişiriyor (ping'miş
- * gibi görünen lag) hem de coroutine/handler yükünden dolayı client'ın kendi
- * paket işleme döngüsünü (örn. totem pop algılama) geciktiriyordu.
- *
- * Çözüm: tüm modüller aynı kilidi paylaşsın. Kilit doluysa YENİ bir sahte
- * düşüş dizisi başlatılmaz (saldırının kendisi yine de gönderilir, sadece o
- * vuruş kritik olmayabilir) — böylece asla üst üste binme olmaz.
+ * Kritik enjeksiyon kilidi - artık çok daha hızlı
  */
 object CritLock {
-    private val mutex = Mutex()
-
-    /** Kilidi hemen alabiliyorsak [block]'u çalıştırır, alamıyorsak sessizce atlar. */
+    // AtomicBoolean daha hafif
+    private val locked = AtomicBoolean(false)
+    
+    // Her modül için ayrı kilit (opsiyonel)
+    private val moduleLocks = mutableMapOf<String, Mutex>()
+    
     suspend fun tryRun(block: suspend () -> Unit) {
-        if (!mutex.tryLock()) return
+        // AtomicBoolean ile hızlı kontrol
+        if (!locked.compareAndSet(false, true)) return
         try {
             block()
         } finally {
-            mutex.unlock()
+            locked.set(false)
+        }
+    }
+    
+    // Modül bazlı kilit (daha az çakışma)
+    suspend fun tryRun(moduleName: String, block: suspend () -> Unit) {
+        val lock = moduleLocks.getOrPut(moduleName) { Mutex() }
+        if (!lock.tryLock()) return
+        try {
+            block()
+        } finally {
+            lock.unlock()
         }
     }
 }

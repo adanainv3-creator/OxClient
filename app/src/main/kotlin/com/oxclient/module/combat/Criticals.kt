@@ -12,13 +12,18 @@ import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 class Criticals : BaseModule(
     name        = "Criticals",
     category    = ModuleCategory.COMBAT,
-    description = "Her vuruşu kritik hale getirir"
+    description = "Her vuruşu kritik hale getirir (ULTRA HIZLI)"
 ) {
-    enum class CritMode { Vanilla, MovePacket, Jump, TPJump, Packet }
+    enum class CritMode { 
+        Vanilla,      // Standart 7-packet
+        Fast,         // 3-packet hızlı (ÖNERİLEN)
+        UltraFast,    // 2-packet çok hızlı
+        Packet        // Minimal packet
+    }
 
-    private val mode     = enum ("Mode",      CritMode.MovePacket)
-    private val cooldown = int  ("Cooldown",   0, 0, 500)
-    private val shortcut = bool ("Shortcut",   false)
+    private val mode     = enum ("Mode",      CritMode.Fast)
+    private val cooldown = int  ("Cooldown",  0, 0, 100)
+    private val shortcut = bool ("Shortcut",  false)
 
     @Volatile private var lastCritMs = 0L
 
@@ -37,23 +42,14 @@ class Criticals : BaseModule(
         lastCritMs = now
 
         val session = PacketEventBus.currentSession ?: return
-
-        // ÖNEMLİ FIX: eskiden bütün sahte düşüş paketleri 0ms arayla art arda
-        // gönderiliyor, sonra orijinal saldırı paketi hemen forward ediliyordu.
-        // Sunucu bu paketleri aynı tick içinde işlediği için hiçbir zaman
-        // gerçek bir "düşüyor" durumu oluşmuyordu, dolayısıyla kritik hiç
-        // tetiklenmiyordu. Artık orijinal paketi iptal edip, düşüş paketlerini
-        // gerçek zaman aralıklarıyla (delay ile) gönderiyoruz, en son da
-        // orijinal saldırı paketini kendimiz iletiyoruz.
         event.cancel()
 
         scope.launch {
             CritLock.tryRun {
                 when (mode.value) {
                     CritMode.Vanilla    -> injectVanilla(session)
-                    CritMode.MovePacket -> injectMovePacket(session)
-                    CritMode.Jump       -> injectJump(session)
-                    CritMode.TPJump     -> injectTPJump(session)
+                    CritMode.Fast       -> injectFast(session)      // ÖNERİLEN
+                    CritMode.UltraFast  -> injectUltraFast(session)
                     CritMode.Packet     -> injectPacket(session)
                 }
             }
@@ -61,35 +57,34 @@ class Criticals : BaseModule(
         }
     }
 
+    // ⚡ FAST: Sadece 3 packet, minimal gecikme
+    private suspend fun injectFast(s: com.oxclient.core.relay.OxRelaySession) {
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
+        delay(10L)  // 25ms → 10ms
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = false)
+        delay(5L)   // Ekstra küçük delay
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)
+    }
+
+    // 🚀 ULTRA FAST: 2 packet, max hız
+    private suspend fun injectUltraFast(s: com.oxclient.core.relay.OxRelaySession) {
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
+        delay(5L)
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)
+    }
+
     private suspend fun injectVanilla(s: com.oxclient.core.relay.OxRelaySession) {
-        listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
+        // Opsiyonel: sadece 3 packet'e düşürüldü
+        listOf(0.42f, 0.1f, 0.0f).forEach { dy ->
             PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
-            delay(25L)
+            delay(8L)
         }
-    }
-
-    private suspend fun injectMovePacket(s: com.oxclient.core.relay.OxRelaySession) {
-        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
-        delay(30L)
-        PacketUtil.sendMoveAtSelf(s, dyOffset = 0f, onGround = false)
-    }
-
-    private suspend fun injectJump(s: com.oxclient.core.relay.OxRelaySession) {
-        listOf(0.0625f, 0f, 0.0625f).forEach { dy ->
-            PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
-            delay(25L)
-        }
-    }
-
-    private suspend fun injectTPJump(s: com.oxclient.core.relay.OxRelaySession) {
-        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false, teleport = true)
-        delay(30L)
-        PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = false, teleport = true)
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)
     }
 
     private suspend fun injectPacket(s: com.oxclient.core.relay.OxRelaySession) {
-        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0001f, onGround = false)
-        delay(15L)
-        PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,      onGround = false)
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.001f, onGround = false)
+        delay(2L)
+        PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)
     }
 }
