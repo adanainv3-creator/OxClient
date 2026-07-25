@@ -10,6 +10,7 @@ import com.oxclient.core.relay.Definitions
 import com.oxclient.module.ModuleManager
 import com.oxclient.module.social.FriendManager
 import com.oxclient.module.combat.AutoArmor
+import com.oxclient.module.combat.AutoRegear
 import com.oxclient.module.combat.AntiCrystal
 import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
@@ -89,6 +90,7 @@ class OxClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
+            AutoRegear(),
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect()
