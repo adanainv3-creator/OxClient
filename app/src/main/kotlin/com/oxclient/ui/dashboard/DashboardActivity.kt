@@ -42,6 +42,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -111,6 +112,26 @@ private object SelectedAppStore {
     }
 }
 
+/** Caches a successful password unlock so the user isn't asked again for a while. */
+private object UnlockSessionStore {
+    private const val PREFS_NAME = "oxclient_prefs"
+    private const val KEY_UNLOCKED_UNTIL = "unlocked_until"
+    private const val SESSION_DURATION_MS = 3 * 60 * 60 * 1000L // 3 saat
+
+    fun isUnlocked(context: Context): Boolean {
+        val until = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_UNLOCKED_UNTIL, 0L)
+        return System.currentTimeMillis() < until
+    }
+
+    fun markUnlocked(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_UNLOCKED_UNTIL, System.currentTimeMillis() + SESSION_DURATION_MS)
+            .apply()
+    }
+}
+
 private enum class DashTab { RELAY, CONFIG, ACCOUNTS }
 
 class DashboardActivity : ComponentActivity() {
@@ -153,10 +174,13 @@ class DashboardActivity : ComponentActivity() {
 
         setContent {
             OxClientTheme {
-                var unlocked by remember { mutableStateOf(false) }
+                var unlocked by remember { mutableStateOf(UnlockSessionStore.isUnlocked(this@DashboardActivity)) }
 
                 if (!unlocked) {
-                    PasswordGateScreen(onUnlock = { unlocked = true })
+                    PasswordGateScreen(onUnlock = {
+                        UnlockSessionStore.markUnlocked(this@DashboardActivity)
+                        unlocked = true
+                    })
                 } else {
                     val authState   by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
                     val relayActive by SessionManager.isActive.collectAsStateWithLifecycle()
@@ -261,7 +285,13 @@ class DashboardActivity : ComponentActivity() {
     }
 }
 
-private fun verifyPasswordRemote(email: String, password: String): Boolean {
+private sealed class VerifyResult {
+    object Valid : VerifyResult()
+    object Invalid : VerifyResult()
+    object NetworkError : VerifyResult()
+}
+
+private fun verifyPasswordRemote(email: String, password: String): VerifyResult {
     return try {
         val conn = java.net.URL("https://oxclient.com.tr/verify")
             .openConnection() as java.net.HttpURLConnection
@@ -279,10 +309,11 @@ private fun verifyPasswordRemote(email: String, password: String): Boolean {
                     .toByteArray()
             )
         }
-        val body = conn.inputStream.bufferedReader().use { it.readText() }
-        org.json.JSONObject(body).optBoolean("valid", false)
+        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        val body = stream.bufferedReader().use { it.readText() }
+        if (org.json.JSONObject(body).optBoolean("valid", false)) VerifyResult.Valid else VerifyResult.Invalid
     } catch (_: Exception) {
-        false
+        VerifyResult.NetworkError
     }
 }
 
@@ -290,18 +321,31 @@ private fun verifyPasswordRemote(email: String, password: String): Boolean {
 private fun PasswordGateScreen(onUnlock: () -> Unit) {
     var email by remember { mutableStateOf("") }
     var input by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var passwordVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+
+    val canSubmit = !loading && input.isNotBlank() && email.isNotBlank()
 
     fun trySubmit() {
-        if (loading || input.isBlank() || email.isBlank()) return
+        if (!canSubmit) return
         loading = true
-        error = false
+        errorMessage = null
         scope.launch {
-            val valid = withContext(Dispatchers.IO) { verifyPasswordRemote(email.trim(), input) }
-            loading = false
-            if (valid) onUnlock() else { error = true; input = "" }
+            when (withContext(Dispatchers.IO) { verifyPasswordRemote(email.trim(), input) }) {
+                VerifyResult.Valid -> { loading = false; onUnlock() }
+                VerifyResult.Invalid -> {
+                    loading = false
+                    errorMessage = "Wrong email or password"
+                    input = ""
+                }
+                VerifyResult.NetworkError -> {
+                    loading = false
+                    errorMessage = "Connection failed, try again"
+                }
+            }
         }
     }
 
@@ -322,6 +366,12 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                 fontFamily = FontFamily.Monospace
             )
             Text(
+                "Made by Oxygen8315",
+                fontSize = 11.sp,
+                color = OxOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
                 "Enter password",
                 fontSize = 13.sp,
                 color = OxOnSurfaceDim,
@@ -329,11 +379,17 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
             )
             OutlinedTextField(
                 value = email,
-                onValueChange = { email = it; error = false },
+                onValueChange = { email = it; errorMessage = null },
                 singleLine = true,
-                isError = error,
+                isError = errorMessage != null,
                 label = { Text("Email", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Email,
+                    imeAction = androidx.compose.ui.text.input.ImeAction.Next
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onNext = { focusRequester.requestFocus() }
+                ),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -345,13 +401,26 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
             )
             OutlinedTextField(
                 value = input,
-                onValueChange = { input = it; error = false },
+                onValueChange = { input = it; errorMessage = null },
                 singleLine = true,
-                isError = error,
-                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                isError = errorMessage != null,
+                visualTransformation = if (passwordVisible)
+                    androidx.compose.ui.text.input.VisualTransformation.None
+                else
+                    androidx.compose.ui.text.input.PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { trySubmit() }),
-                modifier = Modifier.fillMaxWidth(),
+                trailingIcon = {
+                    TextButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Text(
+                            if (passwordVisible) "HIDE" else "SHOW",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = OxOnSurfaceDim
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                 shape = RoundedCornerShape(6.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = OxAccent,
@@ -359,13 +428,13 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                     cursorColor = OxAccentLight
                 ),
                 textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = OxOnBackground),
-                supportingText = if (error) {
-                    { Text("Wrong password", color = OxError, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
-                } else null
+                supportingText = errorMessage?.let { msg ->
+                    { Text(msg, color = OxError, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                }
             )
             Button(
                 onClick = { trySubmit() },
-                enabled = !loading,
+                enabled = canSubmit,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = OxAccent)
@@ -499,6 +568,7 @@ fun DashboardScreen(
 @Composable
 private fun ScreenHeader(
     title: String,
+    subtitle: String? = null,
     trailing: @Composable RowScope.() -> Unit = {}
 ) {
     Row(
@@ -515,6 +585,15 @@ private fun ScreenHeader(
         color = OxOnBackground,
         fontFamily = FontFamily.Monospace
     )
+    if (subtitle != null) {
+        Spacer(Modifier.height(2.dp))
+        Text(
+            subtitle,
+            fontSize = 12.sp,
+            color = OxOnSurfaceDim,
+            fontFamily = FontFamily.Monospace
+        )
+    }
     Spacer(Modifier.height(20.dp))
 }
 
@@ -550,7 +629,7 @@ private fun DashboardTab(
     onRequestOverlayPermission : () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(title = "OxClient V1.1") {
+        ScreenHeader(title = "OxClient V1.1", subtitle = "Made by Oxygen8315") {
             IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
                 MoreVertGlyph(tint = if (showServerPanel) OxAccentLight else OxOnSurfaceDim)
             }
