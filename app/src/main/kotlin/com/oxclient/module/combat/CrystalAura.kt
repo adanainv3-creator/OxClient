@@ -262,7 +262,6 @@ class CrystalAura : BaseModule(
         var placedThisTick = 0
         val burst = isBurstTarget(target)
 
-        // Yerleşim adaylarını hasara göre sırala — en çok hasar veren pozisyona önce dene
         data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val dmg: Float, val selfDmg: Float)
         val candidates = mutableListOf<Candidate>()
 
@@ -467,8 +466,6 @@ class CrystalAura : BaseModule(
             kotlin.math.abs(c.x - cx) < 0.9f && kotlin.math.abs(c.y - cy) < 1.3f && kotlin.math.abs(c.z - cz) < 0.9f
         }
 
-    // Basit örneklenmiş raycast — self göz hizasından hedef noktaya kadar aradaki
-    // bloklardan biri katıysa (hava değilse) görüş hattı kapalı sayılır.
     private fun hasLineOfSight(tx: Float, ty: Float, tz: Float): Boolean {
         if (!WorldBlockTracker.hasAnyTerrainData()) return true
         val ex = EntityTracker.selfX; val ey = EntityTracker.selfY + SELF_EYE_HEIGHT; val ez = EntityTracker.selfZ
@@ -487,92 +484,104 @@ class CrystalAura : BaseModule(
 
     private data class PreparedItem(val slot: Int, val item: ItemData, val revertTo: Int?)
 
-    // Bedrock'ta "seçili olmayan slottaki item'ı kullanıyormuş gibi paket gönder" mümkün değil —
-    // server hotbarSlot + itemInHand ikilisini kendi bildiği seçili slot/item ile karşılaştırıp
-    // eşleşmezse transaction'ı reddediyor. Bu yüzden burada GERÇEKTEN slot seçiyoruz / swap ediyoruz.
+    // DÜZELTİLMİŞ: prepareItemForUse - kristali doğru şekilde hazırlar
     private fun prepareItemForUse(session: OxRelaySession, identifier: String): PreparedItem? {
+        // Önce elindeki item'ı kontrol et
         EntityTracker.getHeldItem()?.let { held ->
             val id = runCatching { held.definition?.identifier }.getOrNull()
-            if (id == identifier && held.count > 0) return PreparedItem(EntityTracker.selfHotbarSlot, held, null)
+            if (id == identifier && held.count > 0) {
+                return PreparedItem(EntityTracker.selfHotbarSlot, held, null)
+            }
         }
 
+        // Tüm hotbar slotlarını tara
         for (slot in 0..8) {
             val item = EntityTracker.getInventoryItem(slot) ?: continue
             if (item.count <= 0) continue
             val id = runCatching { item.definition?.identifier }.getOrNull()
             if (id == identifier) {
                 val original = EntityTracker.selfHotbarSlot
+                // Slot değiştir
                 InventoryUtil.sendHotbarSelect(session, slot)
+                // EntityTracker'ı güncelle
+                EntityTracker.selfHotbarSlot = slot
                 return PreparedItem(slot, item, if (noSwitch.value) original else null)
             }
         }
 
-        for (slot in 9..35) {
-            val item = EntityTracker.getInventoryItem(slot) ?: continue
-            if (item.count <= 0) continue
-            val id = runCatching { item.definition?.identifier }.getOrNull()
-            if (id == identifier) {
-                val destSlot = EntityTracker.selfHotbarSlot
-                val destItem = EntityTracker.getInventoryItem(destSlot) ?: ItemData.AIR
-                InventoryUtil.sendSlotSwap(
-                    session, slot, item.netId,
-                    ContainerSlotType.HOTBAR_AND_INVENTORY, destSlot, destItem.netId
-                )
-                return PreparedItem(destSlot, item, null)
-            }
-        }
         return null
     }
 
+    // DÜZELTİLMİŞ: sendPlacementUse - doğru blockDefinition ile gönder
     private fun sendPlacementUse(session: OxRelaySession, identifier: String, blockPos: Vector3i, blockId: String): Boolean {
         val prepared = prepareItemForUse(session, identifier) ?: return false
+        
+        // Block definition'ı al
         val blockDef = getBlockDefinition(session, blockId) ?: return false
+
+        // Kristal yerleştirme için doğru click pozisyonu
+        val clickPos = Vector3f.from(0.5f, 1.0f, 0.5f)
+        
+        // Player pozisyonu (ayak hizası)
+        val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
 
         return try {
             session.serverBound(InventoryTransactionPacket().apply {
-                transactionType          = InventoryTransactionType.ITEM_USE
-                actionType               = 0
-                blockPosition            = blockPos
-                blockFace                = 1
-                hotbarSlot               = prepared.slot
-                itemInHand               = prepared.item
-                playerPosition           = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
-                blockDefinition          = blockDef
-                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                transactionType = InventoryTransactionType.ITEM_USE
+                actionType = 0 // USE_ITEM
+                blockPosition = blockPos
+                blockFace = 1 // Yukarı (UP)
+                hotbarSlot = prepared.slot
+                itemInHand = prepared.item
+                playerPosition = playerPos
+                clickPosition = clickPos
+                blockDefinition = blockDef
+                triggerType = ItemUseTransaction.TriggerType.PLAYER_INPUT
                 clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                clientCooldownState      = 0
+                clientCooldownState = 0
             })
-            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it) }
+            // Revert işlemi
+            prepared.revertTo?.let { 
+                InventoryUtil.sendHotbarSelect(session, it)
+                EntityTracker.selfHotbarSlot = it
+            }
             true
-        } catch (_: Exception) { false }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun getBlockDefinition(session: OxRelaySession, targetId: String): BlockDefinition? {
         blockDefCache[targetId]?.let { return it }
+        
         try {
-            fun scanDefs(defs: DefinitionRegistry<BlockDefinition>?): BlockDefinition? {
-                defs ?: return null
-                for (i in 0..4096) {
-                    val def = try { defs.getDefinition(i) } catch (_: Exception) { null } ?: continue
+            // Önce session'ın kendi registry'sini dene
+            val codec = session.clientSession.peer.codecHelper
+            val blockDefs = codec.blockDefinitions
+            if (blockDefs != null) {
+                for (i in 0 until blockDefs.size) {
+                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null } ?: continue
                     val id = when (def) {
                         is SimpleBlockDefinition -> def.identifier
                         is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
                         else -> null
                     }
-                    if (id == targetId) return def
+                    if (id == targetId) {
+                        blockDefCache[targetId] = def
+                        return def
+                    }
                 }
-                return null
             }
-            scanDefs(session.clientSession.peer.codecHelper.blockDefinitions)?.let { blockDefCache[targetId] = it; return it }
-            scanDefs(Definitions.getClosestDefinitions(session.activeCodec.protocolVersion).blockDefinitions)?.let { blockDefCache[targetId] = it; return it }
         } catch (_: Exception) {}
 
+        // Fallback: doğrudan runtimeId kullan
         val fallbackRuntimeId = when (targetId) {
             "minecraft:obsidian" -> 49
             "minecraft:bedrock"  -> 7
+            "minecraft:end_crystal" -> 198 // End crystal runtime ID
             else -> return null
         }
+        
         val fallback = SimpleBlockDefinition(
             targetId, fallbackRuntimeId,
             org.cloudburstmc.nbt.NbtMap.builder()

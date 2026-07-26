@@ -106,12 +106,6 @@ class ChatSpammer : BaseModule(
                 val nearestDist = sqrt(dx * dx + dy * dy + dz * dz)
                 if (nearestDist > TOTEM_EVENT_RADIUS) return
 
-                val selfDx = EntityTracker.selfX - pos.x
-                val selfDy = EntityTracker.selfY - pos.y
-                val selfDz = EntityTracker.selfZ - pos.z
-                val selfDist = sqrt(selfDx * selfDx + selfDy * selfDy + selfDz * selfDz)
-                if (selfDist < nearestDist) return
-
                 handleTotemPop(nearest.runtimeId)
             }
 
