@@ -31,13 +31,22 @@ class ChatSpammer : BaseModule(
         private const val VERSION      = "v1.2"
         private const val TAG_LINE     = "OxClient $VERSION"
         private const val PVP_TAIL     = "by OxClient | Best Mobile Client"
-        private const val QUEUE_DELAY_MS = 2000L
-        private const val MAX_QUEUE_SIZE = 20
+        private const val QUEUE_DELAY_MS = 600L
+        private const val MAX_QUEUE_SIZE = 30
         private const val LOGOUT_RANGE = 256f
         private const val TOTEM_EVENT_RADIUS = 3f
         private const val SELF_HIT_WINDOW_MS = 3000L
+        private const val SNAPSHOT_INTERVAL_MS = 1000L
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
         private val JUNK_RANGE = 12..22
+
+        private val POP_MESSAGES = listOf(
+            "> @here @{name} Popped {count} Totem $PVP_TAIL | {junk}",
+            "> @here @{name} is actually totemfag | {count} Popped | {junk} | OxClient",
+            "> @here @{name} popped {count}x already lmao | {junk} | $TAG_LINE",
+            "> @here bro @{name} needs {count} totems just to survive | {junk}",
+            "> @here @{name} totem #{count} down, ez clap | {junk} | OxClient"
+        )
     }
 
     private val shortcut = bool("Shortcut", false)
@@ -54,6 +63,9 @@ class ChatSpammer : BaseModule(
     private val messageQueue = ConcurrentLinkedQueue<String>()
     private var scheduler: ScheduledExecutorService? = null
     @Volatile private var activeSession: com.oxclient.core.relay.OxRelaySession? = null
+
+    private data class PlayerSnapshot(val name: String, val x: Float, val y: Float, val z: Float, val isFriend: Boolean)
+    private val playerSnapshots = ConcurrentHashMap<Long, PlayerSnapshot>()
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
@@ -155,19 +167,36 @@ class ChatSpammer : BaseModule(
                     if (entry.entityId == EntityTracker.selfUniqueId) return@forEach
 
                     val tracked = EntityTracker.getByUniqueId(entry.entityId)
-                    if (tracked == null || EntityTracker.distanceTo(tracked) > LOGOUT_RANGE) {
+                    val snap    = playerSnapshots[entry.entityId]
+
+                    // tracked genelde burada zaten null oluyor: RemoveEntityPacket, PlayerListPacket'ten
+                    // önce gelip entity'yi EntityTracker'dan siliyor. O yüzden mesafe/isim/friend
+                    // kontrolü için periyodik snapshot'a düşüyoruz, tracked'e zorunlu bağımlı değiliz.
+                    val isFriend = tracked?.isFriendEntity ?: snap?.isFriend ?: false
+                    if (isFriend) {
                         knownPlayerNames.remove(entry.entityId)
-                        return@forEach
-                    }
-                    if (tracked.isFriendEntity) {
-                        knownPlayerNames.remove(entry.entityId)
+                        playerSnapshots.remove(entry.entityId)
                         return@forEach
                     }
 
-                    val name = tracked.name.takeIf { it.isNotEmpty() }
+                    val dist = when {
+                        tracked != null -> EntityTracker.distanceTo(tracked)
+                        snap    != null -> EntityTracker.distanceTo(snap.x, snap.y, snap.z)
+                        else            -> Float.MAX_VALUE
+                    }
+                    if (dist > LOGOUT_RANGE) {
+                        knownPlayerNames.remove(entry.entityId)
+                        playerSnapshots.remove(entry.entityId)
+                        return@forEach
+                    }
+
+                    val name = tracked?.name?.takeIf { it.isNotEmpty() }
+                        ?: snap?.name?.takeIf { it.isNotEmpty() }
                         ?: knownPlayerNames[entry.entityId]
                         ?: return@forEach
+
                     knownPlayerNames.remove(entry.entityId)
+                    playerSnapshots.remove(entry.entityId)
                     handleLogout(entry.entityId, name)
                 }
             }
@@ -184,10 +213,12 @@ class ChatSpammer : BaseModule(
         recentLogoutMs.clear()
         recentHitsByMe.clear()
         knownPlayerNames.clear()
+        playerSnapshots.clear()
         messageQueue.clear()
 
         scheduler = Executors.newSingleThreadScheduledExecutor().also {
             it.scheduleWithFixedDelay({ flushQueue() }, 0, QUEUE_DELAY_MS, TimeUnit.MILLISECONDS)
+            it.scheduleWithFixedDelay({ refreshPlayerSnapshots() }, 0, SNAPSHOT_INTERVAL_MS, TimeUnit.MILLISECONDS)
         }
     }
 
@@ -201,10 +232,18 @@ class ChatSpammer : BaseModule(
         recentLogoutMs.clear()
         recentHitsByMe.clear()
         knownPlayerNames.clear()
+        playerSnapshots.clear()
         messageQueue.clear()
 
         scheduler?.shutdownNow()
         scheduler = null
+    }
+
+    private fun refreshPlayerSnapshots() {
+        EntityTracker.getPlayers().forEach { e ->
+            if (e.runtimeId == EntityTracker.selfRuntimeId) return@forEach
+            playerSnapshots[e.uniqueId] = PlayerSnapshot(e.name, e.x, e.y, e.z, e.isFriendEntity)
+        }
     }
 
     private fun flushQueue() {
@@ -232,10 +271,10 @@ class ChatSpammer : BaseModule(
         val count = (popCounts[name] ?: 0) + 1
         popCounts[name] = count
 
-        val text = if (Random.nextBoolean())
-            "> @here @$name Popped $count Totem $PVP_TAIL | ${randomJunk()}"
-        else
-            "> @here @$name is actually totemfag | $count Popped | ${randomJunk()} | OxClient"
+        val text = POP_MESSAGES[Random.nextInt(POP_MESSAGES.size)]
+            .replace("{name}", name)
+            .replace("{count}", count.toString())
+            .replace("{junk}", randomJunk())
 
         enqueue(text)
     }

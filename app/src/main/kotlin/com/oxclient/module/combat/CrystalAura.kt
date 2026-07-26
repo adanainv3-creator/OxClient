@@ -19,7 +19,6 @@ import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
-import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
@@ -46,8 +45,6 @@ class CrystalAura : BaseModule(
         private const val SELF_EYE_HEIGHT = 1.62f
         private const val MAX_BREAKS_PER_TICK = 3
         private const val MAX_PLACES_PER_TICK = 4
-        private const val BLOCK_DEF_SCAN_CAP  = 20000
-        private const val BLOCK_DEF_MISS_LIMIT = 64
     }
 
     // --- Genel ---
@@ -555,53 +552,31 @@ class CrystalAura : BaseModule(
 
     private fun getBlockDefinition(session: OxRelaySession, targetId: String): BlockDefinition? {
         blockDefCache[targetId]?.let { return it }
-        
+
+        // GamingPacketListener artık codecHelper.blockDefinitions'a projenin kendi NBT
+        // paletini (hashed veya normal) atıyor, o yüzden burada direkt isme göre arayabiliyoruz.
+        // Eskiden burada runtimeId 0..20000 sıralı taranıyordu; hash'li palette'te ID'ler
+        // ardışık olmadığından tarama hep boşa çıkıp hardcoded (ve yanlış) fallback ID'lere
+        // düşüyordu — kristal yerleştirme bu yüzden sessizce reddediliyordu.
         try {
-            // Önce session'ın kendi registry'sini dene
-            val codec = session.clientSession.peer.codecHelper
-            val blockDefs = codec.blockDefinitions
-            if (blockDefs != null) {
-                var i = 0
-                var consecutiveMisses = 0
-                while (i < BLOCK_DEF_SCAN_CAP && consecutiveMisses < BLOCK_DEF_MISS_LIMIT) {
-                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null }
-                    if (def == null) {
-                        consecutiveMisses++
-                        i++
-                        continue
-                    }
-                    consecutiveMisses = 0
-                    val id = when (def) {
-                        is SimpleBlockDefinition -> def.identifier
-                        is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
-                        else -> null
-                    }
-                    if (id == targetId) {
-                        blockDefCache[targetId] = def
-                        return def
-                    }
-                    i++
-                }
+            val registry = session.clientSession.peer.codecHelper.blockDefinitions
+            (registry as? Definitions.NbtBlockDefinitionRegistry)?.getByIdentifier(targetId)?.let {
+                blockDefCache[targetId] = it
+                return it
             }
         } catch (_: Exception) {}
 
-        // Fallback: doğrudan runtimeId kullan
-        val fallbackRuntimeId = when (targetId) {
-            "minecraft:obsidian" -> 49
-            "minecraft:bedrock"  -> 7
-            "minecraft:end_crystal" -> 198 // End crystal runtime ID
-            else -> return null
-        }
-        
-        val fallback = SimpleBlockDefinition(
-            targetId, fallbackRuntimeId,
-            org.cloudburstmc.nbt.NbtMap.builder()
-                .putString("name", targetId)
-                .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())
-                .build()
-        )
-        blockDefCache[targetId] = fallback
-        return fallback
+        try {
+            val versioned = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion)
+            val found = (versioned.blockDefinitions as? Definitions.NbtBlockDefinitionRegistry)?.getByIdentifier(targetId)
+                ?: (versioned.blockDefinitionsHashed as? Definitions.NbtBlockDefinitionRegistry)?.getByIdentifier(targetId)
+            if (found != null) {
+                blockDefCache[targetId] = found
+                return found
+            }
+        } catch (_: Exception) {}
+
+        return null
     }
 
     private fun posKey(x: Int, y: Int, z: Int): Long =

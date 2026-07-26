@@ -2,6 +2,7 @@ package com.oxclient.core.relay.listener
 
 import com.oxclient.core.proxy.EntityTracker
 import com.oxclient.core.relay.ConnectionManager
+import com.oxclient.core.relay.Definitions
 import com.oxclient.core.relay.OxRelaySession
 import com.oxclient.utils.BlockTracker
 import com.oxclient.utils.ChunkParser
@@ -185,17 +186,15 @@ class GamingPacketListener : OxPacketListener {
         }
 
         try {
-            if (packet.isBlockNetworkIdsHashed) {
-                val serverDefs = session.serverSession?.peer?.codecHelper?.blockDefinitions
-                if (serverDefs != null) {
-                    session.clientSession.peer.codecHelper.blockDefinitions = serverDefs
-                }
-            } else {
-                val serverDefs = session.serverSession?.peer?.codecHelper?.blockDefinitions
-                if (serverDefs != null) {
-                    session.clientSession.peer.codecHelper.blockDefinitions = serverDefs
-                }
-            }
+            // Eskiden iki dal da birbirinin aynısıydı (isBlockNetworkIdsHashed hiç fark
+            // etmiyordu) ve serverSession'ın kütüphane-varsayılanı registry'sine güveniliyordu.
+            // Hash modunda (modern sunucularda genelde true) bu registry ardışık ID varsaymıyor,
+            // ama CrystalAura gibi tüketiciler isme göre arama yapabilmek için projenin kendi
+            // NBT paletinden (Definitions) gelen registry'yi bekliyor. Artık doğrudan onu atıyoruz.
+            val versioned = Definitions.getClosestDefinitions(session.activeCodec.protocolVersion)
+            val defs = if (packet.isBlockNetworkIdsHashed) versioned.blockDefinitionsHashed else versioned.blockDefinitions
+            session.clientSession.peer.codecHelper.blockDefinitions = defs
+            session.serverSession?.peer?.codecHelper?.blockDefinitions = defs
         } catch (e: Exception) {
         }
     }
