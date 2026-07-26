@@ -32,7 +32,7 @@ class ESP : BaseModule(
     private val fov            = float("Manual FOV",    110f,  30f, 130f)
     private val maxDisplay    = int  ("Max Display",   150,  10, 800)
     private val tracerWidth   = float("Tracer Width",  2f,   0.5f, 8f)
-    private val boxAlpha      = int  ("Box Alpha",     80,   10,  200)
+    private val boxAlpha      = int  ("Box Alpha",     55,   10,  200)
     private val showLabels    = bool ("Show Labels",   true)
     private val showDistance  = bool ("Show Distance", true)
     private val showChest     = bool ("Chest",         true)
@@ -183,7 +183,7 @@ class ESP : BaseModule(
                 when (renderMode.value) {
                     RenderMode.Tracer, RenderMode.Both -> {
                         tracerPaint.color = color
-                        tracerPaint.alpha = (200 * alphaScale).toInt().coerceIn(0, 255)
+                        tracerPaint.alpha = (165 * alphaScale).toInt().coerceIn(0, 255)
                         tracerPaint.strokeWidth = if (isNearest) tracerWidth.value + 1.5f else tracerWidth.value
                         canvas.drawLine(centerX, centerY, screenPos.first, screenPos.second, tracerPaint)
                     }
@@ -357,7 +357,7 @@ class ESP : BaseModule(
         }
 
         strokePaint.color = colorArgb
-        strokePaint.alpha = (220 * alphaScale).toInt().coerceIn(0, 255)
+        strokePaint.alpha = (185 * alphaScale).toInt().coerceIn(0, 255)
         strokePaint.strokeWidth = if (isNearest) tracerWidth.value + 1.5f else tracerWidth.value
 
         val edges = intArrayOf(
@@ -381,7 +381,7 @@ class ESP : BaseModule(
         if (isNearest) {
             val glowPaint = Paint(strokePaint)
             glowPaint.color = colorArgb
-            glowPaint.alpha = (90 * alphaScale).toInt().coerceIn(0, 255)
+            glowPaint.alpha = (65 * alphaScale).toInt().coerceIn(0, 255)
             glowPaint.strokeWidth = strokePaint.strokeWidth + 3f
             drawEdges(canvas, screenCorners, edges, glowPaint)
         }

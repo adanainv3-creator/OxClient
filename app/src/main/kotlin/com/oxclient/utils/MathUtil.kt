@@ -47,7 +47,9 @@ object MathUtil {
      *   - Yaw  0°  = Güney (+Z), 90° = Batı (-X), -90° = Doğu (+X)
      *   - Pitch pozitif = aşağı bakış
      *   - selfY = ayak pozisyonu; göz yüksekliği +1.62f eklenerek düzeltilir
-     *   - fov   = YATAY (horizontal) FOV derece cinsinden (Bedrock default 110°)
+     *   - fov   = DİKEY (vertical) FOV derece cinsinden — Minecraft'ın fov ayarı gerçekte
+     *             dikey FOV'dur (Matrix4f.perspective(fovy,...) convention'ı), yatay ondan
+     *             aspect ile türetilir. Bunu ters kurarsan geniş ekranlarda dikey sapma olur.
      *
      * @return ekran koordinatı (px, py) veya kamera arkasındaysa null
      */
@@ -88,10 +90,10 @@ object MathUtil {
         // Kamera arkası → görünmez
         if (rz <= 0.1) return null
 
-        // fov YATAY → dikey FOV'a çevir
+        // fov DİKEY sabit → yatay FOV aspect ile türetilir (Minecraft convention'ı)
         val aspect      = screenW.toDouble() / screenH.toDouble()
-        val tanHalfFovX = tan(Math.toRadians(fov / 2.0))
-        val tanHalfFovY = tanHalfFovX / aspect
+        val tanHalfFovY = tan(Math.toRadians(fov / 2.0))
+        val tanHalfFovX = tanHalfFovY * aspect
 
         val sx = (( rx / (rz * tanHalfFovX)) * (screenW / 2.0) + screenW / 2.0).toFloat()
         val sy = ((-ry / (rz * tanHalfFovY)) * (screenH / 2.0) + screenH / 2.0).toFloat()

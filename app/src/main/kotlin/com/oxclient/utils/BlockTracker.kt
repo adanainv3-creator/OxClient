@@ -7,19 +7,19 @@ import java.util.concurrent.ConcurrentHashMap
 object BlockTracker {
 
     enum class TrackedBlockType(val displayName: String, val colorArgb: Int) {
-        CHEST        ("Chest",       0xFFCC7A00.toInt()),
-        SHULKER_BOX  ("Shulker",     0xFFD9639C.toInt()),
-        ENDER_CHEST  ("Ender Chest", 0xFF8E5FBF.toInt()),
-        SPAWNER      ("Spawner",     0xFF1A1A1A.toInt()),
-        HOPPER       ("Hopper",      0xFFD0D0D0.toInt()),
-        BARREL       ("Barrel",      0xFF8B5A2B.toInt()),
-        TRAPPED_CHEST("Trapped Chest",0xFFB8960C.toInt()),
-        FURNACE      ("Furnace",     0xFF9E9E9E.toInt()),
-        BLAST_FURNACE("Blast Furnace",0xFFB33A2E.toInt()),
-        SMOKER       ("Smoker",      0xFF7FA86B.toInt()),
-        BREWING_STAND("Brewing Stand",0xFF5C6BC0.toInt()),
-        DISPENSER    ("Dispenser",   0xFF5B7DB1.toInt()),
-        DROPPER      ("Dropper",     0xFF8A7B1E.toInt()),
+        CHEST        ("Chest",       0xFFC08A4E.toInt()),
+        SHULKER_BOX  ("Shulker",     0xFFB97AA0.toInt()),
+        ENDER_CHEST  ("Ender Chest", 0xFF7A6BA6.toInt()),
+        SPAWNER      ("Spawner",     0xFF54525C.toInt()),
+        HOPPER       ("Hopper",      0xFFA8A8AC.toInt()),
+        BARREL       ("Barrel",      0xFF8A6B4E.toInt()),
+        TRAPPED_CHEST("Trapped Chest",0xFFA68F4A.toInt()),
+        FURNACE      ("Furnace",     0xFF8F8F8F.toInt()),
+        BLAST_FURNACE("Blast Furnace",0xFF9C5347.toInt()),
+        SMOKER       ("Smoker",      0xFF7A9270.toInt()),
+        BREWING_STAND("Brewing Stand",0xFF5F6FA3.toInt()),
+        DISPENSER    ("Dispenser",   0xFF5E7A9E.toInt()),
+        DROPPER      ("Dropper",     0xFF8A7A3E.toInt()),
     }
 
     data class TrackedBlock(
@@ -122,7 +122,7 @@ object BlockTracker {
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun extractPaletteList(startGame: StartGamePacket): List<Any>? {
+    internal fun extractPaletteList(startGame: StartGamePacket): List<Any>? {
         val candidateNames = listOf(
             "getBlockPalette", "getBlockProperties", "getBlockDefinitions", "getBlockPropertiesList"
         )
@@ -138,7 +138,7 @@ object BlockTracker {
         return null
     }
 
-    private fun extractBlockName(entry: Any): String? {
+    internal fun extractBlockName(entry: Any): String? {
         for (methodName in listOf("getName", "getIdentifier")) {
             try {
                 val m = entry.javaClass.getMethod(methodName)

@@ -7,6 +7,7 @@ import com.oxclient.module.ModuleManager
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
 import com.oxclient.module.visual.EnemyESP
+import com.oxclient.module.visual.Xray
 
 class ESPOverlayView(context: Context) : View(context) {
 
@@ -19,6 +20,9 @@ class ESPOverlayView(context: Context) : View(context) {
 
     private val enemyEspModule: EnemyESP?
         get() = ModuleManager.byName("EnemyESP") as? EnemyESP
+
+    private val xrayModule: Xray?
+        get() = ModuleManager.byName("Xray") as? Xray
 
     private val arrayListModule: ArrayListModule?
         get() = ModuleManager.byName("Mod List") as? ArrayListModule
@@ -34,6 +38,11 @@ class ESPOverlayView(context: Context) : View(context) {
         val enemyEsp = enemyEspModule
         if (enemyEsp != null && enemyEsp.isEnabled) {
             try { enemyEsp.render(canvas, width, height) } catch (_: Exception) {}
+        }
+
+        val xray = xrayModule
+        if (xray != null && xray.isEnabled) {
+            try { xray.render(canvas, width, height) } catch (_: Exception) {}
         }
 
         val arrayList = arrayListModule

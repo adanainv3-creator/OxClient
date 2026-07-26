@@ -37,9 +37,11 @@ import com.oxclient.module.visual.ESP
 import com.oxclient.module.visual.FOVChanger
 import com.oxclient.module.visual.FullBright
 import com.oxclient.module.visual.EnemyESP
+import com.oxclient.module.visual.Xray
 import com.oxclient.module.combat.AirFight
 import com.oxclient.module.combat.HeadTrack
 import com.oxclient.utils.WorldBlockTracker
+import com.oxclient.utils.OreTracker
 
 class OxClientApp : Application() {
 
@@ -73,6 +75,7 @@ class OxClientApp : Application() {
         }
 
         WorldBlockTracker.init()
+        OreTracker.init()
         registerModules()
     }
 
@@ -128,6 +131,7 @@ class OxClientApp : Application() {
             FullBright(),
             ESP(),
             EnemyESP(),
+            Xray(),
             AirFight(),
             HeadTrack(),
             FOVChanger(),

@@ -26,8 +26,13 @@ class AutoScaffold : BaseModule(
     companion object {
         private const val TICK_INTERVAL_MS = 50L
         // Bedrock blockFace sırası: 0=down 1=up 2=north(-z) 3=south(+z) 4=west(-x) 5=east(+x)
-        private const val FACE_UP = 1
-        
+        private const val FACE_DOWN  = 0
+        private const val FACE_UP    = 1
+        private const val FACE_NORTH = 2
+        private const val FACE_SOUTH = 3
+        private const val FACE_WEST  = 4
+        private const val FACE_EAST  = 5
+
         // Komşu yönler: [alt, kuzey, güney, batı, doğu]
         private val NEIGHBOR_OFFSETS = arrayOf(
             Triple(0, -1, 0),  // alt
@@ -80,7 +85,7 @@ class AutoScaffold : BaseModule(
 
         // Hedef: ayağının altındaki blok
         val targetY = footY - 1
-        
+
         // Hedef hücre boş mu kontrol et
         val targetId = WorldBlockTracker.getBlockIdentifier(footX, targetY, footZ)
         if (targetId != null && targetId != "minecraft:air") return
@@ -96,7 +101,7 @@ class AutoScaffold : BaseModule(
             val checkX = footX + dx
             val checkY = targetY + dy
             val checkZ = footZ + dz
-            
+
             val blockId = WorldBlockTracker.getBlockIdentifier(checkX, checkY, checkZ)
             if (blockId != null && blockId != "minecraft:air") {
                 // Dolu blok bulundu
@@ -104,14 +109,15 @@ class AutoScaffold : BaseModule(
                 refY = checkY
                 refZ = checkZ
                 foundRef = true
-                
-                // Hangi yönden yerleştireceğimizi belirle
+
+                // ref -> target yönü neyse, o yönün TERSİ tıklanacak yüzdür
+                // (yeni blok, tıklanan yüzün dışına doğru oluşur)
                 face = when {
-                    dy == -1 -> 0 // altındaki bloktan yukarı
-                    dx == -1 -> 4 // batıdan doğuya
-                    dx == 1 -> 5  // doğudan batıya
-                    dz == -1 -> 2 // kuzeyden güneye
-                    dz == 1 -> 3  // güneyden kuzeye
+                    dy == -1 -> FACE_UP    // ref altta  -> ref'in üst yüzüne tıkla
+                    dx == -1 -> FACE_EAST  // ref batıda -> ref'in doğu yüzüne tıkla
+                    dx == 1  -> FACE_WEST  // ref doğuda -> ref'in batı yüzüne tıkla
+                    dz == -1 -> FACE_SOUTH // ref kuzeyde -> ref'in güney yüzüne tıkla
+                    dz == 1  -> FACE_NORTH // ref güneyde -> ref'in kuzey yüzüne tıkla
                     else -> FACE_UP
                 }
                 break
@@ -122,10 +128,9 @@ class AutoScaffold : BaseModule(
 
         // Rotasyon ayarı
         if (rotate.value) {
-            // Yerleştirilecek bloğun merkezine doğru dön
             val r = RotationUtil.toPoint(
-                footX + 0.5f, 
-                targetY + 0.5f, 
+                footX + 0.5f,
+                targetY + 0.5f,
                 footZ + 0.5f
             )
             PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch)

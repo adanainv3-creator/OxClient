@@ -190,4 +190,112 @@ object ChunkParser {
         if (x == Int.MIN_VALUE || y == Int.MIN_VALUE || z == Int.MIN_VALUE) return null
         return ParsedBlockEntity(x, y, z, tag)
     }
+
+    data class OreHit(val x: Int, val y: Int, val z: Int, val runtimeId: Int)
+
+    // Overworld (1.18+) section indeksi -4'ten başlar => dünya Y -64.
+    // Nether/End farklı taban kullanır (0'dan başlar) — dimension'a göre bunu
+    // çağıran taraf override etmeli, burada default Overworld varsayılıyor.
+    const val OVERWORLD_MIN_SECTION = -4
+
+    /**
+     * Chunk içindeki cevher bloklarını (oreRuntimeIds'de olanları) world koordinatlarıyla döner.
+     * Persistent (NBT) palette formatlı subchunk'lar desteklenmiyor (skipBlockStorage ile aynı kısıt).
+     * subChunkCount reflection ile bulunamazsa boş liste döner — bu durumda version-byte ile
+     * tarama yapılabilir ama baseY güvenilir hesaplanamayacağından burada tercih edilmedi.
+     */
+    fun extractOreBlocks(
+        pkt: LevelChunkPacket,
+        oreRuntimeIds: Set<Int>,
+        minSectionIndex: Int = OVERWORLD_MIN_SECTION,
+        subChunkCount: Int? = null
+    ): List<OreHit> {
+        if (oreRuntimeIds.isEmpty()) return emptyList()
+        val original = readDataField(pkt) ?: return emptyList()
+        val buf = original.duplicate()
+
+        val chunkX = pkt.chunkX
+        val chunkZ = pkt.chunkZ
+        val count = subChunkCount ?: reflectSubChunkCount(pkt) ?: return emptyList()
+
+        val result = mutableListOf<OreHit>()
+        return try {
+            var sectionIndex = minSectionIndex
+            repeat(count.coerceAtMost(MAX_SUBCHUNKS)) {
+                if (buf.isReadable) {
+                    decodeOneSubChunk(buf, chunkX, chunkZ, sectionIndex * 16, oreRuntimeIds, result)
+                }
+                sectionIndex++
+            }
+            result
+        } catch (e: Exception) {
+            result // o ana kadar toplanan sonuçları döndür
+        }
+    }
+
+    private fun decodeOneSubChunk(
+        buf: ByteBuf, chunkX: Int, chunkZ: Int, baseY: Int,
+        oreRuntimeIds: Set<Int>, out: MutableList<OreHit>
+    ) {
+        val version = buf.readUnsignedByte().toInt()
+        when (version) {
+            1 -> decodeBlockStorage(buf, chunkX, chunkZ, baseY, oreRuntimeIds, out)
+            8, 9 -> {
+                val storageCount = buf.readUnsignedByte().toInt()
+                if (version == 9) buf.readByte()
+                repeat(storageCount) { layer ->
+                    // 0. katman gerçek bloklar, sonraki katmanlar genelde su/waterlogging — atla
+                    if (layer == 0) decodeBlockStorage(buf, chunkX, chunkZ, baseY, oreRuntimeIds, out)
+                    else skipBlockStorage(buf)
+                }
+            }
+            else -> throw IllegalStateException("Tanınmayan subchunk version=$version")
+        }
+    }
+
+    private fun decodeBlockStorage(
+        buf: ByteBuf, chunkX: Int, chunkZ: Int, baseY: Int,
+        oreRuntimeIds: Set<Int>, out: MutableList<OreHit>
+    ) {
+        val header = buf.readUnsignedByte().toInt()
+        val bitsPerBlock = header ushr 1
+        val isPersistent = (header and 1) == 1
+
+        if (isPersistent) {
+            throw IllegalStateException("Persistent (NBT) palette formatı desteklenmiyor")
+        }
+
+        if (bitsPerBlock == 0) {
+            // Tüm subchunk tek bir blok (genelde air/stone) — cevher olma ihtimali pratikte yok, atla.
+            readUnsignedVarInt(buf)
+            return
+        }
+
+        val blocksPerWord = 32 / bitsPerBlock
+        val wordCount = (4096 + blocksPerWord - 1) / blocksPerWord
+        val mask = (1 shl bitsPerBlock) - 1
+
+        val words = IntArray(wordCount)
+        for (w in 0 until wordCount) words[w] = buf.readIntLE()
+
+        val paletteSize = readUnsignedVarInt(buf)
+        val palette = IntArray(paletteSize)
+        for (p in 0 until paletteSize) palette[p] = readUnsignedVarInt(buf)
+
+        for (idx in 0 until 4096) {
+            val w = idx / blocksPerWord
+            val slot = idx % blocksPerWord
+            val paletteIndex = (words[w] ushr (slot * bitsPerBlock)) and mask
+            if (paletteIndex >= palette.size) continue
+            val runtimeId = palette[paletteIndex]
+            if (runtimeId !in oreRuntimeIds) continue
+
+            // idx -> yerel (lx,ly,lz): XZY sırası (x en anlamlı, sonra z, sonra y)
+            val lx = idx shr 8
+            val lz = (idx shr 4) and 0xF
+            val ly = idx and 0xF
+
+            out.add(OreHit(chunkX * 16 + lx, baseY + ly, chunkZ * 16 + lz, runtimeId))
+        }
+    }
 }

@@ -46,6 +46,8 @@ class CrystalAura : BaseModule(
         private const val SELF_EYE_HEIGHT = 1.62f
         private const val MAX_BREAKS_PER_TICK = 3
         private const val MAX_PLACES_PER_TICK = 4
+        private const val BLOCK_DEF_SCAN_CAP  = 20000
+        private const val BLOCK_DEF_MISS_LIMIT = 64
     }
 
     // --- Genel ---
@@ -559,8 +561,16 @@ class CrystalAura : BaseModule(
             val codec = session.clientSession.peer.codecHelper
             val blockDefs = codec.blockDefinitions
             if (blockDefs != null) {
-                for (i in 0 until blockDefs.size) {
-                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null } ?: continue
+                var i = 0
+                var consecutiveMisses = 0
+                while (i < BLOCK_DEF_SCAN_CAP && consecutiveMisses < BLOCK_DEF_MISS_LIMIT) {
+                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null }
+                    if (def == null) {
+                        consecutiveMisses++
+                        i++
+                        continue
+                    }
+                    consecutiveMisses = 0
                     val id = when (def) {
                         is SimpleBlockDefinition -> def.identifier
                         is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
@@ -570,6 +580,7 @@ class CrystalAura : BaseModule(
                         blockDefCache[targetId] = def
                         return def
                     }
+                    i++
                 }
             }
         } catch (_: Exception) {}
