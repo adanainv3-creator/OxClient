@@ -385,7 +385,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     private fun buildNotif() = NotificationCompat.Builder(this, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_ox_logo)
+        .setSmallIcon(R.mipmap.ic_ox_logo)
         .setContentTitle("OxClient Overlay")
         .setContentText("HUD aktif")
         .setOngoing(true)
