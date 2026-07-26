@@ -15,7 +15,7 @@ import com.oxclient.core.relay.Definitions
 import com.oxclient.module.ModuleManager
 import com.oxclient.module.social.FriendManager
 import com.oxclient.module.combat.AutoArmor
-import com.oxclient.module.combat.AutoScaffold  // Yeni eklenen import
+import com.oxclient.module.movement.AutoScaffold  // Yeni eklenen import
 import com.oxclient.module.combat.AntiCrystal
 import com.oxclient.module.combat.AutoTotem
 import com.oxclient.module.combat.Criticals
