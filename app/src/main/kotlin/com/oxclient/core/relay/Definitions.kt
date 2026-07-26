@@ -134,23 +134,16 @@ object Definitions {
     ) : DefinitionRegistry<BlockDefinition> {
 
         private val map = Int2ObjectOpenHashMap<NbtBlockDefinition>()
-        private val byIdentifier = HashMap<String, NbtBlockDefinition>()
 
         init {
             var counter = 0
             for (def in definitions) {
                 val runtimeId = if (hashed) createHash(def) else counter++
-                val entry = NbtBlockDefinition(runtimeId, def)
-                map.put(runtimeId, entry)
-                def.getString("name")?.let { byIdentifier.putIfAbsent(it, entry) }
+                map.put(runtimeId, NbtBlockDefinition(runtimeId, def))
             }
         }
 
         override fun getDefinition(runtimeId: Int): BlockDefinition? = map.get(runtimeId)
-
-        // hashed registry'de runtimeId'ler ardışık değil (isim+state hash'i), bu yüzden
-        // identifier'a göre doğrudan arama gerekiyor — index taraması burada işe yaramaz.
-        fun getByIdentifier(identifier: String): NbtBlockDefinition? = byIdentifier[identifier]
 
         override fun isRegistered(definition: BlockDefinition?): Boolean =
             definition != null && map.get(definition.runtimeId) == definition
