@@ -15,7 +15,7 @@ android {
         minSdk        = 26
         targetSdk     = 35
         versionCode   = 2
-        versionName   = "3.0.0"
+        versionName   = "1.1.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -33,8 +33,6 @@ android {
 
     buildTypes {
         release {
-            // TEŞHİS: R8/ProGuard suçlu mu diye geçici olarak kapatıldı.
-            // Çökme geçerse suçlu R8'dir -> keep kuralı ekleyip tekrar true yapacağız.
             isMinifyEnabled   = false
             isShrinkResources = false
             signingConfig     = signingConfigs.getByName("release")
