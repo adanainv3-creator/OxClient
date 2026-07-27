@@ -22,6 +22,7 @@ import com.oxclient.module.combat.Criticals
 import com.oxclient.module.combat.CrystalAura
 import com.oxclient.module.combat.KillAura
 import com.oxclient.module.combat.KillAuraPro
+import com.oxclient.module.combat.PcAura
 import com.oxclient.module.misc.ChatSpammer
 import com.oxclient.module.misc.ChatAdvertiser
 import com.oxclient.module.misc.Disconnect
@@ -32,6 +33,7 @@ import com.oxclient.module.movement.MotionFly
 import com.oxclient.module.movement.Speed
 import com.oxclient.module.movement.Timer
 import com.oxclient.module.movement.TPAura
+import com.oxclient.module.movement.TPAuraPC
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
 import com.oxclient.module.visual.FOVChanger
@@ -117,6 +119,7 @@ class OxClientApp : Application() {
         ModuleManager.registerAll(
             KillAura(),
             KillAuraPro(),
+            PcAura(),
             CrystalAura(),
             AntiCrystal(),
             AutoTotem(),
@@ -137,6 +140,7 @@ class OxClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
+            TPAuraPC()
             AutoScaffold(),  // AutoRegear kaldırıldı, AutoScaffold eklendi
             ChatSpammer(),
             ChatAdvertiser(),

@@ -20,6 +20,7 @@ import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
 import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
+import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
@@ -34,18 +35,16 @@ import kotlin.math.max
 class CrystalAura : BaseModule(
     name        = "CrystalAura",
     category    = ModuleCategory.COMBAT,
-    description = "Çok hedefli otomatik kristal yerleştirme/kırma — self-koruma, kritik ve LOS kontrolüyle"
+    description = "Çok hedefli otomatik kristal yerleştirme/kırma — LOS ve kritik kontrolüyle"
 ) {
     enum class CritMode      { None, MovePacket, Vanilla }
-    enum class PlaceStrategy { Closest, HighestDamage, MultiTarget }
+    enum class PlaceStrategy { Closest, MultiTarget }
 
     companion object {
-        private const val CRYSTAL_POWER   = 6f
-        private const val MIN_DAMAGE      = 0.5f
         private const val SEARCH_RADIUS   = 2
         private const val SELF_EYE_HEIGHT = 1.62f
-        private const val MAX_BREAKS_PER_TICK = 3
-        private const val MAX_PLACES_PER_TICK = 4
+        private const val MAX_BREAKS_PER_TICK = 5
+        private const val MAX_PLACES_PER_TICK = 6
         private const val BLOCK_DEF_SCAN_CAP  = 20000
         private const val BLOCK_DEF_MISS_LIMIT = 64
     }
@@ -55,7 +54,7 @@ class CrystalAura : BaseModule(
     private val breakCrystals    = bool("Break",               true)
     private val strategy         = enum("Strategy",            PlaceStrategy.MultiTarget)
     private val shortcut         = bool("Shortcut",            true)
-    private val tickIntervalMs   = int ("Tick Interval",       40, 20, 200)
+    private val tickIntervalMs   = int ("Tick Interval",       20, 20, 200)
 
     // --- Hedefleme ---
     private val targetRange      = int ("Target Range",   14, 4, 30)
@@ -65,36 +64,28 @@ class CrystalAura : BaseModule(
 
     // --- Yerleştirme ---
     private val placeRange       = int ("Place Range",      8, 2, 16)
-    private val placeDelayMs     = int ("Place Delay",     120, 40, 2000)
-    private val placeRetryMs     = int ("Place Retry Ms",  400, 100, 3000)
-    private val maxPlacePerSec   = int ("Max Place/Sec",     8, 1, 30)
-    private val minDamageX10     = int ("Min Damage x10",    5, 0, 200)
-    private val minDamage: Float get() = minDamageX10.value / 10f
+    private val placeDelayMs     = int ("Place Delay",      60, 40, 2000)
+    private val placeRetryMs     = int ("Place Retry Ms",  300, 100, 3000)
+    private val maxPlacePerSec   = int ("Max Place/Sec",    18, 1, 30)
     private val searchYBelow     = int ("Search Y Below",     3, 1, 8)
     private val searchYAbove     = int ("Search Y Above",     2, 1, 8)
     private val requireLOS       = bool("Require LOS",         false)
 
-    // --- Self koruma ---
-    private val maxSelfDamageX10 = int ("Max Self Damage x10", 90, 0, 200)
-    private val maxSelfDamage: Float get() = maxSelfDamageX10.value / 10f
-    private val suicide          = bool("Suicide",              false)
-
     // --- Burst (düşük can / totem sonrası) ---
     private val burstOnLowHpTotem   = bool("Burst LowHp/Totem",    true)
     private val burstHealth         = int ("Burst Health Threshold", 8, 1, 20)
-    private val burstMaxPlacePerSec = int ("Burst Max Place/Sec",   15, 1, 40)
+    private val burstMaxPlacePerSec = int ("Burst Max Place/Sec",   28, 1, 40)
     private val burstDurationMs     = int ("Burst Duration Ms",   1500, 200, 5000)
 
     // --- Obsidian ---
     private val autoObsidian        = bool("Auto Obsidian",        true)
-    private val autoObsidianDelayMs = int ("Auto Obsidian Delay", 180, 50, 1000)
+    private val autoObsidianDelayMs = int ("Auto Obsidian Delay", 100, 50, 1000)
     private val selfSurround        = bool("Self Surround",        true)
-    private val selfSurroundDelayMs = int ("Self Surround Delay", 250, 50, 2000)
+    private val selfSurroundDelayMs = int ("Self Surround Delay", 150, 50, 2000)
 
     // --- Kırma ---
     private val breakRange       = int ("Break Range",     10, 2, 20)
-    private val breakDelayMs     = int ("Break Delay",      60, 30, 300)
-    private val breakAll         = bool("Break All",          true)
+    private val breakDelayMs     = int ("Break Delay",      30, 30, 300)
     private val breakCrit        = enum("Break Crit",         CritMode.MovePacket)
 
     // --- Görünmezlik / legit davranış ---
@@ -209,10 +200,6 @@ class CrystalAura : BaseModule(
         if (place.value) {
             when (strategy.value) {
                 PlaceStrategy.Closest -> doPlace(targets.first())
-                PlaceStrategy.HighestDamage -> {
-                    val best = targets.maxByOrNull { estimatedBestDamage(it) } ?: targets.first()
-                    doPlace(best)
-                }
                 PlaceStrategy.MultiTarget -> for (t in targets) doPlace(t)
             }
         }
@@ -237,19 +224,6 @@ class CrystalAura : BaseModule(
         return Triple(target.x + vx * (t * 20f), target.y, target.z + vz * (t * 20f))
     }
 
-    private fun estimatedBestDamage(target: EntityTracker.TrackedEntity): Float {
-        val (px, py, pz) = predictedPos(target)
-        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()
-        var best = 0f
-        for (dx in -SEARCH_RADIUS..SEARCH_RADIUS) for (dz in -SEARCH_RADIUS..SEARCH_RADIUS) {
-            val hit = findSurface(tx + dx, ty, tz + dz) ?: continue
-            val cx = tx + dx + 0.5f; val cy = hit.y + 1f; val cz = tz + dz + 0.5f
-            val dmg = estimateDamage(cx, cy, cz, target)
-            if (dmg > best) best = dmg
-        }
-        return best
-    }
-
     private fun doPlace(target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         val last = lastPlaceMsMap[target.runtimeId] ?: 0L
@@ -264,7 +238,7 @@ class CrystalAura : BaseModule(
         var placedThisTick = 0
         val burst = isBurstTarget(target)
 
-        data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val dmg: Float, val selfDmg: Float)
+        data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val distSq: Float)
         val candidates = mutableListOf<Candidate>()
 
         for (dx in -SEARCH_RADIUS..SEARCH_RADIUS) {
@@ -276,19 +250,15 @@ class CrystalAura : BaseModule(
                 } ?: continue
 
                 val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f
-                val damage = estimateDamage(cx, cy, cz, target)
-                if (damage < minDamage && !(suicide.value && target.health < 5f)) continue
-
-                val selfDamage = estimateDamage(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                if (!suicide.value && selfDamage > maxSelfDamage) continue
 
                 if (requireLOS.value && !hasLineOfSight(cx, cy, cz)) continue
 
-                candidates.add(Candidate(bx, bz, hit.y, hit.blockId, damage, selfDamage))
+                val ddx = cx - target.x; val ddy = cy - (target.y + 0.9f); val ddz = cz - target.z
+                candidates.add(Candidate(bx, bz, hit.y, hit.blockId, ddx*ddx + ddy*ddy + ddz*ddz))
             }
         }
 
-        for (c in candidates.sortedByDescending { it.dmg }) {
+        for (c in candidates.sortedBy { it.distSq }) {
             if (placedThisTick >= MAX_PLACES_PER_TICK) break
             if (!takePlaceToken(burst)) break
             if (tryPlaceCrystalAt(session, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) {
@@ -380,14 +350,7 @@ class CrystalAura : BaseModule(
         if (crystals.isEmpty()) return
         lastBreakMs = now
 
-        val toBreak = if (breakAll.value) {
-            crystals
-        } else {
-            crystals.filter { c ->
-                val dmg = calculateCrystalDamage(c.x, c.y, c.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-                dmg >= MIN_DAMAGE || suicide.value
-            }
-        }.sortedBy { EntityTracker.distanceTo(it) }.take(MAX_BREAKS_PER_TICK)
+        val toBreak = crystals.sortedBy { EntityTracker.distanceTo(it) }.take(MAX_BREAKS_PER_TICK)
 
         for (c in toBreak) scope.launch { attackCrystal(c.runtimeId, session) }
     }
@@ -423,13 +386,6 @@ class CrystalAura : BaseModule(
         } catch (_: Exception) {}
     }
 
-    private fun calculateCrystalDamage(crystalX: Float, crystalY: Float, crystalZ: Float, targetX: Float, targetY: Float, targetZ: Float): Float {
-        val dist = MathUtil.dist3(crystalX, crystalY, crystalZ, targetX, targetY, targetZ)
-        val radius = 15f
-        if (dist >= radius) return 0f
-        return ((1f - (dist / radius)) * CRYSTAL_POWER).coerceAtLeast(0f)
-    }
-
     private data class SurfaceHit(val y: Int, val blockId: String)
     private data class PlacePos(val x: Int, val y: Int, val z: Int, val blockId: String)
 
@@ -453,18 +409,6 @@ class CrystalAura : BaseModule(
         }
         if (!sawAnyData) return SurfaceHit(ty - 1, "minecraft:obsidian")
         return null
-    }
-
-    private fun estimateDamage(cx: Float, cy: Float, cz: Float, target: EntityTracker.TrackedEntity): Float =
-        estimateDamage(cx, cy, cz, target.x, target.y + 0.9f, target.z)
-
-    private fun estimateDamage(cx: Float, cy: Float, cz: Float, tx: Float, ty: Float, tz: Float): Float {
-        val diameter = CRYSTAL_POWER * 2f
-        val dist = MathUtil.dist3(cx, cy, cz, tx, ty + 0.9f, tz)
-        if (dist >= diameter) return 0f
-        val normalizedDist = dist / diameter
-        val impact = 1f - normalizedDist
-        return (impact * impact + impact) / 2f * 7f * diameter + 1f
     }
 
     private fun crystalExistsNear(cx: Float, cy: Float, cz: Float): Boolean =
@@ -515,6 +459,46 @@ class CrystalAura : BaseModule(
             }
         }
 
+        // Çantada varsa boş bir hotbar slotuna taşı, sonra oradan kullan
+        for (slot in 9..35) {
+            val item = EntityTracker.getInventoryItem(slot) ?: continue
+            if (item.count <= 0) continue
+            val id = runCatching { item.definition?.identifier }.getOrNull()
+            if (id != identifier) continue
+
+            val destSlot = findEmptyHotbarSlot() ?: continue
+            val destItem = EntityTracker.getInventoryItem(destSlot) ?: ItemData.AIR
+
+            try {
+                InventoryUtil.sendInventoryMove(
+                    session           = session,
+                    sourceContainer   = ContainerSlotType.HOTBAR_AND_INVENTORY,
+                    sourceContainerId = ContainerId.INVENTORY,
+                    sourceSlot        = slot,
+                    sourceItem        = item,
+                    destContainer     = ContainerSlotType.HOTBAR_AND_INVENTORY,
+                    destContainerId   = ContainerId.INVENTORY,
+                    destSlot          = destSlot,
+                    destItem          = destItem
+                )
+            } catch (_: Exception) {
+                continue
+            }
+
+            val original = EntityTracker.selfHotbarSlot
+            InventoryUtil.sendHotbarSelect(session, destSlot)
+            EntityTracker.selfHotbarSlot = destSlot
+            return PreparedItem(destSlot, item, if (noSwitch.value) original else null)
+        }
+
+        return null
+    }
+
+    private fun findEmptyHotbarSlot(): Int? {
+        for (slot in 0..8) {
+            val item = EntityTracker.getInventoryItem(slot)
+            if (item == null || item.count <= 0) return slot
+        }
         return null
     }
 
