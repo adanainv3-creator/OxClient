@@ -17,7 +17,7 @@ import kotlin.math.*
 import kotlin.random.Random
 
 class TPAuraPC : BaseModule(
-    name        = "TPAuraPC",
+    name        = "OxTp",
     category    = ModuleCategory.COMBAT,
     description = "PC kalitesinde teleport + saldırı modülü"
 ), PacketEventBus.PacketListener {
@@ -76,6 +76,9 @@ class TPAuraPC : BaseModule(
     @Volatile private var currentTimer = 20f
     @Volatile private var timerIncreasing = true
 
+    @Volatile private var currentTimerSpeed = 20f
+    @Volatile private var tickAccumulator = 0f
+
     private var tickJob: Job? = null
     private var timerJob: Job? = null
 
@@ -89,6 +92,8 @@ class TPAuraPC : BaseModule(
         cornerIndex = 0
         currentTimer = timerMin.value
         timerIncreasing = true
+        currentTimerSpeed = 20f
+        tickAccumulator = 0f
         lastAttackMs = 0L
         lastTeleportMs = 0L
         lastRotSendMs = 0L
@@ -114,15 +119,14 @@ class TPAuraPC : BaseModule(
     }
 
     private fun applyTimer() {
-        val session = PacketEventBus.currentSession ?: return
         when (timerMode.value) {
-            TimerMode.STATIC -> setTimer(session, timerSpeed.value)
+            TimerMode.STATIC -> setTimer(timerSpeed.value)
             TimerMode.STUTTER -> {
                 val base = timerSpeed.value
                 val stutter = if (stutterFreq.value > 0 && Random.nextDouble() < stutterFreq.value / 20f) {
                     (base - stutterValue.value).coerceIn(timerMin.value, timerMax.value)
                 } else base
-                setTimer(session, stutter)
+                setTimer(stutter)
             }
             TimerMode.RAMP -> {
                 val step = timerStep.value
@@ -139,33 +143,63 @@ class TPAuraPC : BaseModule(
                         timerIncreasing = true
                     }
                 }
-                setTimer(session, currentTimer.coerceIn(timerMin.value, timerMax.value))
+                setTimer(currentTimer.coerceIn(timerMin.value, timerMax.value))
             }
         }
     }
 
-    private fun setTimer(session: OxRelaySession, speed: Float) {
-        try {
-            val client = session.clientSession.peer.channel.attr(
-                org.cloudburstmc.protocol.bedrock.netty.BedrockChannelInitializer.CLIENT_ATTRIBUTE
-            ).get()
-        } catch (_: Exception) { }
+    private fun setTimer(speed: Float) {
+        currentTimerSpeed = speed.coerceIn(1f, 100f)
     }
 
     private fun resetTimer() {
-        val session = PacketEventBus.currentSession ?: return
-        setTimer(session, 20f)
+        currentTimerSpeed = 20f
+        tickAccumulator = 0f
     }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
 
+        val pkt = event.packet as? PlayerAuthInputPacket ?: return
+
         if (rotationMode.value == RotationMode.SILENT) {
-            val pkt = event.packet as? PlayerAuthInputPacket ?: return
             val target = selectTargets().firstOrNull()
             if (target != null) {
                 applySilentRotation(pkt, target)
+            }
+        }
+
+        applyPacketTimer(event, pkt)
+    }
+
+    // ── Gerçek Timer efekti ────────────────────────────────────────────────────
+    // Relay/MITM olduğumuz için gerçek istemcinin tick hızını hook'layamıyoruz;
+    // bunun yerine PlayerAuthInputPacket'in server'a ulaşma sıklığını kendimiz
+    // kontrol ediyoruz: speed<20 paketi PacketEventBus üzerinden iptal edip
+    // (event.isCancelled) hedef hıza uygun gecikmeyle biz gönderiyoruz (yavaşlatma),
+    // speed>20 gerçek paket normal geçiyor ve aradaki farkı kapatmak için senkron
+    // ekstra kopyalar enjekte ediyoruz (hızlandırma).
+    private fun applyPacketTimer(event: PacketEvent, pkt: PlayerAuthInputPacket) {
+        val session = PacketEventBus.currentSession ?: return
+        val speed = currentTimerSpeed
+        if (speed == 20f) return
+
+        if (speed < 20f) {
+            event.isCancelled = true
+            val extraDelayMs = (((20f - speed) / speed) * 50f).toLong().coerceIn(0L, 500L)
+            scope.launch {
+                delay(extraDelayMs)
+                try { session.serverBound(pkt) } catch (_: Exception) {}
+            }
+        } else {
+            tickAccumulator += (speed / 20f) - 1f
+            while (tickAccumulator >= 1f) {
+                tickAccumulator -= 1f
+                scope.launch {
+                    delay(4L)
+                    try { session.serverBound(pkt) } catch (_: Exception) {}
+                }
             }
         }
     }
@@ -193,11 +227,7 @@ class TPAuraPC : BaseModule(
 
         if (now - lastAttackMs >= attackDelay.value * 50L) {
             if (canAttack()) {
-                if (mode == 1) {
-                    targets.forEach { attack(session, it) }
-                } else {
-                    attack(session, mainTarget)
-                }
+                attack(session, mainTarget)
                 lastAttackMs = now
             }
         }
@@ -254,7 +284,7 @@ class TPAuraPC : BaseModule(
         val selfPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
         val targetPos = Vector3f.from(target.x, target.y + tpYOffset.value, target.z)
 
-        var newPos = calculateTeleportPosition(targetPos)
+        var newPos = calculateTeleportPosition(targetPos, target)
 
         if (upAndDown.value) {
             if (upDownGoingUp) {
@@ -290,7 +320,7 @@ class TPAuraPC : BaseModule(
         EntityTracker.selfZ = newPos.z
     }
 
-    private fun calculateTeleportPosition(targetPos: Vector3f): Vector3f {
+    private fun calculateTeleportPosition(targetPos: Vector3f, target: EntityTracker.TrackedEntity): Vector3f {
         val dist = tpDistance.value
         val randX = ((Random.nextInt(-1000, 1000) / 1000f) * 0.5f)
         val randZ = ((Random.nextInt(-1000, 1000) / 1000f) * 0.5f)

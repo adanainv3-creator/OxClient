@@ -140,7 +140,7 @@ class OxClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
-            TPAuraPC()
+            TPAuraPC(),
             AutoScaffold(),  // AutoRegear kaldırıldı, AutoScaffold eklendi
             ChatSpammer(),
             ChatAdvertiser(),

@@ -8,6 +8,7 @@ import com.oxclient.module.*
 import com.oxclient.module.social.isFriendEntity
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
+import com.oxclient.utils.RotationUtil
 import com.oxclient.utils.CritLock
 import com.oxclient.utils.InventoryUtil
 import org.cloudburstmc.math.vector.Vector3f
@@ -56,6 +57,9 @@ class PcAura : BaseModule(
     @Volatile private var currentTimer = 20f
     @Volatile private var timerIncreasing = true
 
+    @Volatile private var currentTimerSpeed = 20f
+    @Volatile private var tickAccumulator = 0f
+
     private var tickJob: Job? = null
     private var timerJob: Job? = null
 
@@ -67,6 +71,8 @@ class PcAura : BaseModule(
         headLockPitch = EntityTracker.selfPitch
         currentTimer = timerMin.value
         timerIncreasing = true
+        currentTimerSpeed = 20f
+        tickAccumulator = 0f
 
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
@@ -82,13 +88,53 @@ class PcAura : BaseModule(
     }
 
     override fun onPacket(event: PacketEvent) {
-        if (!isEnabled || !silentRot.value) return
+        if (!isEnabled) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
 
         val pkt = event.packet as? org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket ?: return
-        val target = selectTargets().firstOrNull()
-        if (target != null) {
-            applySilentRotation(pkt, target)
+
+        if (silentRot.value) {
+            val target = selectTargets().firstOrNull()
+            if (target != null) {
+                applySilentRotation(pkt, target)
+            }
+        }
+
+        applyPacketTimer(event, pkt)
+    }
+
+    // ── Gerçek Timer efekti ────────────────────────────────────────────────────
+    // Bedrock'ta OxClient bir relay/MITM olduğu için gerçek istemcinin tick hızını
+    // hook'layamıyoruz — bunun yerine PlayerAuthInputPacket'in server'a ulaşma
+    // sıklığını kendimiz kontrol ediyoruz:
+    //  - speed == 20  -> vanilla, dokunma
+    //  - speed  < 20  -> paketi PacketEventBus üzerinden iptal edip (event.isCancelled)
+    //                    hedef hıza uygun ekstra bir gecikmeyle biz kendimiz server'a
+    //                    gönderiyoruz (yavaşlatma)
+    //  - speed  > 20  -> gerçek paket normal akışında geçiyor, aradaki farkı kapatmak
+    //                    için aynı input'un senkron ekstra kopyalarını enjekte ediyoruz
+    //                    (hızlandırma)
+    private fun applyPacketTimer(event: PacketEvent, pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) {
+        val session = PacketEventBus.currentSession ?: return
+        val speed = currentTimerSpeed
+        if (speed == 20f) return
+
+        if (speed < 20f) {
+            event.isCancelled = true
+            val extraDelayMs = (((20f - speed) / speed) * 50f).toLong().coerceIn(0L, 500L)
+            scope.launch {
+                delay(extraDelayMs)
+                try { session.serverBound(pkt) } catch (_: Exception) {}
+            }
+        } else {
+            tickAccumulator += (speed / 20f) - 1f
+            while (tickAccumulator >= 1f) {
+                tickAccumulator -= 1f
+                scope.launch {
+                    delay(4L)
+                    try { session.serverBound(pkt) } catch (_: Exception) {}
+                }
+            }
         }
     }
 
@@ -104,11 +150,9 @@ class PcAura : BaseModule(
     }
 
     private fun applyTimer() {
-        val session = PacketEventBus.currentSession ?: return
-
         when (timerMode.value) {
             TimerMode.STATIC -> {
-                setTimer(session, timerSpeed.value)
+                setTimer(timerSpeed.value)
             }
             TimerMode.STUTTER -> {
                 val base = timerSpeed.value
@@ -117,7 +161,7 @@ class PcAura : BaseModule(
                 } else {
                     base
                 }
-                setTimer(session, stutter)
+                setTimer(stutter)
             }
             TimerMode.RAMP -> {
                 val step = timerStep.value
@@ -134,24 +178,18 @@ class PcAura : BaseModule(
                         timerIncreasing = true
                     }
                 }
-                setTimer(session, currentTimer.coerceIn(timerMin.value, timerMax.value))
+                setTimer(currentTimer.coerceIn(timerMin.value, timerMax.value))
             }
         }
     }
 
-    private fun setTimer(session: OxRelaySession, speed: Float) {
-        try {
-            val client = session.clientSession.peer.channel.attr(
-                org.cloudburstmc.protocol.bedrock.netty.BedrockChannelInitializer.CLIENT_ATTRIBUTE
-            ).get()
-        } catch (_: Exception) { }
+    private fun setTimer(speed: Float) {
+        currentTimerSpeed = speed.coerceIn(1f, 100f)
     }
 
     private fun resetTimer() {
-        try {
-            val session = PacketEventBus.currentSession ?: return
-            setTimer(session, 20f)
-        } catch (_: Exception) { }
+        currentTimerSpeed = 20f
+        tickAccumulator = 0f
     }
 
     private suspend fun tickLoop() {
