@@ -1,0 +1,110 @@
+package com.nexoraclient.module.combat
+
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.events.PacketEvent
+import com.nexoraclient.events.PacketEventBus
+import com.nexoraclient.module.*
+import com.nexoraclient.utils.PacketUtil
+import com.nexoraclient.utils.RotationUtil
+import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
+
+class HeadTrack : BaseModule(
+    name        = "HeadTrack",
+    category    = ModuleCategory.COMBAT,
+    description = "Kafayı hedefi takip ettirir (saldırısız)"
+), PacketEventBus.PacketListener {
+
+    private val detectRange    = float("Detect Range", 100f,  10f,  150f)
+    private val smooth         = float("Smoothness",   0.15f, 0.01f, 1f)
+    private val targetPriority = enum ("Priority",     Priority.Distance)
+    private val shortcut       = bool ("Shortcut",     false)
+
+    enum class Priority { Distance, Health, LowestHealth }
+
+    @Volatile private var currentTargetId = 0L
+    @Volatile private var headYaw         = 0f
+    @Volatile private var headPitch       = 0f
+    @Volatile private var lastUpdateMs    = 0L
+
+    override fun onEnable() {
+        super.onEnable()
+        headYaw = EntityTracker.selfYaw
+        headPitch = EntityTracker.selfPitch
+        currentTargetId = 0L
+        PacketEventBus.register(this)
+    }
+
+    override fun onDisable() {
+        PacketEventBus.unregister(this)
+        super.onDisable()
+    }
+
+    override fun onPacket(event: PacketEvent) {
+        if (!isEnabled) return
+        if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+        if (event.packet !is PlayerAuthInputPacket) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastUpdateMs < 50L) return
+        lastUpdateMs = now
+
+        val target = findTarget() ?: return
+        updateHeadLock(target)
+    }
+
+    private fun findTarget(): EntityTracker.TrackedEntity? {
+        val candidates = EntityTracker.getEntitiesInRange(detectRange.value)
+            .filter { it.runtimeId != EntityTracker.selfRuntimeId && it.isPlayer }
+
+        if (candidates.isEmpty()) {
+            currentTargetId = 0L
+            return null
+        }
+
+        val sorted = when (targetPriority.value) {
+            Priority.Distance     -> candidates.sortedBy { EntityTracker.distanceTo(it) }
+            Priority.Health       -> candidates.sortedByDescending { it.health }
+            Priority.LowestHealth -> candidates.sortedBy { it.health }
+        }
+
+        val target = sorted.firstOrNull() ?: return null
+        if (target.runtimeId != currentTargetId) {
+            currentTargetId = target.runtimeId
+        }
+        return target
+    }
+
+    private fun updateHeadLock(target: EntityTracker.TrackedEntity) {
+        val session = PacketEventBus.currentSession ?: return
+
+        val targetRot = RotationUtil.toEntity(target)
+        val smoothFactor = smooth.value.coerceIn(0.01f, 1f)
+
+        val newYaw = smoothYaw(headYaw, targetRot.yaw, smoothFactor)
+        val newPitch = smoothPitch(headPitch, targetRot.pitch, smoothFactor)
+
+        headYaw = newYaw
+        headPitch = newPitch
+
+        try {
+            PacketUtil.sendMoveAtSelf(session, newYaw, newPitch, onGround = true)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun smoothYaw(current: Float, target: Float, factor: Float): Float {
+        var diff = target - current
+        if (diff > 180f) diff -= 360f
+        if (diff < -180f) diff += 360f
+        val result = current + (diff * factor)
+        var normalized = result % 360f
+        if (normalized > 180f) normalized -= 360f
+        if (normalized < -180f) normalized += 360f
+        return normalized
+    }
+
+    private fun smoothPitch(current: Float, target: Float, factor: Float): Float {
+        val diff = target - current
+        return (current + (diff * factor)).coerceIn(-90f, 90f)
+    }
+}

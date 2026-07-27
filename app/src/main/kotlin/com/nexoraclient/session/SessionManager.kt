@@ -1,0 +1,137 @@
+package com.nexoraclient.session
+
+import com.nexoraclient.auth.AccountManager
+import com.nexoraclient.config.ServerConfig
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.ConnectionManager
+import com.nexoraclient.core.relay.LanBroadcaster
+import com.nexoraclient.core.relay.NexoraRelay
+import com.nexoraclient.core.relay.NexoraRelaySession
+import com.nexoraclient.events.PacketEventBus
+import com.nexoraclient.module.ModuleManager
+import com.nexoraclient.utils.BlockTracker
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+object SessionManager {
+
+    private const val TAG = "SessionManager"
+
+    private val _isActive       = MutableStateFlow(false)
+    val isActive: StateFlow<Boolean> = _isActive.asStateFlow()
+
+    private val _connectedHost  = MutableStateFlow("")
+    val connectedHostFlow: StateFlow<String> = _connectedHost.asStateFlow()
+
+    private val _connectedPort  = MutableStateFlow(0)
+    val connectedPortFlow: StateFlow<Int> = _connectedPort.asStateFlow()
+
+    private val _statusMessage  = MutableStateFlow("Kapalı")
+    val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
+
+    private val _sessionCount   = MutableStateFlow(0)
+    val sessionCount: StateFlow<Int> = _sessionCount.asStateFlow()
+
+    val connectedHost: String get() = _connectedHost.value
+    val connectedPort: Int    get() = _connectedPort.value
+
+    private var relay: NexoraRelay? = null
+
+    fun start() {
+        if (_isActive.value) { return }
+
+        val account = AccountManager.getRelayReadyAccount()
+        if (account == null) {
+            _statusMessage.value = "Hesap bulunamadı"
+            return
+        }
+
+        val host      = ServerConfig.getHostBlocking()
+        val port      = ServerConfig.getPortBlocking()
+        val localPort = ServerConfig.LOCAL_PROXY_PORT
+
+        _statusMessage.value = "Bağlanıyor..."
+
+        try {
+            EntityTracker.init()
+            BlockTracker.clear()
+
+            val r = NexoraRelay(localPort = localPort)
+
+            r.capture(remoteHost = host, remotePort = port) { session ->
+                onSessionCreated(session)
+            }
+
+            relay                = r
+            _isActive.value      = true
+            _connectedHost.value = host
+            _connectedPort.value = port
+            _statusMessage.value = "Aktif — $host:$port"
+            _sessionCount.value  = 0
+
+        } catch (e: Exception) {
+            _isActive.value      = false
+            _statusMessage.value = "Hata: ${e.message}"
+            relay                = null
+        }
+    }
+
+    fun stop() {
+        if (!_isActive.value) return
+        try {
+            ModuleManager.disableAll()
+            relay?.stop()
+        } catch (e: Exception) {
+        } finally {
+            relay                = null
+            _isActive.value      = false
+            _connectedHost.value = ""
+            _connectedPort.value = 0
+            _statusMessage.value = "Kapalı"
+            _sessionCount.value  = 0
+            PacketEventBus.setSession(null)
+            EntityTracker.reset()
+            BlockTracker.clear()
+            ConnectionManager.onDisconnected("Relay durduruldu")
+        }
+    }
+
+    private fun onSessionCreated(session: NexoraRelaySession) {
+        _sessionCount.value++
+        _statusMessage.value = "Session #${_sessionCount.value} — ${session.clientAddress}"
+
+        LanBroadcaster.updateInfo(
+            protocolVersion = NexoraRelay.RELAY_CODEC.protocolVersion,
+            mcVersion       = NexoraRelay.RELAY_CODEC.minecraftVersion ?: "1.21.60",
+            playerCount     = 0
+        )
+
+        installSessionCloseListener(session)
+    }
+
+    private fun installSessionCloseListener(session: NexoraRelaySession) {
+        try {
+            session.clientSession.peer.channel
+                .closeFuture()
+                .addListener { onSessionEnded(session, "channel closed") }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun onSessionEnded(session: NexoraRelaySession, reason: String) {
+        PacketEventBus.setSession(null)
+        EntityTracker.reset()
+        BlockTracker.clear()
+
+        _sessionCount.value = maxOf(0, _sessionCount.value - 1)
+
+        if (_isActive.value) {
+            _statusMessage.value = "Session kapandı — yeniden bağlanmayı bekliyor"
+            ConnectionManager.onDisconnected(reason)
+        }
+    }
+
+    fun onSessionStart(host: String, port: Int) = start()
+    fun onSessionStop() = stop()
+}

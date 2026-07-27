@@ -1,3 +1,4 @@
+
 pluginManagement {
     repositories {
         google {
@@ -33,7 +34,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "OxClient"
+rootProject.name = "NexoraClient"
 include(":app")
 
 // ── CloudburstMC/Protocol kaynağını Maven SNAPSHOT yerine doğrudan

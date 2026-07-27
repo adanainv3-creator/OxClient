@@ -1,5 +1,5 @@
 # ============================================================
-# OxClient release R8/ProGuard kurallari
+# Nexora Client release R8/ProGuard kurallari
 # Amac: maksimum obfuscation + kaynak/string korumasi,
 # ama Netty / CloudburstMC Protocol / jose4j gibi reflection ve
 # ServiceLoader (META-INF/services) tabanli kutuphaneleri kirmadan.
@@ -48,14 +48,14 @@
 # Gson'in reflection ile (de)serialize ettigi model/config siniflari:
 # sinif adi obfuscate edilebilir (allowobfuscation), ama alan adlari
 # JSON key'leriyle eslesmek zorunda oldugu icin korunuyor.
--keepclassmembers class com.oxclient.**.model.** {
+-keepclassmembers class com.nexoraclient.**.model.** {
     <fields>;
 }
--keepclassmembers class com.oxclient.**.config.** {
+-keepclassmembers class com.nexoraclient.**.config.** {
     <fields>;
 }
--keep,allowobfuscation,allowoptimization class com.oxclient.**.model.** {}
--keep,allowobfuscation,allowoptimization class com.oxclient.**.config.** {}
+-keep,allowobfuscation,allowoptimization class com.nexoraclient.**.model.** {}
+-keep,allowobfuscation,allowoptimization class com.nexoraclient.**.config.** {}
 
 -keepclassmembers class * implements android.os.Parcelable {
     public static final ** CREATOR;
@@ -69,7 +69,7 @@
 -keepattributes InnerClasses, EnclosingMethod
 
 # ---------- Uygulama giris noktasi ----------
--keep class com.oxclient.OxClientApp {
+-keep class com.nexoraclient.NexoraClientApp {
     public <init>(...);
 }
 -keepclassmembers enum * {

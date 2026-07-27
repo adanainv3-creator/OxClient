@@ -1,0 +1,1165 @@
+
+package com.nexoraclient.ui.overlay
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.graphics.PixelFormat
+import android.media.AudioManager
+import android.os.Build
+import android.os.IBinder
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.nexoraclient.R
+import com.nexoraclient.config.Config
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.events.PacketEventBus
+import com.nexoraclient.module.*
+import com.nexoraclient.module.social.FriendManager
+import com.nexoraclient.session.SessionManager
+import com.nexoraclient.ui.theme.*
+import com.nexoraclient.utils.InventoryUtil
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
+
+    companion object {
+        private const val CHANNEL_ID = "ox_overlay"
+        private const val NOTIF_ID   = 1002
+        private const val TARGET_RANGE = 64f
+
+        fun start(ctx: Context) {
+            val i = Intent(ctx, OverlayService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i)
+            else ctx.startService(i)
+        }
+
+        fun stop(ctx: Context) = ctx.stopService(Intent(ctx, OverlayService::class.java))
+    }
+
+    private val lcReg   = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle get() = lcReg
+
+    private val ssrCtrl = SavedStateRegistryController.create(this)
+    override val savedStateRegistry: SavedStateRegistry get() = ssrCtrl.savedStateRegistry
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private lateinit var wm: android.view.WindowManager
+    private var isAttached = false
+
+    private var menuView : ComposeView? = null
+    private var totemView : ComposeView? = null
+    private var targetView: ComposeView? = null
+    private var fabView   : ComposeView? = null
+    private var espView  : ESPOverlayView? = null
+    private val shortcutViews = mutableMapOf<String, ComposeView>()
+
+    private var totemX = 16f; private var totemY = 16f
+    private var targetX = 16f; private var targetY = 64f
+    private var fabX = 16f; private var fabY = 120f
+    private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
+
+    private lateinit var audioManager: AudioManager
+    private var mediaSession: android.support.v4.media.session.MediaSessionCompat? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        ssrCtrl.performRestore(null)
+        lcReg.currentState = Lifecycle.State.CREATED
+        wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        createChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(NOTIF_ID, buildNotif())
+        if (mediaSession == null) setupVolumeInterceptor()
+        showOverlay()
+        lcReg.currentState = Lifecycle.State.RESUMED
+        OverlayState.setOverlayVisible(true)
+        startStatsPoller()
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        lcReg.currentState = Lifecycle.State.DESTROYED
+        OverlayState.setOverlayVisible(false)
+        try { mediaSession?.isActive = false; mediaSession?.release() } catch (_: Exception) {}
+        removeAllOverlays()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun startStatsPoller() {
+        serviceScope.launch {
+            while (true) {
+                OverlayState.updateActiveModuleCount(ModuleManager.enabledCount())
+                val invSnapshot = EntityTracker.getInventorySnapshot()
+                val totemCount = invSnapshot.count { (slot, item) ->
+                    (slot in 0..35 || slot == 119) && InventoryUtil.isTotem(item)
+                }
+                OverlayState.updateTotemCount(totemCount)
+
+                val nearest = EntityTracker.getNearestPlayer(TARGET_RANGE)
+                val targetLabel = nearest?.let { e ->
+                    e.name.ifBlank { e.identifier.removePrefix("minecraft:") }
+                }
+                OverlayState.updateTarget(targetLabel)
+
+                delay(500L)
+            }
+        }
+    }
+
+    private fun overlayParams(
+        w: Int, h: Int, x: Float = 0f, y: Float = 0f,
+        focusable: Boolean = false, touchable: Boolean = true
+    ): android.view.WindowManager.LayoutParams {
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        else @Suppress("DEPRECATION") android.view.WindowManager.LayoutParams.TYPE_PHONE
+
+        var flags = if (focusable)
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        else
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
+        if (!touchable) flags = flags or android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+
+        return android.view.WindowManager.LayoutParams(
+            w, h, type, flags, PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            this.x  = x.roundToInt()
+            this.y  = y.roundToInt()
+        }
+    }
+
+    private fun showOverlay() {
+        if (isAttached) return
+        try {
+            val espParams = overlayParams(
+                android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                android.view.WindowManager.LayoutParams.MATCH_PARENT,
+                touchable = false
+            )
+            espView = ESPOverlayView(this)
+            wm.addView(espView, espParams)
+            espView?.startRenderLoop()
+
+            val totemParams = overlayParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                totemX, totemY
+            )
+            totemView = composeView {
+                TotemCounterIcon(
+                    onDrag = { dx, dy ->
+                        totemX += dx; totemY += dy
+                        totemParams.x = totemX.roundToInt()
+                        totemParams.y = totemY.roundToInt()
+                        safeUpdate(totemView, totemParams)
+                    }
+                )
+            }
+            wm.addView(totemView, totemParams)
+
+            val targetParams = overlayParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                targetX, targetY
+            )
+            targetView = composeView {
+                TargetIndicator(
+                    onDrag = { dx, dy ->
+                        targetX += dx; targetY += dy
+                        targetParams.x = targetX.roundToInt()
+                        targetParams.y = targetY.roundToInt()
+                        safeUpdate(targetView, targetParams)
+                    }
+                )
+            }
+            wm.addView(targetView, targetParams)
+
+            val fabParams = overlayParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                fabX, fabY
+            )
+            fabView = composeView {
+                MenuFab(
+                    onClick = { toggleMenu() },
+                    onDrag  = { dx, dy ->
+                        fabX += dx; fabY += dy
+                        fabParams.x = fabX.roundToInt()
+                        fabParams.y = fabY.roundToInt()
+                        safeUpdate(fabView, fabParams)
+                    }
+                )
+            }
+            wm.addView(fabView, fabParams)
+
+            refreshShortcuts()
+            isAttached = true
+        } catch (_: Exception) {}
+    }
+
+    private fun refreshShortcuts() {
+        val active = ModuleManager.shortcutModules().map { it.name }.toSet()
+        shortcutViews.entries.filter { it.key !in active }.forEach { (name, view) ->
+            try { wm.removeViewImmediate(view) } catch (_: Exception) {}
+            shortcutViews.remove(name)
+        }
+        ModuleManager.shortcutModules().forEach { mod ->
+            if (mod.name !in shortcutViews) {
+                val idx = ModuleManager.shortcutModules().indexOf(mod)
+                val pos = shortcutPositions.getOrPut(mod.name) { 50f to (420f + idx * 50f) }
+                val params = overlayParams(
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                    pos.first, pos.second
+                )
+                val view = composeView {
+                    ShortcutButton(
+                        module   = mod,
+                        onDrag   = { dx, dy ->
+                            val (cx, cy) = shortcutPositions[mod.name] ?: (0f to 0f)
+                            val nx = cx + dx; val ny = cy + dy
+                            shortcutPositions[mod.name] = nx to ny
+                            params.x = nx.roundToInt(); params.y = ny.roundToInt()
+                            safeUpdate(shortcutViews[mod.name], params)
+                        },
+                        onToggle = { ModuleManager.toggle(mod) }
+                    )
+                }
+                shortcutViews[mod.name] = view
+                try { wm.addView(view, params) } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun toggleMenu() { if (menuView != null) hideMenu() else showMenu() }
+
+    private fun showMenu() {
+        if (menuView != null) return
+        val params = overlayParams(
+            android.view.WindowManager.LayoutParams.MATCH_PARENT,
+            android.view.WindowManager.LayoutParams.MATCH_PARENT,
+            focusable = true
+        )
+        menuView = composeView {
+            val moduleVersion by ModuleManager.version.collectAsState()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { hideMenu() } }
+            ) {
+                HileMenu(
+                    onClose           = { hideMenu() },
+                    moduleVersion     = moduleVersion,
+                    onShortcutChanged = { refreshShortcuts() },
+                    modifier          = Modifier.align(Alignment.CenterStart)
+                )
+            }
+        }
+        try {
+            wm.addView(menuView, params)
+            OverlayState.setMenuOpen(true)
+        } catch (_: Exception) {
+            menuView = null
+        }
+    }
+
+    private fun hideMenu() {
+        menuView?.let { try { wm.removeViewImmediate(it) } catch (_: Exception) {} }
+        menuView = null
+        OverlayState.setMenuOpen(false)
+    }
+
+    private fun removeAllOverlays() {
+        hideMenu()
+        listOfNotNull(totemView, targetView, fabView, espView).plus(shortcutViews.values).forEach { v ->
+            try { wm.removeViewImmediate(v) } catch (_: Exception) {}
+        }
+        totemView = null; targetView = null; fabView = null; espView = null; shortcutViews.clear(); isAttached = false
+    }
+
+    private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
+        view?.let { try { wm.updateViewLayout(it, params) } catch (_: Exception) {} }
+    }
+
+    private fun composeView(content: @Composable () -> Unit) =
+        ComposeView(this).apply {
+            setViewTreeLifecycleOwner(this@OverlayService)
+            setViewTreeSavedStateRegistryOwner(this@OverlayService)
+            setContent(content)
+        }
+
+    private fun setupVolumeInterceptor() {
+        val max = 20
+        val start = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) *
+                max / audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+
+        val provider = object : androidx.media.VolumeProviderCompat(
+            VOLUME_CONTROL_ABSOLUTE, max, start
+        ) {
+            override fun onAdjustVolume(direction: Int) {
+                if (direction != 0) toggleMenu()
+            }
+        }
+
+        mediaSession = android.support.v4.media.session.MediaSessionCompat(this, "NexoraOverlayVolume").apply {
+            setFlags(
+                android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
+                android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
+            setPlaybackState(
+                android.support.v4.media.session.PlaybackStateCompat.Builder()
+                    .setState(android.support.v4.media.session.PlaybackStateCompat.STATE_PLAYING, 0, 1f)
+                    .setActions(
+                        android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY or
+                        android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY_PAUSE
+                    )
+                    .build()
+            )
+            isActive = true
+            setPlaybackToRemote(provider)
+        }
+    }
+
+    private fun createChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ch = NotificationChannel(CHANNEL_ID, "Nexora Client Overlay", NotificationManager.IMPORTANCE_MIN)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+        }
+    }
+
+    private fun buildNotif() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setSmallIcon(R.mipmap.ic_ox_logo)
+        .setContentTitle("Nexora Client Overlay")
+        .setContentText("HUD aktif")
+        .setOngoing(true)
+        .setPriority(NotificationCompat.PRIORITY_MIN)
+        .build()
+}
+
+
+@Composable
+private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
+    val count      = OverlayState.totemCount
+    var totalDrag  by remember { mutableFloatStateOf(0f) }
+
+    val autoTotem  = remember { ModuleManager.byName("AutoTotem") }
+    var autoTotemEnabled by remember { mutableStateOf(autoTotem?.isEnabled ?: false) }
+    LaunchedEffect(autoTotem) {
+        autoTotem?.enabledFlow?.collect { autoTotemEnabled = it }
+    }
+
+    AnimatedVisibility(
+        visible = autoTotemEnabled,
+        enter   = fadeIn() + expandHorizontally(),
+        exit    = fadeOut() + shrinkHorizontally()
+    ) {
+    Row(
+        modifier = Modifier
+            .wrapContentSize()
+            .clip(RoundedCornerShape(50.dp))
+            .background(Color(0xDD111827))
+            .border(1.dp, Color(0xFF2D3F6E), RoundedCornerShape(50.dp))
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { totalDrag = 0f },
+                    onDragEnd   = { },
+                    onDrag      = { change, offset ->
+                        change.consume()
+                        totalDrag += kotlin.math.abs(offset.x) + kotlin.math.abs(offset.y)
+                        onDrag(offset.x, offset.y)
+                    }
+                )
+            }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        androidx.compose.foundation.Image(
+            painter            = painterResource(id = R.drawable.ic_totem),
+            contentDescription = "Totem",
+            modifier           = Modifier.size(22.dp)
+        )
+        Text(
+            text       = "$count",
+            fontSize   = 14.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color      = when {
+                count > 5 -> Color.White
+                else      -> Color(0xFFFF453A)
+            }
+        )
+    }
+    }
+}
+
+
+@Composable
+private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
+    val target = OverlayState.targetName
+
+    val autoTotem  = remember { ModuleManager.byName("AutoTotem") }
+    var autoTotemEnabled by remember { mutableStateOf(autoTotem?.isEnabled ?: false) }
+    LaunchedEffect(autoTotem) {
+        autoTotem?.enabledFlow?.collect { autoTotemEnabled = it }
+    }
+
+    AnimatedVisibility(
+        visible = autoTotemEnabled,
+        enter   = fadeIn() + expandHorizontally(),
+        exit    = fadeOut() + shrinkHorizontally()
+    ) {
+    Box(
+        modifier = Modifier
+            .wrapContentSize()
+            .pointerInput(Unit) {
+                detectDragGestures { change, offset ->
+                    change.consume()
+                    onDrag(offset.x, offset.y)
+                }
+            }
+            .padding(6.dp)
+    ) {
+        Text(
+            text = "T: ${target ?: "-"}",
+            fontSize = 14.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = if (target != null) Color.White else Color.White.copy(alpha = 0.45f),
+            style = androidx.compose.ui.text.TextStyle(
+                shadow = androidx.compose.ui.graphics.Shadow(
+                    color = Color.Black,
+                    offset = androidx.compose.ui.geometry.Offset(1f, 1f),
+                    blurRadius = 5f
+                )
+            )
+        )
+    }
+    }
+}
+
+
+@Composable
+private fun MenuFab(onClick: () -> Unit, onDrag: (Float, Float) -> Unit) {
+    var totalDrag  by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(Color(0xDD1C1C1E))
+            .border(1.5.dp, Color.White.copy(alpha = 0.55f), CircleShape)
+            .pointerInput(Unit) { detectTapGestures(onTap = { if (!isDragging) onClick() }) }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { isDragging = true; totalDrag = 0f },
+                    onDragEnd   = { isDragging = false; if (totalDrag < 12f) onClick() },
+                    onDrag      = { c, o -> c.consume(); totalDrag += abs(o.x) + abs(o.y); onDrag(o.x, o.y) }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "Ox",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+    }
+}
+
+@Composable
+private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, onToggle: () -> Unit) {
+    var enabled    by remember { mutableStateOf(module.isEnabled) }
+    var totalDrag  by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+    LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
+
+    val bgColor = if (enabled) NexoraSurfaceVar else NexoraSurface
+    val borderColor = if (enabled) NexoraAccentLight.copy(0.9f) else NexoraOutline.copy(0.5f)
+    val textColor   = if (enabled) Color.White else NexoraOnSurface.copy(0.6f)
+
+    Box(
+        modifier = Modifier
+            .wrapContentSize()
+            .clip(RoundedCornerShape(50.dp))
+            .background(bgColor)
+            .border(if (enabled) 1.5.dp else 1.dp, borderColor, RoundedCornerShape(50.dp))
+            .pointerInput(Unit) { detectTapGestures(onTap = { if (!isDragging) onToggle() }) }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { isDragging = true; totalDrag = 0f },
+                    onDragEnd   = { isDragging = false; if (totalDrag < 12f) onToggle() },
+                    onDrag      = { c, o -> c.consume(); totalDrag += abs(o.x) + abs(o.y); onDrag(o.x, o.y) }
+                )
+            }
+            .padding(horizontal = 16.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            module.name,
+            fontSize = 12.sp,
+            fontWeight = if (enabled) FontWeight.SemiBold else FontWeight.Normal,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+
+private enum class MenuSection(val displayName: String) {
+    COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), FRIENDS("Friends"), CONFIG("Config")
+}
+
+private fun MenuSection.toModuleCategory(): ModuleCategory? = when (this) {
+    MenuSection.COMBAT   -> ModuleCategory.COMBAT
+    MenuSection.MOVEMENT -> ModuleCategory.MOVEMENT
+    MenuSection.VISUAL   -> ModuleCategory.VISUAL
+    MenuSection.MISC     -> ModuleCategory.MISC
+    MenuSection.FRIENDS  -> null
+    MenuSection.CONFIG   -> null
+}
+
+
+@Composable
+private fun HileMenu(
+    onClose          : () -> Unit,
+    moduleVersion    : Int,
+    onShortcutChanged: () -> Unit,
+    modifier         : Modifier = Modifier
+) {
+    var section by remember { mutableStateOf(MenuSection.COMBAT) }
+    val cat  = section.toModuleCategory()
+    val mods = remember(moduleVersion, cat) { cat?.let { ModuleManager.byCategory(it) } ?: emptyList() }
+    val relayActive by SessionManager.isActive.collectAsState()
+
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(300.dp)
+            .background(
+                Brush.verticalGradient(
+                    listOf(NexoraBackground.copy(alpha = 0.72f), Color(0xFF141830).copy(alpha = 0.72f))
+                )
+            )
+            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
+            .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
+            .pointerInput(Unit) { detectTapGestures { } }
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(NexoraSurface)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Nexora Client", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold,
+                        color = NexoraOnBackground)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (relayActive) NexoraSuccess.copy(0.2f) else NexoraError.copy(0.15f))
+                            .border(1.dp,
+                                if (relayActive) NexoraSuccess.copy(0.5f) else NexoraError.copy(0.4f),
+                                RoundedCornerShape(20.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(if (relayActive) "Connected" else "Disconnected",
+                            fontSize = 9.sp,
+                            color = if (relayActive) NexoraSuccess else NexoraError,
+                            fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(NexoraError.copy(0.15f))
+                        .border(1.dp, NexoraError.copy(0.4f), CircleShape)
+                        .clickable { onClose() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("x", color = NexoraError, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            HorizontalDivider(color = NexoraOutlineStrong)
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(NexoraSurface.copy(0.5f))
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                MenuSection.entries.forEach { s ->
+                    val sel = s == section
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50.dp))
+                            .background(if (sel) NexoraSurfaceVar else Color.Transparent)
+                            .border(1.dp,
+                                if (sel) NexoraOutlineStrong else NexoraOutline,
+                                RoundedCornerShape(50.dp))
+                            .clickable { section = s }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(s.displayName, fontSize = 11.sp,
+                            color = if (sel) NexoraOnBackground else NexoraOnSurface,
+                            fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
+                    }
+                }            }
+
+            HorizontalDivider(color = NexoraOutlineStrong)
+
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                if (section == MenuSection.CONFIG) {
+                    ConfigSection()
+                } else if (section == MenuSection.FRIENDS) {
+                    FriendsSection()
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(mods) { mod ->
+                            ModuleCard(module = mod, onShortcutChanged = onShortcutChanged)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun ConfigSection() {
+    val scope = rememberCoroutineScope()
+    val profiles      by Config.profiles.collectAsState(initial = emptyList())
+    val activeProfile by Config.activeProfile.collectAsState(initial = null)
+    var newName by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                singleLine = true,
+                placeholder = { Text("Profile name", fontSize = 11.sp, color = NexoraOnSurfaceDim) },
+                modifier = Modifier.weight(1f),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = NexoraOnSurface),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor   = NexoraAccent,
+                    unfocusedBorderColor = NexoraOutline
+                )
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(NexoraAccent)
+                    .clickable {
+                        val trimmed = newName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            scope.launch { Config.save(trimmed) }
+                            newName = ""
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Text("Save", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        }
+
+        HorizontalDivider(color = NexoraOutlineStrong)
+
+        if (profiles.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No saved profiles yet.", fontSize = 12.sp, color = NexoraOnSurfaceDim)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(profiles) { profile ->
+                    ConfigProfileRow(
+                        name     = profile.name,
+                        active   = profile.name == activeProfile,
+                        onLoad   = { scope.launch { Config.load(profile.name) } },
+                        onDelete = { scope.launch { Config.delete(profile.name) } }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigProfileRow(
+    name    : String,
+    active  : Boolean,
+    onLoad  : () -> Unit,
+    onDelete: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (active) NexoraSurfaceVar else NexoraSurface)
+            .border(1.dp,
+                if (active) NexoraAccentLight.copy(0.6f) else NexoraOutline,
+                RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            name,
+            fontSize = 13.sp,
+            color = NexoraOnBackground,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = onLoad, colors = ButtonDefaults.textButtonColors(contentColor = NexoraAccentLight)) {
+                Text("Load", fontSize = 11.sp)
+            }
+            TextButton(onClick = onDelete, colors = ButtonDefaults.textButtonColors(contentColor = NexoraError)) {
+                Text("Del", fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun FriendsSection() {
+    var newName by remember { mutableStateOf("") }
+    var friends by remember { mutableStateOf(FriendManager.getAll()) }
+
+    fun refresh() { friends = FriendManager.getAll() }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                singleLine = true,
+                placeholder = { Text("Player name", fontSize = 11.sp, color = NexoraOnSurfaceDim) },
+                modifier = Modifier.weight(1f),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = NexoraOnSurface),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor   = NexoraAccent,
+                    unfocusedBorderColor = NexoraOutline
+                )
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(NexoraAccent)
+                    .clickable {
+                        val trimmed = newName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            FriendManager.addFriend(trimmed)
+                            newName = ""
+                            refresh()
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Text("Add", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "${friends.size} friends • ignored by KillAura and TPAura",
+                fontSize = 10.sp,
+                color = NexoraOnSurfaceDim
+            )
+            if (friends.isNotEmpty()) {
+                TextButton(
+                    onClick = { FriendManager.clear(); refresh() },
+                    colors = ButtonDefaults.textButtonColors(contentColor = NexoraError)
+                ) {
+                    Text("Clear all", fontSize = 11.sp)
+                }
+            }
+        }
+
+        HorizontalDivider(color = NexoraOutlineStrong)
+
+        if (friends.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No friends added yet.", fontSize = 12.sp, color = NexoraOnSurfaceDim)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(friends) { name ->
+                    FriendRow(
+                        name     = name,
+                        onRemove = { FriendManager.removeFriend(name); refresh() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FriendRow(name: String, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(NexoraSurface)
+            .border(1.dp, NexoraOutline, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            name,
+            fontSize = 13.sp,
+            color = NexoraOnBackground,
+            fontWeight = FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = NexoraError)) {
+            Text("Remove", fontSize = 11.sp)
+        }
+    }
+}
+
+
+@Composable
+private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
+    var enabled  by remember { mutableStateOf(module.isEnabled) }
+    var expanded by remember { mutableStateOf(false) }
+    LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
+
+    val cardBg = when {
+        expanded -> NexoraModuleExpanded
+        enabled  -> NexoraModuleActive
+        else     -> NexoraSurface
+    }
+    val borderColor = when {
+        enabled -> NexoraModuleActiveBorder
+        else    -> NexoraOutline.copy(0.6f)
+    }
+    val textColor = if (enabled) NexoraModuleActiveText else NexoraOnSurface
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = tween(280, easing = FastOutSlowInEasing))
+            .clip(RoundedCornerShape(11.dp))
+            .background(cardBg)
+            .border(if (enabled) 1.5.dp else 1.dp, borderColor, RoundedCornerShape(11.dp))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    if (module.settings.isNotEmpty()) expanded = !expanded
+                    else ModuleManager.toggle(module)
+                }
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                module.name,
+                fontSize = 13.sp,
+                fontWeight = if (enabled) FontWeight.Bold else FontWeight.Medium,
+                color = textColor,
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = enabled,
+                onCheckedChange = { ModuleManager.toggle(module); onShortcutChanged() },
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor   = NexoraModuleActiveBorder,
+                    checkedThumbColor   = Color.White,
+                    uncheckedTrackColor = NexoraOutlineStrong,
+                    uncheckedThumbColor = NexoraOnSurfaceDim
+                ),
+                modifier = Modifier
+                    .scale(0.8f)
+                    .height(18.dp)
+            )
+        }
+
+        AnimatedVisibility(
+            visible = expanded && module.settings.isNotEmpty(),
+            enter   = expandVertically(
+                          animationSpec = tween(320, easing = FastOutSlowInEasing),
+                          expandFrom    = Alignment.Top
+                      ) + fadeIn(animationSpec = tween(280, delayMillis = 40, easing = LinearOutSlowInEasing)),
+            exit    = shrinkVertically(
+                          animationSpec = tween(260, easing = FastOutSlowInEasing),
+                          shrinkTowards = Alignment.Top
+                      ) + fadeOut(animationSpec = tween(160, easing = LinearEasing))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0x22000000))
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                module.settings.forEach { s ->
+                    SettingRow(setting = s, onShortcutChanged = onShortcutChanged)
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit) {
+    when (setting) {
+        is FloatSetting -> {
+            var v by remember { mutableFloatStateOf(setting.value) }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface)
+                    Text("%.2f".format(v), fontSize = 12.sp, color = NexoraAccentLight,
+                        fontWeight = FontWeight.SemiBold)
+                }
+                Slider(
+                    value = v,
+                    onValueChange = { v = it; setting.value = it },
+                    valueRange = setting.min..setting.max,
+                    modifier = Modifier.height(24.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor         = NexoraAccentLight,
+                        activeTrackColor   = NexoraAccent,
+                        inactiveTrackColor = NexoraOutlineStrong
+                    )
+                )
+            }
+        }
+        is IntSetting -> {
+            var v by remember { mutableFloatStateOf(setting.value.toFloat()) }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface)
+                    Text(v.roundToInt().toString(), fontSize = 12.sp, color = NexoraAccentLight,
+                        fontWeight = FontWeight.SemiBold)
+                }
+                Slider(
+                    value = v,
+                    onValueChange = { v = it; setting.value = it.roundToInt() },
+                    valueRange = setting.min.toFloat()..setting.max.toFloat(),
+                    steps = (setting.max - setting.min - 1).coerceAtLeast(0),
+                    modifier = Modifier.height(24.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor         = NexoraAccentLight,
+                        activeTrackColor   = NexoraAccent,
+                        inactiveTrackColor = NexoraOutlineStrong
+                    )
+                )
+            }
+        }
+        is BoolSetting -> {
+            var v by remember { mutableStateOf(setting.value) }
+            val isShortcut = setting.name == "Shortcut"
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface)
+                if (isShortcut) {
+                    ShortcutToggle(checked = v) {
+                        v = it; setting.value = it; onShortcutChanged()
+                    }
+                } else {
+                    Switch(
+                        checked = v,
+                        onCheckedChange = { v = it; setting.value = it },
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor   = NexoraAccent,
+                            checkedThumbColor   = Color.White,
+                            uncheckedTrackColor = NexoraOutlineStrong,
+                            uncheckedThumbColor = NexoraOnSurfaceDim
+                        )
+                    )
+                }
+            }
+        }
+        is EnumSetting<*> -> {
+            @Suppress("UNCHECKED_CAST")
+            val es = setting as EnumSetting<Enum<*>>
+            var sel by remember { mutableStateOf(es.value) }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(es.name, fontSize = 12.sp, color = NexoraOnSurface)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState())
+                ) {
+                    es.values.forEach { opt ->
+                        val isSel = sel == opt
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50.dp))
+                                .background(if (isSel) NexoraSurfaceRaised else NexoraSurface)
+                                .border(1.dp,
+                                    if (isSel) NexoraOutlineStrong else NexoraOutline,
+                                    RoundedCornerShape(50.dp))
+                                .clickable { sel = opt; es.value = opt }
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                opt.name.lowercase().replaceFirstChar { it.uppercase() },
+                                fontSize = 11.sp,
+                                color = if (isSel) NexoraOnBackground else NexoraOnSurface,
+                                fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        is StringSetting -> {
+            var v by remember { mutableStateOf(setting.value) }
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface,
+                    modifier = Modifier.weight(0.4f))
+                OutlinedTextField(
+                    value = v,
+                    onValueChange = { v = it; setting.value = it },
+                    singleLine = true,
+                    modifier = Modifier.weight(0.6f).height(40.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = NexoraOnSurface),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = NexoraAccent,
+                        unfocusedBorderColor = NexoraOutline
+                    )
+                )
+            }
+        }
+        else -> {}
+    }
+}
+
+
+@Composable
+private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50.dp))
+            .background(if (checked) NexoraSurfaceRaised else Color.Transparent)
+            .border(1.5.dp,
+                if (checked) NexoraOutlineStrong else NexoraOutline,
+                RoundedCornerShape(50.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (checked) "Acik" else "Kapali",
+            fontSize = 11.sp,
+            color = if (checked) NexoraOnBackground else NexoraOnSurfaceDim,
+            fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
+}
