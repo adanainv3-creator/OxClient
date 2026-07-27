@@ -6,10 +6,15 @@ import com.oxclient.events.PacketEvent
 import com.oxclient.events.PacketEventBus
 import com.oxclient.module.BaseModule
 import com.oxclient.module.ModuleCategory
+import com.oxclient.module.social.isFriendEntity
 import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginData
 import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginType
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.CommandRequestPacket
+import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
+import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
+import org.cloudburstmc.protocol.bedrock.packet.UpdateAttributesPacket
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -20,9 +25,9 @@ import kotlin.random.Random
 class ChatAdvertiser : BaseModule(
     name        = "ChatAdvertiser",
     category    = ModuleCategory.MISC,
-    description = "Chat Spam (TPA/PVP/PVPx)"
+    description = "Chat Spam (TPA/PVP/PVPx/KillStreak)"
 ) {
-    enum class Mode { TPA, PVP, PVPx }
+    enum class Mode { TPA, PVP, PVPx, KillStreak }
 
     private val mode              = enum("Mode", Mode.PVP)
     private val shortcut          = bool("Shortcut", false)
@@ -52,11 +57,22 @@ class ChatAdvertiser : BaseModule(
     private val playerLastDistances = ConcurrentHashMap<Long, Float>()
     private val playerLastNotifiedMs = ConcurrentHashMap<Long, Long>()
 
+    private val recentHitsByMe = ConcurrentHashMap<Long, Long>()
+    private val recentKillHandled = ConcurrentHashMap<Long, Long>()
+    @Volatile private var killStreak = 0
+    private val SELF_HIT_WINDOW_MS = 3000L
+    private val KILL_DEBOUNCE_MS = 1500L
+
     override fun onEnable() {
         super.onEnable()
         playerLastDistances.clear()
         playerLastNotifiedMs.clear()
+        recentHitsByMe.clear()
+        recentKillHandled.clear()
+        killStreak = 0
         currentPvpMessageIndex = 0
+
+        if (mode.value == Mode.KillStreak) return // tamamen paket tetiklemeli, scheduler gerekmiyor
 
         scheduler = Executors.newSingleThreadScheduledExecutor().also { exec ->
             when (mode.value) {
@@ -69,6 +85,7 @@ class ChatAdvertiser : BaseModule(
                 Mode.PVPx -> {
                     exec.scheduleAtFixedRate({ checkRunningPlayers() }, 100, 100, TimeUnit.MILLISECONDS)
                 }
+                Mode.KillStreak -> {}
             }
         }
     }
@@ -79,11 +96,73 @@ class ChatAdvertiser : BaseModule(
         scheduler = null
         playerLastDistances.clear()
         playerLastNotifiedMs.clear()
+        recentHitsByMe.clear()
+        recentKillHandled.clear()
     }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         activeSession = event.session
+
+        if (mode.value != Mode.KillStreak) return
+
+        when (val p = event.packet) {
+            is InventoryTransactionPacket -> {
+                if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+                if (p.transactionType != InventoryTransactionType.ITEM_USE_ON_ENTITY) return
+                if (p.actionType != 1) return
+                recentHitsByMe[p.runtimeEntityId] = System.currentTimeMillis()
+            }
+            is EntityEventPacket -> {
+                if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
+                val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
+                if (!typeStr.contains("DEATH")) return
+                if (p.runtimeEntityId == EntityTracker.selfRuntimeId) handleSelfDeath()
+                else handleKill(p.runtimeEntityId)
+            }
+            is UpdateAttributesPacket -> {
+                if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
+                val health = p.attributes.find { it.name == "minecraft:health" } ?: return
+                if (health.value > 0f) return
+                if (p.runtimeEntityId == EntityTracker.selfRuntimeId) handleSelfDeath()
+                else handleKill(p.runtimeEntityId)
+            }
+            else -> {}
+        }
+    }
+
+    private fun handleKill(runtimeId: Long) {
+        val entity = EntityTracker.getById(runtimeId) ?: return
+        if (!entity.isPlayer) return
+        if (entity.isFriendEntity) return
+
+        val now = System.currentTimeMillis()
+        val last = recentKillHandled[runtimeId]
+        if (last != null && now - last < KILL_DEBOUNCE_MS) return
+        recentKillHandled[runtimeId] = now
+
+        val hitAt = recentHitsByMe.remove(runtimeId) ?: return
+        if (now - hitAt > SELF_HIT_WINDOW_MS) return
+
+        val name = entity.name.takeIf { it.isNotEmpty() } ?: "unknown"
+        killStreak++
+
+        val session = activeSession ?: return
+        val msg = if (killStreak % 5 == 0) {
+            "> @here $killStreak KILLSTREAK!! @$name just died | OxClient | ${randomJunk()}"
+        } else {
+            "> @here EZ @$name killed ($killStreak streak) | OxClient | ${randomJunk()}"
+        }
+        try { session.sendToServer(buildTextPacket(msg)) } catch (e: Exception) {}
+    }
+
+    private fun handleSelfDeath() {
+        if (killStreak < 2) { killStreak = 0; return } // tek kill'de "streak bozuldu" demek anlamsız
+        val broken = killStreak
+        killStreak = 0
+        val session = activeSession ?: return
+        val msg = "> @here streak of $broken ended | still goated | OxClient | ${randomJunk()}"
+        try { session.sendToServer(buildTextPacket(msg)) } catch (e: Exception) {}
     }
 
     private fun sendTpaCommand() {

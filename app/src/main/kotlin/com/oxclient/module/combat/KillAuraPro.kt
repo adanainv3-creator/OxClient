@@ -40,7 +40,7 @@ class KillAuraPro : BaseModule(
     private val predictDelay  = float("Predict Delay", 0.05f, 0.05f, 0.5f)
     private val ignoreFriends = bool ("Ignore Friends", true)
     private val alwaysCrit    = bool ("Always Crit",   true)
-    private val shortcut      = bool ("Shortcut",      true)
+    private val shortcut      = bool ("Shortcut",      false)
 
     @Volatile private var lastAttackMs = 0L
     private var tickJob: Job? = null

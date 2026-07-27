@@ -60,6 +60,7 @@ class TPAuraPC : BaseModule(
     private val timerStep      = float("Timer Step",      1f,    0.1f, 5f)
     private val stutterFreq    = float("Stutter Freq",    0.5f,  0f,   5f)
     private val stutterValue   = float("Stutter Value",   10f,   0f,   20f)
+    private val shortcut         = bool("Shortcut",            false)
 
     @Volatile private var lastAttackMs = 0L
     @Volatile private var lastTeleportMs = 0L

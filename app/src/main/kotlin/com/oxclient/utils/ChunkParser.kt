@@ -199,18 +199,22 @@ object ChunkParser {
     const val OVERWORLD_MIN_SECTION = -4
 
     /**
-     * Chunk içindeki cevher bloklarını (oreRuntimeIds'de olanları) world koordinatlarıyla döner.
+     * Chunk içindeki hedef bloklarını (isTarget(runtimeId) == true olanları) world
+     * koordinatlarıyla döner. Set<Int> yerine predicate kullanıyoruz çünkü ore runtime
+     * ID'leri artık StartGamePacket'ten önceden statik bir palet listesiyle değil,
+     * OreTracker tarafından ilk görüldüğünde tembel (lazy) çözülüyor — bu da
+     * block-network-ID hashing kullanan sunucularda (StartGamePacket'te palet listesi
+     * hiç gelmeyebilir) doğru çalışır. Predicate her subchunk'ın palette dizisindeki
+     * benzersiz girişler için bir kez çağrılır (4096 blok için değil), bu yüzden
+     * maliyeti ihmal edilebilir düzeydedir.
      * Persistent (NBT) palette formatlı subchunk'lar desteklenmiyor (skipBlockStorage ile aynı kısıt).
-     * subChunkCount reflection ile bulunamazsa boş liste döner — bu durumda version-byte ile
-     * tarama yapılabilir ama baseY güvenilir hesaplanamayacağından burada tercih edilmedi.
      */
     fun extractOreBlocks(
         pkt: LevelChunkPacket,
-        oreRuntimeIds: Set<Int>,
+        isTarget: (Int) -> Boolean,
         minSectionIndex: Int = OVERWORLD_MIN_SECTION,
         subChunkCount: Int? = null
     ): List<OreHit> {
-        if (oreRuntimeIds.isEmpty()) return emptyList()
         val original = readDataField(pkt) ?: return emptyList()
         val buf = original.duplicate()
 
@@ -223,7 +227,7 @@ object ChunkParser {
             var sectionIndex = minSectionIndex
             repeat(count.coerceAtMost(MAX_SUBCHUNKS)) {
                 if (buf.isReadable) {
-                    decodeOneSubChunk(buf, chunkX, chunkZ, sectionIndex * 16, oreRuntimeIds, result)
+                    decodeOneSubChunk(buf, chunkX, chunkZ, sectionIndex * 16, isTarget, result)
                 }
                 sectionIndex++
             }
@@ -235,17 +239,17 @@ object ChunkParser {
 
     private fun decodeOneSubChunk(
         buf: ByteBuf, chunkX: Int, chunkZ: Int, baseY: Int,
-        oreRuntimeIds: Set<Int>, out: MutableList<OreHit>
+        isTarget: (Int) -> Boolean, out: MutableList<OreHit>
     ) {
         val version = buf.readUnsignedByte().toInt()
         when (version) {
-            1 -> decodeBlockStorage(buf, chunkX, chunkZ, baseY, oreRuntimeIds, out)
+            1 -> decodeBlockStorage(buf, chunkX, chunkZ, baseY, isTarget, out)
             8, 9 -> {
                 val storageCount = buf.readUnsignedByte().toInt()
                 if (version == 9) buf.readByte()
                 repeat(storageCount) { layer ->
                     // 0. katman gerçek bloklar, sonraki katmanlar genelde su/waterlogging — atla
-                    if (layer == 0) decodeBlockStorage(buf, chunkX, chunkZ, baseY, oreRuntimeIds, out)
+                    if (layer == 0) decodeBlockStorage(buf, chunkX, chunkZ, baseY, isTarget, out)
                     else skipBlockStorage(buf)
                 }
             }
@@ -255,7 +259,7 @@ object ChunkParser {
 
     private fun decodeBlockStorage(
         buf: ByteBuf, chunkX: Int, chunkZ: Int, baseY: Int,
-        oreRuntimeIds: Set<Int>, out: MutableList<OreHit>
+        isTarget: (Int) -> Boolean, out: MutableList<OreHit>
     ) {
         val header = buf.readUnsignedByte().toInt()
         val bitsPerBlock = header ushr 1
@@ -282,20 +286,23 @@ object ChunkParser {
         val palette = IntArray(paletteSize)
         for (p in 0 until paletteSize) palette[p] = readUnsignedVarInt(buf)
 
+        // Predicate'i sadece paletin benzersiz girişleri için çağırıyoruz (tipik olarak
+        // birkaç ile birkaç yüz arası), 4096 voksel için değil.
+        val paletteIsTarget = BooleanArray(paletteSize) { isTarget(palette[it]) }
+
         for (idx in 0 until 4096) {
             val w = idx / blocksPerWord
             val slot = idx % blocksPerWord
             val paletteIndex = (words[w] ushr (slot * bitsPerBlock)) and mask
             if (paletteIndex >= palette.size) continue
-            val runtimeId = palette[paletteIndex]
-            if (runtimeId !in oreRuntimeIds) continue
+            if (!paletteIsTarget[paletteIndex]) continue
 
             // idx -> yerel (lx,ly,lz): XZY sırası (x en anlamlı, sonra z, sonra y)
             val lx = idx shr 8
             val lz = (idx shr 4) and 0xF
             val ly = idx and 0xF
 
-            out.add(OreHit(chunkX * 16 + lx, baseY + ly, chunkZ * 16 + lz, runtimeId))
+            out.add(OreHit(chunkX * 16 + lx, baseY + ly, chunkZ * 16 + lz, palette[paletteIndex]))
         }
     }
 }

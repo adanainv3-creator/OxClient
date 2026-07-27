@@ -41,7 +41,7 @@ class KillAura : BaseModule(
     private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)
     private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
-    private val shortcut        = bool ("Shortcut",         true)
+    private val shortcut        = bool ("Shortcut",         false)
 
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L

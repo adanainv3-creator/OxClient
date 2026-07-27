@@ -297,7 +297,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         return result
     }
 
-    private fun resolveIdentifier(runtimeId: Int): String? {
+    internal fun resolveIdentifier(runtimeId: Int): String? {
         identifierCache[runtimeId]?.let { return it }
         val session = PacketEventBus.currentSession ?: return null
 

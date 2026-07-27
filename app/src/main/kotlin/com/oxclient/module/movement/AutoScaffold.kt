@@ -45,7 +45,7 @@ class AutoScaffold : BaseModule(
 
     private val placeDelay = int ("Place Delay", 100, 30, 500)
     private val rotate     = bool("Rotate",      false)
-    private val shortcut   = bool("Shortcut",    true)
+    private val shortcut   = bool("Shortcut",    false)
 
     private var tickJob: Job? = null
     private var lastPlaceMs = 0L

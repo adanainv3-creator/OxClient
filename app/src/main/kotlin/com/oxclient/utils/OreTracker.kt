@@ -118,7 +118,7 @@ object OreTracker : PacketEventBus.PacketListener {
     override fun onPacket(event: PacketEvent) {
         if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
         when (val p = event.packet) {
-            is StartGamePacket       -> { loadPalette(p); clear() }
+            is StartGamePacket       -> clear()
             is ChangeDimensionPacket -> clear()
             is LevelChunkPacket      -> handleChunk(p)
             else -> {}
@@ -126,10 +126,10 @@ object OreTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleChunk(p: LevelChunkPacket) {
-        val ids = oreRuntimeIds()
-        if (ids.isEmpty()) return // palet henüz yüklenmedi (StartGamePacket gelmemiş)
         val minSection = minSectionForDimension(EntityTracker.selfDimension)
-        val hits = try { ChunkParser.extractOreBlocks(p, ids, minSection) } catch (_: Exception) { emptyList() }
+        val hits = try {
+            ChunkParser.extractOreBlocks(p, ::isOreRuntimeId, minSection)
+        } catch (_: Exception) { emptyList() }
         for (hit in hits) {
             val type = resolveRuntimeId(hit.runtimeId) ?: continue
             add(hit.x, hit.y, hit.z, type)
@@ -145,22 +145,27 @@ object OreTracker : PacketEventBus.PacketListener {
     }
 
     private val paletteMap = ConcurrentHashMap<Int, TrackedOreType>()
-    @Volatile private var paletteLoaded = false
+    private val nonOreIds  = ConcurrentHashMap.newKeySet<Int>()
 
-    // BlockTracker'daki reflection yardımcılarını (extractPaletteList / extractBlockName)
-    // tekrar yazmamak için oradan (internal) kullanıyor.
-    fun loadPalette(startGame: StartGamePacket) {
-        try {
-            val paletteList = BlockTracker.extractPaletteList(startGame) ?: return
-            paletteMap.clear()
-            paletteList.forEachIndexed { runtimeId, entry ->
-                val name = BlockTracker.extractBlockName(entry) ?: return@forEachIndexed
-                val type = resolveOreName(name) ?: return@forEachIndexed
-                paletteMap[runtimeId] = type
-            }
-            paletteLoaded = true
-        } catch (_: Exception) {
+    // Eskiden burada StartGamePacket üzerinde reflection ile ("getBlockPalette" vb.)
+    // statik bir palet listesi aranıyordu. Bu, block-network-ID hashing kullanan
+    // sunucularda (StartGamePacket'te ayrık bir palet listesi hiç gelmeyebilir) hep
+    // başarısız oluyordu ve OreTracker'ı kalıcı olarak boş bırakıyordu (Xray'in hiç
+    // çalışmamasının sebebi buydu). Şimdi her runtimeId, WorldBlockTracker'ın zaten
+    // kanıtlanmış çalışan session-registry tabanlı çözümleyicisiyle ilk görüldüğünde
+    // tembel (lazy) olarak çözülüp cache'leniyor — hashing modundan bağımsız çalışır.
+    private fun isOreRuntimeId(runtimeId: Int): Boolean {
+        if (paletteMap.containsKey(runtimeId)) return true
+        if (nonOreIds.contains(runtimeId)) return false
+
+        val identifier = WorldBlockTracker.resolveIdentifier(runtimeId)
+        val type = identifier?.let { resolveOreName(it) }
+        if (type != null) {
+            paletteMap[runtimeId] = type
+            return true
         }
+        nonOreIds.add(runtimeId)
+        return false
     }
 
     fun oreRuntimeIds(): Set<Int> = paletteMap.keys

@@ -33,7 +33,7 @@ class TPAura : BaseModule(
     private val yOffset          = float("Y Offset",          0.8f, -2f,  2f)
     private val rotateToTarget   = bool ("Rotate To Target",  true)
     private val ignoreFriends    = bool ("Ignore Friends",    true)
-    private val shortcut         = bool ("Shortcut",          true)
+    private val shortcut         = bool ("Shortcut",          false)
 
     private var strafeAngle = 0.0
     private var moveAttempts = 0L

@@ -53,7 +53,6 @@ class CrystalAura : BaseModule(
     private val place            = bool("Place",              true)
     private val breakCrystals    = bool("Break",               true)
     private val strategy         = enum("Strategy",            PlaceStrategy.MultiTarget)
-    private val shortcut         = bool("Shortcut",            true)
     private val tickIntervalMs   = int ("Tick Interval",       20, 20, 200)
 
     // --- Hedefleme ---
@@ -92,6 +91,7 @@ class CrystalAura : BaseModule(
     private val noSwitch         = bool("No Switch",           true)
     private val noParticles      = bool("No Particle",         true)
     private val silentRotation   = bool("Silent Rotation",     true)
+    private val shortcut         = bool("Shortcut",            false)
 
     private val pendingPositions = ConcurrentHashMap<Long, Long>()
     private val pendingObsidian  = ConcurrentHashMap<Long, Long>()

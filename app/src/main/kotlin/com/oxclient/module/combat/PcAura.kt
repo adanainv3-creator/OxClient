@@ -47,7 +47,7 @@ class PcAura : BaseModule(
     enum class PriorityMode { DISTANCE, HEALTH, LOWEST_HEALTH, DIRECTION }
     private val priorityMode  = enum ("Priority",        PriorityMode.DISTANCE)
     private val reversePri    = bool ("Reverse Priority", false)
-    private val shortcut      = bool ("Shortcut",        true)
+    private val shortcut      = bool ("Shortcut",        false)
 
     @Volatile private var lastAttackMs = 0L
     @Volatile private var lastRotSendMs = 0L
