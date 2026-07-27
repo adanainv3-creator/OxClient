@@ -32,7 +32,7 @@ import com.nexoraclient.module.movement.Jetpack
 import com.nexoraclient.module.movement.MotionFly
 import com.nexoraclient.module.movement.Speed
 import com.nexoraclient.module.movement.TPAura
-import com.nexoraclient.module.combat.TPAuraPC
+import com.nexoraclient.module.movement.TPAuraPC
 import com.nexoraclient.module.visual.ArrayListModule
 import com.nexoraclient.module.visual.ESP
 import com.nexoraclient.module.visual.FOVChanger

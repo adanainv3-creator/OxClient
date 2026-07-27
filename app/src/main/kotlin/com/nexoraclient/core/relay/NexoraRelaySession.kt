@@ -1,6 +1,6 @@
 package com.nexoraclient.core.relay
 
-import com.nexoraclient.core.relay.listener.OxPacketListener
+import com.nexoraclient.core.relay.listener.NexoraPacketListener
 import com.nexoraclient.events.PacketEvent
 import com.nexoraclient.events.PacketEventBus
 import io.netty.buffer.Unpooled
@@ -62,7 +62,7 @@ class NexoraRelaySession internal constructor(
     @Volatile var activeCodec: BedrockCodec = NexoraRelay.RELAY_CODEC
         internal set
 
-    val listeners = CopyOnWriteArrayList<OxPacketListener>()
+    val listeners = CopyOnWriteArrayList<NexoraPacketListener>()
 
     private val closed           = AtomicBoolean(false)
     private val serverConnecting = AtomicBoolean(false)
