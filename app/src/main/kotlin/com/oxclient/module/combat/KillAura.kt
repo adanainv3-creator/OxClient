@@ -1,3 +1,4 @@
+
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
@@ -23,6 +24,11 @@ class KillAura : BaseModule(
     enum class SwingMode    { Client, Server, Both, None }
     enum class PriorityMode { Distance, Health, Direction, LowestHealth }
     enum class CritMode     { Vanilla, MovePacket, Jump }
+
+    companion object {
+        private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
+        private const val TICK_INTERVAL_MS = 5L
+    }
 
     private val cpsMin          = int  ("CPS Min",          28,   1,  30)
     private val cpsMax          = int  ("CPS Max",          30,   1,  30)
@@ -50,7 +56,9 @@ class KillAura : BaseModule(
     @Volatile private var attackCount        = 0L
     @Volatile private var headLockYaw        = 0f
     @Volatile private var headLockPitch      = 0f
-    
+    @Volatile private var cachedHeadLockTarget: EntityTracker.TrackedEntity? = null
+    @Volatile private var lastHeadLockScanMs = 0L
+
     private var tickJob: Job? = null
 
     override fun onEnable() {
@@ -60,6 +68,8 @@ class KillAura : BaseModule(
         attackCount = 0L
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
+        cachedHeadLockTarget = null
+        lastHeadLockScanMs = 0L
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
     }
@@ -80,7 +90,7 @@ class KillAura : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) tick()
-            delay(1L)
+            delay(TICK_INTERVAL_MS)
         }
     }
 
@@ -125,7 +135,13 @@ class KillAura : BaseModule(
     }
 
     private fun applyHeadLock(pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) {
-        val target = findHeadLockTarget() ?: return
+        val now = System.currentTimeMillis()
+        val cached = cachedHeadLockTarget?.takeIf { EntityTracker.getById(it.runtimeId) != null }
+        if (cached == null || now - lastHeadLockScanMs >= HEAD_LOCK_SCAN_INTERVAL_MS) {
+            cachedHeadLockTarget = findHeadLockTarget()
+            lastHeadLockScanMs = now
+        }
+        val target = cachedHeadLockTarget ?: return
 
         val targetRot = RotationUtil.toEntity(target)
         val smoothFactor = headLockSmooth.value.coerceIn(0.01f, 1f)

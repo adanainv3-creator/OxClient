@@ -17,7 +17,7 @@ import kotlin.math.*
 import kotlin.random.Random
 
 class TPAuraPC : BaseModule(
-    name        = "OxTp",
+    name        = "NexoraAura",
     category    = ModuleCategory.COMBAT,
     description = "PC kalitesinde teleport + saldırı modülü"
 ), PacketEventBus.PacketListener {
@@ -51,33 +51,40 @@ class TPAuraPC : BaseModule(
 
     enum class RotationMode { NONE, SILENT, CLIENT }
     private val rotationMode   = enum ("Rotation",        RotationMode.SILENT)
-    private val shortcut         = bool("Shortcut",            false)
+    private val shortcut       = bool ("Shortcut",        false)
 
-    @Volatile private var lastAttackMs = 0L
-    @Volatile private var lastTeleportMs = 0L
-    @Volatile private var lastRotSendMs = 0L
+    @Volatile private var lastAttackMs    = 0L
+    @Volatile private var lastTeleportMs  = 0L
+    @Volatile private var lastRotSendMs   = 0L
 
-    @Volatile private var headLockYaw = 0f
+    @Volatile private var headLockYaw   = 0f
     @Volatile private var headLockPitch = 0f
 
-    private var upDownOffset = 0f
-    private var upDownGoingUp = true
-    private var circleIndex = 0
-    private var cornerIndex = 0
+    private var upDownOffset   = 0f
+    private var upDownGoingUp  = true
+    private var circleIndex    = 0
+    private var cornerIndex    = 0
+
+    // selectTargets cache — hem onPacket hem tick() aynı listeyi kullanır
+    @Volatile private var cachedTargets: List<EntityTracker.TrackedEntity> = emptyList()
+    @Volatile private var lastSelectMs  = 0L
+    private val SELECT_CACHE_MS = 50L   // tick hızıyla aynı pencere
 
     private var tickJob: Job? = null
 
     override fun onEnable() {
         super.onEnable()
-        headLockYaw = EntityTracker.selfYaw
+        headLockYaw   = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
-        upDownOffset = 0f
+        upDownOffset  = 0f
         upDownGoingUp = true
-        circleIndex = 0
-        cornerIndex = 0
-        lastAttackMs = 0L
+        circleIndex   = 0
+        cornerIndex   = 0
+        lastAttackMs  = 0L
         lastTeleportMs = 0L
-        lastRotSendMs = 0L
+        lastRotSendMs  = 0L
+        lastSelectMs   = 0L
+        cachedTargets  = emptyList()
 
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
@@ -86,35 +93,49 @@ class TPAuraPC : BaseModule(
     override fun onDisable() {
         tickJob?.cancel()
         PacketEventBus.unregister(this)
+        cachedTargets = emptyList()
         super.onDisable()
+    }
+
+    // Hedef listesini en fazla SELECT_CACHE_MS aralıkla bir kez hesaplar.
+    private fun getCachedTargets(): List<EntityTracker.TrackedEntity> {
+        val now = System.currentTimeMillis()
+        if (now - lastSelectMs >= SELECT_CACHE_MS) {
+            cachedTargets = selectTargets()
+            lastSelectMs  = now
+        }
+        return cachedTargets
     }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-
         val pkt = event.packet as? PlayerAuthInputPacket ?: return
 
         if (rotationMode.value == RotationMode.SILENT) {
-            val target = selectTargets().firstOrNull()
-            if (target != null) {
-                applySilentRotation(pkt, target)
-            }
+            val target = getCachedTargets().firstOrNull() ?: return
+            applySilentRotation(pkt, target)
         }
     }
 
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
-            if (isEnabled) tick()
-            delay(1L)
+            if (isEnabled) {
+                try {
+                    tick()
+                } catch (e: Exception) {
+                    android.util.Log.e("TPAuraPC", "tick() failed: ${e.message}", e)
+                }
+            }
+            delay(50L)
         }
     }
 
     private fun tick() {
-        val now = System.currentTimeMillis()
+        val now     = System.currentTimeMillis()
         val session = PacketEventBus.currentSession ?: return
 
-        val targets = selectTargets()
+        val targets = getCachedTargets()
         if (targets.isEmpty()) return
 
         val mainTarget = targets.first()
@@ -131,28 +152,25 @@ class TPAuraPC : BaseModule(
             }
         }
 
-        if (rotationMode.value == RotationMode.CLIENT && targets.isNotEmpty()) {
+        if (rotationMode.value == RotationMode.CLIENT) {
             val rot = RotationUtil.toEntity(mainTarget)
             PacketUtil.sendMoveAtSelf(
                 session,
-                yaw = rot.yaw,
-                pitch = rot.pitch,
+                yaw     = rot.yaw,
+                pitch   = rot.pitch,
                 onGround = true
             )
         }
     }
 
+    // getEntitiesInRange zaten range'e göre kırpar; ikinci mesafe filtresi kaldırıldı.
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
-        val rangeSq = range.value * range.value
-
         return EntityTracker.getEntitiesInRange(range.value)
             .asSequence()
             .filter { it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { isValidTarget(it) }
-            .filter { MathUtil.dist3sq(it.x, it.y, it.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= rangeSq }
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
-            .filter { !mobAura.value || isMob(it) }
             .sortedWith(compareBy { getPriorityScore(it) })
             .toList()
     }
@@ -171,16 +189,16 @@ class TPAuraPC : BaseModule(
 
     private fun getPriorityScore(entity: EntityTracker.TrackedEntity): Float {
         val score = when (priorityMode.value) {
-            PriorityMode.DISTANCE -> EntityTracker.distanceTo(entity)
-            PriorityMode.HEALTH -> entity.health
+            PriorityMode.DISTANCE      -> EntityTracker.distanceTo(entity)
+            PriorityMode.HEALTH        -> entity.health
             PriorityMode.LOWEST_HEALTH -> -entity.health
-            PriorityMode.DIRECTION -> EntityTracker.angleToEntity(entity)
+            PriorityMode.DIRECTION     -> EntityTracker.angleToEntity(entity)
         }
         return if (reversePri.value) -score else score
     }
 
     private fun teleportToTarget(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
-        val selfPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+        val selfPos   = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
         val targetPos = Vector3f.from(target.x, target.y + tpYOffset.value, target.z)
 
         var newPos = calculateTeleportPosition(targetPos, target)
@@ -197,19 +215,19 @@ class TPAuraPC : BaseModule(
         }
 
         val delta = newPos.sub(selfPos)
-        val dist = delta.length()
+        val dist  = delta.length()
         if (dist > 0.001f) {
             val moveDist = min(tpMoveSpeed.value, dist)
-            val scale = moveDist / dist
+            val scale    = moveDist / dist
             newPos = selfPos.add(delta.mul(scale))
         }
 
         val movePacket = MovePlayerPacket().apply {
-            runtimeEntityId = EntityTracker.selfRuntimeId
-            position = newPos
-            rotation = Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, EntityTracker.selfYaw)
-            mode = MovePlayerPacket.Mode.NORMAL
-            isOnGround = true
+            runtimeEntityId       = EntityTracker.selfRuntimeId
+            position              = newPos
+            rotation              = Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, EntityTracker.selfYaw)
+            mode                  = MovePlayerPacket.Mode.NORMAL
+            isOnGround            = true
             ridingRuntimeEntityId = 0L
         }
         session.serverBound(movePacket)
@@ -220,21 +238,16 @@ class TPAuraPC : BaseModule(
     }
 
     private fun calculateTeleportPosition(targetPos: Vector3f, target: EntityTracker.TrackedEntity): Vector3f {
-        val dist = tpDistance.value
-        val randX = ((Random.nextInt(-1000, 1000) / 1000f) * 0.5f)
-        val randZ = ((Random.nextInt(-1000, 1000) / 1000f) * 0.5f)
+        val dist  = tpDistance.value
+        val randX = (Random.nextInt(-1000, 1000) / 1000f) * 0.5f
+        val randZ = (Random.nextInt(-1000, 1000) / 1000f) * 0.5f
 
         return when (tpMode.value) {
             TPMode.CORNERS -> {
                 cornerIndex = (cornerIndex + 1) % 4
-                val offset = dist
-                val xOff = if (cornerIndex % 2 == 0) offset else -offset
-                val zOff = if (cornerIndex < 2) offset else -offset
-                Vector3f.from(
-                    targetPos.x + xOff + randX,
-                    targetPos.y,
-                    targetPos.z + zOff + randZ
-                )
+                val xOff = if (cornerIndex % 2 == 0) dist else -dist
+                val zOff = if (cornerIndex < 2) dist else -dist
+                Vector3f.from(targetPos.x + xOff + randX, targetPos.y, targetPos.z + zOff + randZ)
             }
             TPMode.CIRCLE -> {
                 val angle = circleIndex++ * 45f
@@ -248,7 +261,7 @@ class TPAuraPC : BaseModule(
             }
             TPMode.RANDOM -> {
                 val angle = Random.nextDouble(0.0, 2 * PI)
-                val r = dist * (0.7f + Random.nextFloat() * 0.3f)
+                val r     = dist * (0.7f + Random.nextFloat() * 0.3f)
                 Vector3f.from(
                     targetPos.x + (cos(angle) * r).toFloat(),
                     targetPos.y,
@@ -268,54 +281,50 @@ class TPAuraPC : BaseModule(
 
     private fun canAttack(): Boolean {
         if (minCPS.value == 0 && maxCPS.value == 0) return true
-        val cps = Random.nextInt(minCPS.value.coerceAtLeast(1), maxCPS.value.coerceAtLeast(1))
+        val cps     = Random.nextInt(minCPS.value.coerceAtLeast(1), maxCPS.value.coerceAtLeast(1))
         val delayMs = 1000L / cps
         return System.currentTimeMillis() - lastAttackMs >= delayMs
     }
 
+    // Eskiden 1 swing + 3 attack paketi gönderiliyordu (repeat(2) fazladandı).
+    // Sunucu aynı tick'teki çift saldırıyı zaten ignore eder; sadece 1 attack yeterli.
     private fun attack(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
-        val clickPos = Vector3f.from(target.x, target.y + 1.62f, target.z)
+        val clickPos   = Vector3f.from(target.x, target.y + 1.62f, target.z)
         val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
-
         PacketUtil.sendSwing(session)
         PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
-        repeat(2) {
-            PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
-        }
     }
 
-    private fun applySilentRotation(
-        pkt: PlayerAuthInputPacket,
-        target: EntityTracker.TrackedEntity
-    ) {
+    private fun applySilentRotation(pkt: PlayerAuthInputPacket, target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         if (now - lastRotSendMs < 50L) return
         lastRotSendMs = now
 
-        val rot = RotationUtil.toEntity(target)
+        val rot         = RotationUtil.toEntity(target)
         val smoothFactor = 0.7f
-        val newYaw = smoothAngle(headLockYaw, rot.yaw, smoothFactor)
-        val newPitch = smoothAngle(headLockPitch, rot.pitch, smoothFactor)
+        val newYaw      = smoothAngle(headLockYaw,   rot.yaw,   smoothFactor)
+        val newPitch    = smoothAngle(headLockPitch, rot.pitch, smoothFactor)
 
-        headLockYaw = newYaw
+        headLockYaw   = newYaw
         headLockPitch = newPitch
 
         pkt.rotation = Vector3f.from(newPitch, newYaw, newYaw)
-        EntityTracker.selfYaw = newYaw
+        EntityTracker.selfYaw   = newYaw
         EntityTracker.selfPitch = newPitch
     }
 
     private fun smoothAngle(current: Float, target: Float, factor: Float): Float {
         var diff = target - current
-        if (diff > 180f) diff -= 360f
+        if (diff > 180f)  diff -= 360f
         if (diff < -180f) diff += 360f
         val result = current + (diff * factor)
         var normalized = result % 360f
-        if (normalized > 180f) normalized -= 360f
+        if (normalized > 180f)  normalized -= 360f
         if (normalized < -180f) normalized += 360f
         return normalized
     }
 
-    fun getTargetCount(): Int = selectTargets().size
-    fun isTargeting(): Boolean = selectTargets().isNotEmpty()
+    // Cached versiyon — her çağrı ayrı tarama yapmaz
+    fun getTargetCount(): Int  = getCachedTargets().size
+    fun isTargeting(): Boolean = getCachedTargets().isNotEmpty()
 }

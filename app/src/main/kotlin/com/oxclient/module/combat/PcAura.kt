@@ -44,6 +44,7 @@ class PcAura : BaseModule(
     @Volatile private var lastRotSendMs = 0L
     @Volatile private var headLockYaw = 0f
     @Volatile private var headLockPitch = 0f
+    @Volatile private var cachedRotTarget: EntityTracker.TrackedEntity? = null
 
     private var tickJob: Job? = null
 
@@ -53,6 +54,7 @@ class PcAura : BaseModule(
         lastRotSendMs = 0L
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
+        cachedRotTarget = null
 
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
@@ -71,7 +73,13 @@ class PcAura : BaseModule(
         val pkt = event.packet as? org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket ?: return
 
         if (silentRot.value) {
-            val target = selectTargets().firstOrNull()
+            val now = System.currentTimeMillis()
+            val cached = cachedRotTarget?.takeIf { EntityTracker.getById(it.runtimeId) != null }
+            val target = if (cached != null && now - lastRotSendMs < 50L) {
+                cached
+            } else {
+                selectTargets().firstOrNull().also { cachedRotTarget = it }
+            }
             if (target != null) {
                 applySilentRotation(pkt, target)
             }
@@ -81,7 +89,11 @@ class PcAura : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) tick()
-            delay(1L)
+            // Eskiden 1ms idi -> saniyede 1000 gereksiz kontrol (max CPS 50 iken en hızlı
+            // gerçek aralık zaten 20ms). Bu fazladan 980 uyanma/kontrol telefonu yoruyor ve
+            // overlay/network thread'leriyle çakışıp lag'e sebep oluyordu. 10ms hâlâ bol payla
+            // en hızlı CPS aralığını yakalıyor ama scheduler yükünü ~10 kat azaltıyor.
+            delay(10L)
         }
     }
 
@@ -122,13 +134,10 @@ class PcAura : BaseModule(
     }
 
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
-        val rangeSq = range.value * range.value
-
         return EntityTracker.getEntitiesInRange(range.value)
             .asSequence()
             .filter { it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { isValidTarget(it) }
-            .filter { MathUtil.dist3sq(it.x, it.y, it.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= rangeSq }
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
             .filter { !mobAura.value || isMob(it) }
@@ -202,25 +211,32 @@ class PcAura : BaseModule(
     }
 
     private suspend fun performAttack(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
-        if (alwaysCrit.value) {
-            CritLock.tryRun { injectCritical(session) }
-        }
+        try {
+            if (alwaysCrit.value) {
+                CritLock.tryRun { injectCritical(session) }
+            }
 
-        val predPos = target.predictedPosition(predictDelay.value)
+            val predPos = target.predictedPosition(predictDelay.value)
 
-        val clickPos = Vector3f.from(
-            predPos.first,
-            predPos.second + 1.62f,
-            predPos.third
-        )
+            val clickPos = Vector3f.from(
+                predPos.first,
+                predPos.second + 1.62f,
+                predPos.third
+            )
 
-        val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+            val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
 
-        PacketUtil.sendSwing(session)
-        PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
-
-        repeat(2) {
+            PacketUtil.sendSwing(session)
             PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
+
+            // Eskiden 3 attack paketi gönderiliyordu (1 + repeat(2)). KillAura'daki
+            // "double-attack" (registration güvenliği için 2x) yeterli — 3. paket
+            // sadece ekstra trafikti. maxTargets=15 iken bu tek başına 15 hedef × 1
+            // paket = 15 gereksiz attack paketi/tick demekti, kalabalık yerlerde
+            // (mob farm vb.) asıl lag kaynağıydı.
+            PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
+        } catch (e: Exception) {
+            android.util.Log.e("OxAura", "performAttack failed for ${target.runtimeId}: ${e.message}", e)
         }
     }
 

@@ -24,6 +24,7 @@ import com.oxclient.module.combat.KillAura
 import com.oxclient.module.combat.KillAuraPro
 import com.oxclient.module.combat.PcAura
 import com.oxclient.module.misc.ChatSpammer
+import com.oxclient.module.misc.AntiLag
 import com.oxclient.module.misc.ChatAdvertiser
 import com.oxclient.module.misc.Disconnect
 import com.oxclient.module.movement.AntiKnockback
@@ -31,7 +32,6 @@ import com.oxclient.module.movement.CreativeFly
 import com.oxclient.module.movement.Jetpack
 import com.oxclient.module.movement.MotionFly
 import com.oxclient.module.movement.Speed
-import com.oxclient.module.movement.Timer
 import com.oxclient.module.movement.TPAura
 import com.oxclient.module.combat.TPAuraPC
 import com.oxclient.module.visual.ArrayListModule
@@ -127,7 +127,6 @@ class OxClientApp : Application() {
             CreativeFly(),
             Speed(),
             Jetpack(),
-            Timer(),
             TPAura(),
             AntiKnockback(),
             FullBright(),
@@ -138,6 +137,7 @@ class OxClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
+            AntiLag(),
             TPAuraPC(),
             AutoScaffold(),  // AutoRegear kaldırıldı, AutoScaffold eklendi
             ChatSpammer(),

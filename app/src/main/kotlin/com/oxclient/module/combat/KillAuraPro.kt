@@ -1,3 +1,4 @@
+
 package com.oxclient.module.combat
 
 import com.oxclient.core.proxy.EntityTracker
@@ -50,13 +51,22 @@ class KillAuraPro : BaseModule(
     @Volatile private var lastAttackMs = 0L
     @Volatile private var headLockYaw   = 0f
     @Volatile private var headLockPitch = 0f
+    @Volatile private var cachedHeadLockTarget: EntityTracker.TrackedEntity? = null
+    @Volatile private var lastHeadLockScanMs = 0L
     private var tickJob: Job? = null
+
+    companion object {
+        private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
+        private const val TICK_INTERVAL_MS = 5L
+    }
 
     override fun onEnable() {
         super.onEnable()
         lastAttackMs = 0L
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
+        cachedHeadLockTarget = null
+        lastHeadLockScanMs = 0L
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
     }
@@ -78,7 +88,13 @@ class KillAuraPro : BaseModule(
     }
 
     private fun applyHeadLock(pkt: PlayerAuthInputPacket) {
-        val target = findHeadLockTarget() ?: return
+        val now = System.currentTimeMillis()
+        val cached = cachedHeadLockTarget?.takeIf { EntityTracker.getById(it.runtimeId) != null }
+        if (cached == null || now - lastHeadLockScanMs >= HEAD_LOCK_SCAN_INTERVAL_MS) {
+            cachedHeadLockTarget = findHeadLockTarget()
+            lastHeadLockScanMs = now
+        }
+        val target = cachedHeadLockTarget ?: return
 
         val targetRot = RotationUtil.toEntity(target)
         val smoothFactor = headLockSmooth.value.coerceIn(0.01f, 1f)
@@ -120,7 +136,7 @@ class KillAuraPro : BaseModule(
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {
             if (isEnabled) tick()
-            delay(1L)
+            delay(TICK_INTERVAL_MS)
         }
     }
 
@@ -141,12 +157,10 @@ class KillAuraPro : BaseModule(
     }
 
     private fun selectTargets(): List<EntityTracker.TrackedEntity> {
-        val rangeSq = range.value * range.value
         return EntityTracker.getEntitiesInRange(range.value)
             .asSequence()
             .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
-            .filter { MathUtil.dist3sq(it.x, it.y, it.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) <= rangeSq }
             .sortedBy { it.health }
             .toList()
     }
