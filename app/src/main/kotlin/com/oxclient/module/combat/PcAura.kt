@@ -120,7 +120,7 @@ class PcAura : BaseModule(
         if (speed == 20f) return
 
         if (speed < 20f) {
-            event.isCancelled = true
+            event.cancel()
             val extraDelayMs = (((20f - speed) / speed) * 50f).toLong().coerceIn(0L, 500L)
             scope.launch {
                 delay(extraDelayMs)

@@ -33,14 +33,13 @@ import com.oxclient.module.movement.MotionFly
 import com.oxclient.module.movement.Speed
 import com.oxclient.module.movement.Timer
 import com.oxclient.module.movement.TPAura
-import com.oxclient.module.movement.TPAuraPC
+import com.oxclient.module.combat.TPAuraPC
 import com.oxclient.module.visual.ArrayListModule
 import com.oxclient.module.visual.ESP
 import com.oxclient.module.visual.FOVChanger
 import com.oxclient.module.visual.FullBright
 import com.oxclient.module.visual.EnemyESP
 import com.oxclient.module.visual.Xray
-import com.oxclient.module.combat.AirFight
 import com.oxclient.module.combat.HeadTrack
 import com.oxclient.utils.WorldBlockTracker
 import com.oxclient.utils.OreTracker
@@ -135,7 +134,6 @@ class OxClientApp : Application() {
             ESP(),
             EnemyESP(),
             Xray(),
-            AirFight(),
             HeadTrack(),
             FOVChanger(),
             ArrayListModule(),
