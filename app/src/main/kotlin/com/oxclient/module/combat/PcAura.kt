@@ -21,23 +21,14 @@ class PcAura : BaseModule(
     description = "PC kalitesinde ultra güçlü otomatik saldırı"
 ), PacketEventBus.PacketListener {
 
-    private val cpsMin        = int  ("CPS Min",         28,   1,   50)
-    private val cpsMax        = int  ("CPS Max",         32,   1,   50)
-    private val range         = float("Range",           10f,  1f,  20f)
+    private val cpsMin        = int  ("CPS Min",         45,   1,   50)
+    private val cpsMax        = int  ("CPS Max",         50,   1,   50)
+    private val range         = float("Range",           20f,  1f,  20f)
     private val fov           = int  ("FOV",             360,  30,  360)
-    private val maxTargets    = int  ("Max Targets",     5,    1,   15)
-    private val predictDelay  = float("Predict Delay",   0.15f, 0.05f, 0.5f)
+    private val maxTargets    = int  ("Max Targets",     15,   1,   15)
+    private val predictDelay  = float("Predict Delay",   0.1f, 0.05f, 0.5f)
     private val ignoreFriends = bool ("Ignore Friends",  true)
     private val autoWeapon    = bool ("Auto Weapon",     true)
-
-    enum class TimerMode { STATIC, STUTTER, RAMP }
-    private val timerMode     = enum ("Timer Mode",      TimerMode.STATIC)
-    private val timerSpeed    = float("Timer Speed",     30f,   20f,  60f)
-    private val timerMin      = float("Timer Min",       24f,   20f,  50f)
-    private val timerMax      = float("Timer Max",       40f,   20f,  60f)
-    private val timerStep     = float("Timer Step",      1f,    0.1f, 5f)
-    private val stutterFreq   = float("Stutter Freq",    0.5f,  0f,   5f)
-    private val stutterValue  = float("Stutter Value",   10f,   0f,   20f)
 
     private val alwaysCrit    = bool ("Always Crit",     true)
     private val silentRot     = bool ("Silent Rotation", true)
@@ -45,7 +36,7 @@ class PcAura : BaseModule(
     private val mobAura       = bool ("Mob Aura",        false)
 
     enum class PriorityMode { DISTANCE, HEALTH, LOWEST_HEALTH, DIRECTION }
-    private val priorityMode  = enum ("Priority",        PriorityMode.DISTANCE)
+    private val priorityMode  = enum ("Priority",        PriorityMode.LOWEST_HEALTH)
     private val reversePri    = bool ("Reverse Priority", false)
     private val shortcut      = bool ("Shortcut",        false)
 
@@ -54,14 +45,7 @@ class PcAura : BaseModule(
     @Volatile private var headLockYaw = 0f
     @Volatile private var headLockPitch = 0f
 
-    @Volatile private var currentTimer = 20f
-    @Volatile private var timerIncreasing = true
-
-    @Volatile private var currentTimerSpeed = 20f
-    @Volatile private var tickAccumulator = 0f
-
     private var tickJob: Job? = null
-    private var timerJob: Job? = null
 
     override fun onEnable() {
         super.onEnable()
@@ -69,21 +53,14 @@ class PcAura : BaseModule(
         lastRotSendMs = 0L
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
-        currentTimer = timerMin.value
-        timerIncreasing = true
-        currentTimerSpeed = 20f
-        tickAccumulator = 0f
 
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
-        timerJob = scope.launch { timerLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
-        timerJob?.cancel()
         PacketEventBus.unregister(this)
-        resetTimer()
         super.onDisable()
     }
 
@@ -99,97 +76,6 @@ class PcAura : BaseModule(
                 applySilentRotation(pkt, target)
             }
         }
-
-        applyPacketTimer(event, pkt)
-    }
-
-    // ── Gerçek Timer efekti ────────────────────────────────────────────────────
-    // Bedrock'ta OxClient bir relay/MITM olduğu için gerçek istemcinin tick hızını
-    // hook'layamıyoruz — bunun yerine PlayerAuthInputPacket'in server'a ulaşma
-    // sıklığını kendimiz kontrol ediyoruz:
-    //  - speed == 20  -> vanilla, dokunma
-    //  - speed  < 20  -> paketi PacketEventBus üzerinden iptal edip (event.isCancelled)
-    //                    hedef hıza uygun ekstra bir gecikmeyle biz kendimiz server'a
-    //                    gönderiyoruz (yavaşlatma)
-    //  - speed  > 20  -> gerçek paket normal akışında geçiyor, aradaki farkı kapatmak
-    //                    için aynı input'un senkron ekstra kopyalarını enjekte ediyoruz
-    //                    (hızlandırma)
-    private fun applyPacketTimer(event: PacketEvent, pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) {
-        val session = PacketEventBus.currentSession ?: return
-        val speed = currentTimerSpeed
-        if (speed == 20f) return
-
-        if (speed < 20f) {
-            event.cancel()
-            val extraDelayMs = (((20f - speed) / speed) * 50f).toLong().coerceIn(0L, 500L)
-            scope.launch {
-                delay(extraDelayMs)
-                try { session.serverBound(pkt) } catch (_: Exception) {}
-            }
-        } else {
-            tickAccumulator += (speed / 20f) - 1f
-            while (tickAccumulator >= 1f) {
-                tickAccumulator -= 1f
-                scope.launch {
-                    delay(4L)
-                    try { session.serverBound(pkt) } catch (_: Exception) {}
-                }
-            }
-        }
-    }
-
-    private suspend fun timerLoop() {
-        while (currentCoroutineContext().isActive) {
-            if (isEnabled) {
-                applyTimer()
-            } else {
-                resetTimer()
-            }
-            delay(16L)
-        }
-    }
-
-    private fun applyTimer() {
-        when (timerMode.value) {
-            TimerMode.STATIC -> {
-                setTimer(timerSpeed.value)
-            }
-            TimerMode.STUTTER -> {
-                val base = timerSpeed.value
-                val stutter = if (stutterFreq.value > 0 && Math.random() < stutterFreq.value / 20f) {
-                    (base - stutterValue.value).coerceIn(timerMin.value, timerMax.value)
-                } else {
-                    base
-                }
-                setTimer(stutter)
-            }
-            TimerMode.RAMP -> {
-                val step = timerStep.value
-                if (timerIncreasing) {
-                    currentTimer += step
-                    if (currentTimer >= timerMax.value) {
-                        currentTimer = timerMax.value
-                        timerIncreasing = false
-                    }
-                } else {
-                    currentTimer -= step
-                    if (currentTimer <= timerMin.value) {
-                        currentTimer = timerMin.value
-                        timerIncreasing = true
-                    }
-                }
-                setTimer(currentTimer.coerceIn(timerMin.value, timerMax.value))
-            }
-        }
-    }
-
-    private fun setTimer(speed: Float) {
-        currentTimerSpeed = speed.coerceIn(1f, 100f)
-    }
-
-    private fun resetTimer() {
-        currentTimerSpeed = 20f
-        tickAccumulator = 0f
     }
 
     private suspend fun tickLoop() {

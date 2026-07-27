@@ -22,44 +22,35 @@ class TPAuraPC : BaseModule(
     description = "PC kalitesinde teleport + saldırı modülü"
 ), PacketEventBus.PacketListener {
 
-    private val range          = float("Reach",           5f,   1f,  16f)
+    private val range          = float("Reach",           16f,  1f,  16f)
     private val fov            = int  ("FOV",             360,  30,  360)
     private val ignoreFriends  = bool ("Ignore Friends",  true)
 
-    private val minCPS         = int  ("Min CPS",         8,    1,   25)
-    private val maxCPS         = int  ("Max CPS",         14,   1,   25)
+    private val minCPS         = int  ("Min CPS",         20,   1,   25)
+    private val maxCPS         = int  ("Max CPS",         25,   1,   25)
 
     private val tpDelay        = int  ("TP Delay (tick)", 0,    0,   20)
     private val attackDelay    = int  ("Attack Delay",    0,    0,   20)
-    private val tpDistance     = float("TP Distance",     1.5f, 0.1f, 8f)
-    private val tpMoveSpeed    = float("TP Move Speed",   1.5f, 0.1f, 8f)
+    private val tpDistance     = float("TP Distance",     0.5f, 0.1f, 8f)
+    private val tpMoveSpeed    = float("TP Move Speed",   8f,   0.1f, 8f)
     private val tpYOffset      = float("Y Offset",        0f,   -3f,  3f)
 
     enum class TPMode { CORNERS, CIRCLE, RANDOM, BEHIND }
-    private val tpMode         = enum ("TP Mode",         TPMode.CIRCLE)
+    private val tpMode         = enum ("TP Mode",         TPMode.BEHIND)
 
     private val upAndDown      = bool ("Up & Down",       false)
     private val upDownSpeed    = float("UpDown Speed",    0.15f, 0.01f, 2f)
     private val upDownRange    = float("UpDown Range",    1.2f,  0.1f,  4f)
 
-    private val throughWalls   = bool ("Through Walls",   false)
+    private val throughWalls   = bool ("Through Walls",   true)
     private val mobAura        = bool ("Mob Aura",        false)
 
     enum class PriorityMode { DISTANCE, HEALTH, LOWEST_HEALTH, DIRECTION }
-    private val priorityMode   = enum ("Priority",        PriorityMode.DISTANCE)
+    private val priorityMode   = enum ("Priority",        PriorityMode.LOWEST_HEALTH)
     private val reversePri     = bool ("Reverse Priority", false)
 
     enum class RotationMode { NONE, SILENT, CLIENT }
     private val rotationMode   = enum ("Rotation",        RotationMode.SILENT)
-
-    enum class TimerMode { STATIC, STUTTER, RAMP }
-    private val timerMode      = enum ("Timer Mode",      TimerMode.STATIC)
-    private val timerSpeed     = float("Timer Speed",     30f,   20f,  60f)
-    private val timerMin       = float("Timer Min",       24f,   20f,  50f)
-    private val timerMax       = float("Timer Max",       40f,   20f,  60f)
-    private val timerStep      = float("Timer Step",      1f,    0.1f, 5f)
-    private val stutterFreq    = float("Stutter Freq",    0.5f,  0f,   5f)
-    private val stutterValue   = float("Stutter Value",   10f,   0f,   20f)
     private val shortcut         = bool("Shortcut",            false)
 
     @Volatile private var lastAttackMs = 0L
@@ -74,14 +65,7 @@ class TPAuraPC : BaseModule(
     private var circleIndex = 0
     private var cornerIndex = 0
 
-    @Volatile private var currentTimer = 20f
-    @Volatile private var timerIncreasing = true
-
-    @Volatile private var currentTimerSpeed = 20f
-    @Volatile private var tickAccumulator = 0f
-
     private var tickJob: Job? = null
-    private var timerJob: Job? = null
 
     override fun onEnable() {
         super.onEnable()
@@ -91,71 +75,18 @@ class TPAuraPC : BaseModule(
         upDownGoingUp = true
         circleIndex = 0
         cornerIndex = 0
-        currentTimer = timerMin.value
-        timerIncreasing = true
-        currentTimerSpeed = 20f
-        tickAccumulator = 0f
         lastAttackMs = 0L
         lastTeleportMs = 0L
         lastRotSendMs = 0L
 
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
-        timerJob = scope.launch { timerLoop() }
     }
 
     override fun onDisable() {
         tickJob?.cancel()
-        timerJob?.cancel()
         PacketEventBus.unregister(this)
-        resetTimer()
         super.onDisable()
-    }
-
-    private suspend fun timerLoop() {
-        while (currentCoroutineContext().isActive) {
-            if (isEnabled) applyTimer() else resetTimer()
-            delay(16L)
-        }
-    }
-
-    private fun applyTimer() {
-        when (timerMode.value) {
-            TimerMode.STATIC -> setTimer(timerSpeed.value)
-            TimerMode.STUTTER -> {
-                val base = timerSpeed.value
-                val stutter = if (stutterFreq.value > 0 && Random.nextDouble() < stutterFreq.value / 20f) {
-                    (base - stutterValue.value).coerceIn(timerMin.value, timerMax.value)
-                } else base
-                setTimer(stutter)
-            }
-            TimerMode.RAMP -> {
-                val step = timerStep.value
-                if (timerIncreasing) {
-                    currentTimer += step
-                    if (currentTimer >= timerMax.value) {
-                        currentTimer = timerMax.value
-                        timerIncreasing = false
-                    }
-                } else {
-                    currentTimer -= step
-                    if (currentTimer <= timerMin.value) {
-                        currentTimer = timerMin.value
-                        timerIncreasing = true
-                    }
-                }
-                setTimer(currentTimer.coerceIn(timerMin.value, timerMax.value))
-            }
-        }
-    }
-
-    private fun setTimer(speed: Float) {
-        currentTimerSpeed = speed.coerceIn(1f, 100f)
-    }
-
-    private fun resetTimer() {
-        currentTimerSpeed = 20f
-        tickAccumulator = 0f
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -168,39 +99,6 @@ class TPAuraPC : BaseModule(
             val target = selectTargets().firstOrNull()
             if (target != null) {
                 applySilentRotation(pkt, target)
-            }
-        }
-
-        applyPacketTimer(event, pkt)
-    }
-
-    // ── Gerçek Timer efekti ────────────────────────────────────────────────────
-    // Relay/MITM olduğumuz için gerçek istemcinin tick hızını hook'layamıyoruz;
-    // bunun yerine PlayerAuthInputPacket'in server'a ulaşma sıklığını kendimiz
-    // kontrol ediyoruz: speed<20 paketi PacketEventBus üzerinden iptal edip
-    // (event.isCancelled) hedef hıza uygun gecikmeyle biz gönderiyoruz (yavaşlatma),
-    // speed>20 gerçek paket normal geçiyor ve aradaki farkı kapatmak için senkron
-    // ekstra kopyalar enjekte ediyoruz (hızlandırma).
-    private fun applyPacketTimer(event: PacketEvent, pkt: PlayerAuthInputPacket) {
-        val session = PacketEventBus.currentSession ?: return
-        val speed = currentTimerSpeed
-        if (speed == 20f) return
-
-        if (speed < 20f) {
-            event.cancel()
-            val extraDelayMs = (((20f - speed) / speed) * 50f).toLong().coerceIn(0L, 500L)
-            scope.launch {
-                delay(extraDelayMs)
-                try { session.serverBound(pkt) } catch (_: Exception) {}
-            }
-        } else {
-            tickAccumulator += (speed / 20f) - 1f
-            while (tickAccumulator >= 1f) {
-                tickAccumulator -= 1f
-                scope.launch {
-                    delay(4L)
-                    try { session.serverBound(pkt) } catch (_: Exception) {}
-                }
             }
         }
     }
