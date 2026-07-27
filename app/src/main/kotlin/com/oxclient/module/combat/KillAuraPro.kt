@@ -9,16 +9,19 @@ import com.oxclient.module.social.isFriendEntity
 import com.oxclient.utils.MathUtil
 import com.oxclient.utils.PacketUtil
 import com.oxclient.utils.CritLock
+import com.oxclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import kotlinx.coroutines.*
 
 /**
  * KillAuraPro — orijinal KillAura'nın "profesyonel/agresif" varyantı.
  *
- * KillAura'dan farkı:
- *  - Rotasyon HİÇ değiştirilmez (tam silent): saldırı, oyuncunun ekranda hiç
- *    dönmeden, clickPosition ile hedefe kilitlenir. Rakip tarafında görünür
- *    "aim snap" yok.
+ * KillAuraPro'dan farkı:
+ *  - Head Lock açıkken (varsayılan açık) kafa her zaman en düşük canlı rakibe
+ *    kilitli kalır — KillAura'daki Head Lock ile birebir aynı mekanizma, sürekli
+ *    (sadece saldırı anında değil) PlayerAuthInputPacket üzerinden uygulanır.
+ *    Tamamen görünmez kalması gerekiyorsa "Head Lock" ayarından kapatılabilir.
  *  - Menzildeki TÜM hedeflere aynı tick'te saldırır (burst multi), tek tek
  *    seçim/switch mantığı yok — maksimum DPS.
  *  - CPS'e küçük rastgele jitter eklenir (12-18 arası dalgalanır) — sabit
@@ -40,14 +43,20 @@ class KillAuraPro : BaseModule(
     private val predictDelay  = float("Predict Delay", 0.05f, 0.05f, 0.5f)
     private val ignoreFriends = bool ("Ignore Friends", true)
     private val alwaysCrit    = bool ("Always Crit",   true)
+    private val headLock       = bool ("Head Lock",        true)
+    private val headLockSmooth = float("Head Lock Smooth", 1f, 0.01f, 1f)
     private val shortcut      = bool ("Shortcut",      false)
 
     @Volatile private var lastAttackMs = 0L
+    @Volatile private var headLockYaw   = 0f
+    @Volatile private var headLockPitch = 0f
     private var tickJob: Job? = null
 
     override fun onEnable() {
         super.onEnable()
         lastAttackMs = 0L
+        headLockYaw = EntityTracker.selfYaw
+        headLockPitch = EntityTracker.selfPitch
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
     }
@@ -58,10 +67,55 @@ class KillAuraPro : BaseModule(
         super.onDisable()
     }
 
-    // Bu modülde rotasyonla ilgilenmediğimiz için PlayerAuthInputPacket'e
-    // dokunmuyoruz — sadece PacketListener arayüzünü BaseModule ile aynı
-    // pattern'de tutmak için var, gerçek iş tickLoop'ta.
-    override fun onPacket(event: PacketEvent) {}
+    // Head Lock: her PlayerAuthInputPacket'te (saldırı anıyla sınırlı değil, sürekli)
+    // rakibe dönük tutar. KillAura'daki aynı mantık — gerçek giden paketin rotasyonunu
+    // doğrudan değiştiriyoruz ki hemen ardından gelen gerçek input onu ezmesin.
+    override fun onPacket(event: PacketEvent) {
+        if (!isEnabled || !headLock.value) return
+        if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+        val pkt = event.packet as? PlayerAuthInputPacket ?: return
+        applyHeadLock(pkt)
+    }
+
+    private fun applyHeadLock(pkt: PlayerAuthInputPacket) {
+        val target = findHeadLockTarget() ?: return
+
+        val targetRot = RotationUtil.toEntity(target)
+        val smoothFactor = headLockSmooth.value.coerceIn(0.01f, 1f)
+
+        val newYaw = smoothYaw(headLockYaw, targetRot.yaw, smoothFactor)
+        val newPitch = smoothPitch(headLockPitch, targetRot.pitch, smoothFactor)
+
+        headLockYaw = newYaw
+        headLockPitch = newPitch
+
+        pkt.rotation = Vector3f.from(newPitch, newYaw, newYaw)
+        EntityTracker.selfYaw = newYaw
+        EntityTracker.selfPitch = newPitch
+    }
+
+    private fun smoothYaw(current: Float, target: Float, factor: Float): Float {
+        var diff = target - current
+        if (diff > 180f) diff -= 360f
+        if (diff < -180f) diff += 360f
+        val result = current + (diff * factor)
+        var normalized = result % 360f
+        if (normalized > 180f) normalized -= 360f
+        if (normalized < -180f) normalized += 360f
+        return normalized
+    }
+
+    private fun smoothPitch(current: Float, target: Float, factor: Float): Float {
+        val diff = target - current
+        return (current + (diff * factor)).coerceIn(-90f, 90f)
+    }
+
+    private fun findHeadLockTarget(): EntityTracker.TrackedEntity? {
+        return EntityTracker.getEntitiesInRange(range.value * 1.5f)
+            .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
+            .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
+            .minByOrNull { it.health }
+    }
 
     private suspend fun tickLoop() {
         while (currentCoroutineContext().isActive) {

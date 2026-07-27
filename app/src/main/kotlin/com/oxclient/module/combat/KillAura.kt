@@ -37,7 +37,7 @@ class KillAura : BaseModule(
     private val reversePriority = bool ("Reverse Priority", false)
     private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
-    private val headLockSmooth  = float("Head Lock Smooth", 0.65f, 0.01f, 1f)
+    private val headLockSmooth  = float("Head Lock Smooth", 1f, 0.01f, 1f)
     private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)
     private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
@@ -46,7 +46,6 @@ class KillAura : BaseModule(
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L
     @Volatile private var lastAttackMs       = 0L
-    @Volatile private var lastRotationSendMs = 0L
     @Volatile private var consecutiveMisses  = 0
     @Volatile private var attackCount        = 0L
     @Volatile private var headLockYaw        = 0f
@@ -127,10 +126,6 @@ class KillAura : BaseModule(
 
     private fun applyHeadLock(pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) {
         val target = findHeadLockTarget() ?: return
-
-        val now = System.currentTimeMillis()
-        if (now - lastRotationSendMs < 50L) return
-        lastRotationSendMs = now
 
         val targetRot = RotationUtil.toEntity(target)
         val smoothFactor = headLockSmooth.value.coerceIn(0.01f, 1f)

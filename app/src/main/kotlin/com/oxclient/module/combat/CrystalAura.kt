@@ -234,7 +234,6 @@ class CrystalAura : BaseModule(
         val (px, py, pz) = predictedPos(target)
         val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()
 
-        var placedAny = false
         var placedThisTick = 0
         val burst = isBurstTarget(target)
 
@@ -258,18 +257,29 @@ class CrystalAura : BaseModule(
             }
         }
 
+        if (candidates.isEmpty()) return
+
+        // Kristal slotunu SADECE BİR KEZ hazırla. Önceden her yerleştirmede ayrı ayrı
+        // switch+revert yapılıyordu — art arda hızlı hotbar değişimi sunucu tarafında
+        // çoğu yerleştirmeyi geçersiz kılıyor, "aynı anda az kristal" bundan kaynaklanıyordu.
+        val prepared = prepareItemForUse(session, "minecraft:end_crystal") ?: return
+
         for (c in candidates.sortedBy { it.distSq }) {
             if (placedThisTick >= MAX_PLACES_PER_TICK) break
             if (!takePlaceToken(burst)) break
-            if (tryPlaceCrystalAt(session, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) {
+            if (tryPlaceCrystalAt(session, prepared, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) {
                 lastPlaceMsMap[target.runtimeId] = now
-                placedAny = true
                 placedThisTick++
             }
         }
+
+        prepared.revertTo?.let {
+            InventoryUtil.sendHotbarSelect(session, it)
+            EntityTracker.selfHotbarSlot = it
+        }
     }
 
-    private fun tryPlaceCrystalAt(session: OxRelaySession, pos: PlacePos): Boolean {
+    private fun tryPlaceCrystalAt(session: OxRelaySession, prepared: PreparedItem, pos: PlacePos): Boolean {
         val now = System.currentTimeMillis()
         val key = posKey(pos.x, pos.y, pos.z)
 
@@ -284,7 +294,7 @@ class CrystalAura : BaseModule(
         val distSelf = MathUtil.dist3(centerX, centerY, centerZ, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ)
         if (distSelf > placeRange.value) return false
 
-        val ok = sendPlacementUse(session, "minecraft:end_crystal", Vector3i.from(pos.x, pos.y, pos.z), pos.blockId)
+        val ok = sendPlacementUseRaw(session, prepared, Vector3i.from(pos.x, pos.y, pos.z), pos.blockId)
         if (ok) pendingPositions[key] = now
         return ok
     }
@@ -505,14 +515,21 @@ class CrystalAura : BaseModule(
     // DÜZELTİLMİŞ: sendPlacementUse - doğru blockDefinition ile gönder
     private fun sendPlacementUse(session: OxRelaySession, identifier: String, blockPos: Vector3i, blockId: String): Boolean {
         val prepared = prepareItemForUse(session, identifier) ?: return false
-        
-        // Block definition'ı al
+        val ok = sendPlacementUseRaw(session, prepared, blockPos, blockId)
+        prepared.revertTo?.let {
+            InventoryUtil.sendHotbarSelect(session, it)
+            EntityTracker.selfHotbarSlot = it
+        }
+        return ok
+    }
+
+    // Slot değişimi/revert yapmadan, önceden hazırlanmış (prepareItemForUse) bir item ile
+    // doğrudan yerleştirme paketini gönderir. Aynı hedefe art arda çok sayıda kristal
+    // koyarken tek seferlik prepare + tek seferlik revert için kullanılır.
+    private fun sendPlacementUseRaw(session: OxRelaySession, prepared: PreparedItem, blockPos: Vector3i, blockId: String): Boolean {
         val blockDef = getBlockDefinition(session, blockId) ?: return false
 
-        // Kristal yerleştirme için doğru click pozisyonu
         val clickPos = Vector3f.from(0.5f, 1.0f, 0.5f)
-        
-        // Player pozisyonu (ayak hizası)
         val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
 
         return try {
@@ -530,11 +547,6 @@ class CrystalAura : BaseModule(
                 clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
                 clientCooldownState = 0
             })
-            // Revert işlemi
-            prepared.revertTo?.let { 
-                InventoryUtil.sendHotbarSelect(session, it)
-                EntityTracker.selfHotbarSlot = it
-            }
             true
         } catch (e: Exception) {
             false
