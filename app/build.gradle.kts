@@ -35,7 +35,7 @@ android {
         release {
             // TEŞHİS: R8/ProGuard suçlu mu diye geçici olarak kapatıldı.
             // Çökme geçerse suçlu R8'dir -> keep kuralı ekleyip tekrar true yapacağız.
-            isMinifyEnabled   = true
+            isMinifyEnabled   = false
             isShrinkResources = false
             signingConfig     = signingConfigs.getByName("release")
             proguardFiles(
