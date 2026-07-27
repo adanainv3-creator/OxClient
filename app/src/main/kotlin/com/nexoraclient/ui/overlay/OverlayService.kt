@@ -385,7 +385,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     private fun buildNotif() = NotificationCompat.Builder(this, CHANNEL_ID)
-        .setSmallIcon(R.mipmap.ic_ox_logo)
+        .setSmallIcon(R.mipmap.ic_nexora_logo)
         .setContentTitle("Nexora Client Overlay")
         .setContentText("HUD aktif")
         .setOngoing(true)

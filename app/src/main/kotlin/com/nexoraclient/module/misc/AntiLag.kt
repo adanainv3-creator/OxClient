@@ -4,9 +4,9 @@ import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.events.PacketEvent
 import com.nexoraclient.module.*
 import com.nexoraclient.utils.MathUtil
+import org.cloudburstmc.protocol.bedrock.data.LevelEvent
 import org.cloudburstmc.protocol.bedrock.data.LevelEventType
 import org.cloudburstmc.protocol.bedrock.data.SoundEvent
-import org.cloudburstmc.protocol.bedrock.packet.AddParticleEffectPacket
 import org.cloudburstmc.protocol.bedrock.packet.AnimatePacket
 import org.cloudburstmc.protocol.bedrock.packet.ExplodePacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelEventPacket
@@ -29,19 +29,12 @@ class AntiLag : BaseModule(
     private val cullRange        = float("Cull Range",       48f, 8f, 256f)
 
     private val blockedLevelEvents = setOf(
-        LevelEventType.PARTICLE_DESTROY_BLOCK,
-        LevelEventType.PARTICLE_CRIT,
-        LevelEventType.PARTICLE_EXPLOSION,
-        LevelEventType.PARTICLE_EXPLOSION_HUGE,
-        LevelEventType.PARTICLE_BLOCK_FORCE_FIELD,
-        LevelEventType.PARTICLE_PUNCH_BLOCK,
-        LevelEventType.PARTICLE_EAT
+        LevelEvent.PARTICLE_DESTROY_BLOCK,
+        LevelEvent.PARTICLE_CRIT,
+        LevelEvent.PARTICLE_EXPLOSION
     )
 
-    private val weatherLevelEvents = setOf(
-        LevelEventType.PARTICLE_RAIN_SPLASH,
-        LevelEventType.PARTICLE_SNOWBALL_POOF
-    )
+    private val weatherLevelEvents = emptySet<LevelEventType>()
 
     private val ambientSoundEvents = setOf(
         SoundEvent.AMBIENT,
@@ -60,7 +53,6 @@ class AntiLag : BaseModule(
         when (val packet = event.packet) {
             is LevelEventPacket        -> handleLevelEvent(event, packet)
             is LevelSoundEventPacket   -> handleLevelSound(event, packet)
-            is AddParticleEffectPacket -> if (customParticles.value) event.cancel()
             is SpawnParticleEffectPacket -> if (customParticles.value) event.cancel()
             is ExplodePacket            -> if (explosionFx.value) event.cancel()
             is AnimatePacket            -> handleAnimate(event, packet)
