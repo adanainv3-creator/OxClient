@@ -1,14 +1,14 @@
-package com.oxclient.module.movement
+package com.nexoraclient.module.movement
 
-import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.OxRelaySession
-import com.oxclient.events.PacketEventBus
-import com.oxclient.module.BaseModule
-import com.oxclient.module.ModuleCategory
-import com.oxclient.utils.InventoryUtil
-import com.oxclient.utils.PacketUtil
-import com.oxclient.utils.RotationUtil
-import com.oxclient.utils.WorldBlockTracker
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.NexoraRelaySession
+import com.nexoraclient.events.PacketEventBus
+import com.nexoraclient.module.BaseModule
+import com.nexoraclient.module.ModuleCategory
+import com.nexoraclient.utils.InventoryUtil
+import com.nexoraclient.utils.PacketUtil
+import com.nexoraclient.utils.RotationUtil
+import com.nexoraclient.utils.WorldBlockTracker
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.math.vector.Vector3i
@@ -72,7 +72,7 @@ class AutoScaffold : BaseModule(
         }
     }
 
-    private fun tryPlace(session: OxRelaySession) {
+    private fun tryPlace(session: NexoraRelaySession) {
         val now = System.currentTimeMillis()
         if (now - lastPlaceMs < placeDelay.value) return
 

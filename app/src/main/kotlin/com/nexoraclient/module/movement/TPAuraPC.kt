@@ -1,14 +1,14 @@
-package com.oxclient.module.combat
+package com.nexoraclient.module.movement
 
-import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.OxRelaySession
-import com.oxclient.events.PacketEvent
-import com.oxclient.events.PacketEventBus
-import com.oxclient.module.*
-import com.oxclient.module.social.isFriendEntity
-import com.oxclient.utils.MathUtil
-import com.oxclient.utils.PacketUtil
-import com.oxclient.utils.RotationUtil
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.NexoraRelaySession
+import com.nexoraclient.events.PacketEvent
+import com.nexoraclient.events.PacketEventBus
+import com.nexoraclient.module.*
+import com.nexoraclient.module.social.isFriendEntity
+import com.nexoraclient.utils.MathUtil
+import com.nexoraclient.utils.PacketUtil
+import com.nexoraclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
@@ -197,7 +197,7 @@ class TPAuraPC : BaseModule(
         return if (reversePri.value) -score else score
     }
 
-    private fun teleportToTarget(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
+    private fun teleportToTarget(session: NexoraRelaySession, target: EntityTracker.TrackedEntity) {
         val selfPos   = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
         val targetPos = Vector3f.from(target.x, target.y + tpYOffset.value, target.z)
 
@@ -288,7 +288,7 @@ class TPAuraPC : BaseModule(
 
     // Eskiden 1 swing + 3 attack paketi gönderiliyordu (repeat(2) fazladandı).
     // Sunucu aynı tick'teki çift saldırıyı zaten ignore eder; sadece 1 attack yeterli.
-    private fun attack(session: OxRelaySession, target: EntityTracker.TrackedEntity) {
+    private fun attack(session: NexoraRelaySession, target: EntityTracker.TrackedEntity) {
         val clickPos   = Vector3f.from(target.x, target.y + 1.62f, target.z)
         val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         PacketUtil.sendSwing(session)

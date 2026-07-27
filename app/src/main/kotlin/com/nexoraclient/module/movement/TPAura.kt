@@ -1,12 +1,12 @@
-package com.oxclient.module.movement
+package com.nexoraclient.module.movement
 
-import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.events.PacketEvent
-import com.oxclient.events.PacketEventBus
-import com.oxclient.module.*
-import com.oxclient.module.social.isFriendEntity
-import com.oxclient.utils.MathUtil
-import com.oxclient.utils.RotationUtil
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.events.PacketEvent
+import com.nexoraclient.events.PacketEventBus
+import com.nexoraclient.module.*
+import com.nexoraclient.module.social.isFriendEntity
+import com.nexoraclient.utils.MathUtil
+import com.nexoraclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket

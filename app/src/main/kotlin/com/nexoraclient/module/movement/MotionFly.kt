@@ -1,10 +1,10 @@
 
-package com.oxclient.module.movement
+package com.nexoraclient.module.movement
 
-import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.OxRelaySession
-import com.oxclient.events.PacketEvent
-import com.oxclient.module.*
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.NexoraRelaySession
+import com.nexoraclient.events.PacketEvent
+import com.nexoraclient.module.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
@@ -31,7 +31,7 @@ class MotionFly : BaseModule(
     @Volatile private var lastMotionTime = 0L
     @Volatile private var jitterState    = false
     @Volatile private var canFly         = false
-    @Volatile private var lastSession    : OxRelaySession? = null
+    @Volatile private var lastSession    : NexoraRelaySession? = null
 
     private val flyPacket = UpdateAbilitiesPacket().apply {
         playerPermission  = PlayerPermission.OPERATOR
@@ -140,7 +140,7 @@ class MotionFly : BaseModule(
         lastMotionTime = System.currentTimeMillis()
     }
 
-    private fun applyFlyAbilities(enabled: Boolean, session: OxRelaySession) {
+    private fun applyFlyAbilities(enabled: Boolean, session: NexoraRelaySession) {
         if (canFly == enabled) return
         val id = EntityTracker.selfUniqueId
         flyPacket.uniqueEntityId = id

@@ -1,9 +1,9 @@
-package com.oxclient.module.movement
+package com.nexoraclient.module.movement
 
-import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.OxRelaySession
-import com.oxclient.events.PacketEvent
-import com.oxclient.module.*
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.NexoraRelaySession
+import com.nexoraclient.events.PacketEvent
+import com.nexoraclient.module.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.PlayerAuthInputData
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket

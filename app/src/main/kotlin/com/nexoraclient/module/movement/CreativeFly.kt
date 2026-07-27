@@ -1,9 +1,9 @@
-package com.oxclient.module.movement
+package com.nexoraclient.module.movement
 
-import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.OxRelaySession
-import com.oxclient.events.PacketEvent
-import com.oxclient.module.*
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.NexoraRelaySession
+import com.nexoraclient.events.PacketEvent
+import com.nexoraclient.module.*
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
 import org.cloudburstmc.protocol.bedrock.data.PlayerPermission
@@ -20,7 +20,7 @@ class CreativeFly : BaseModule(
     private val walkSpeed = float("Walk Speed", 0.1f, 0.02f, 0.5f)
     private val keepAlive = bool ("Keep Alive", true) // sunucu abilities'i sıfırlarsa hemen geri uygula
 
-    @Volatile private var lastSession: OxRelaySession? = null
+    @Volatile private var lastSession: NexoraRelaySession? = null
     @Volatile private var abilitiesSent = false
 
     override fun onEnable() {
@@ -56,7 +56,7 @@ class CreativeFly : BaseModule(
         }
     }
 
-    private fun sendAbilities(session: OxRelaySession, enabled: Boolean) {
+    private fun sendAbilities(session: NexoraRelaySession, enabled: Boolean) {
         val fs = if (enabled) flySpeed.value else 0.05f
         val ws = walkSpeed.value
 

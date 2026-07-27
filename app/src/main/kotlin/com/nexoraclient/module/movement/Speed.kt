@@ -1,9 +1,9 @@
-package com.oxclient.module.movement
+package com.nexoraclient.module.movement
 
-import com.oxclient.core.proxy.EntityTracker
-import com.oxclient.core.relay.OxRelaySession
-import com.oxclient.events.PacketEvent
-import com.oxclient.module.*
+import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.NexoraRelaySession
+import com.nexoraclient.events.PacketEvent
+import com.nexoraclient.module.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
@@ -26,7 +26,7 @@ class Speed : BaseModule(
     private val multiplier   = float("Multiplier", 1.5f, 1.0f, 5.0f) // Motion modu için
     private val walkSpeedVal = float("Walk Speed",  0.2f, 0.1f, 1.0f) // Ability modu için
 
-    @Volatile private var lastSession: OxRelaySession? = null
+    @Volatile private var lastSession: NexoraRelaySession? = null
     @Volatile private var abilitiesSent = false
 
     override fun onEnable() {
@@ -56,7 +56,7 @@ class Speed : BaseModule(
         }
     }
 
-    private fun applyAbilitySpeed(session: OxRelaySession) {
+    private fun applyAbilitySpeed(session: NexoraRelaySession) {
         if (abilitiesSent) return
         val packet = UpdateAbilitiesPacket().apply {
             playerPermission  = PlayerPermission.OPERATOR
@@ -84,7 +84,7 @@ class Speed : BaseModule(
         abilitiesSent = true
     }
 
-    private fun resetAbilities(session: OxRelaySession) {
+    private fun resetAbilities(session: NexoraRelaySession) {
         val packet = UpdateAbilitiesPacket().apply {
             playerPermission  = PlayerPermission.VISITOR
             commandPermission = CommandPermission.ANY
@@ -110,7 +110,7 @@ class Speed : BaseModule(
         session.clientBound(packet)
     }
 
-    private fun applyMotionSpeed(pkt: PlayerAuthInputPacket, session: OxRelaySession) {
+    private fun applyMotionSpeed(pkt: PlayerAuthInputPacket, session: NexoraRelaySession) {
         val inputX = pkt.motion.x
         val inputZ = pkt.motion.y
         if (inputX == 0f && inputZ == 0f) return
