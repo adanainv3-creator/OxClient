@@ -29,8 +29,8 @@ class ChatSpammer : BaseModule(
 ) {
     companion object {
         private const val VERSION      = "v1.2"
-        private const val TAG_LINE     = "OxClient $VERSION"
-        private const val PVP_TAIL     = "by OxClient | Best Mobile Client"
+        private const val TAG_LINE     = "Nexora Client $VERSION"
+        private const val PVP_TAIL     = "by Nexora Client | Best Mobile Client"
         private const val QUEUE_DELAY_MS = 600L
         private const val MAX_QUEUE_SIZE = 30
         private const val LOGOUT_RANGE = 256f
@@ -42,10 +42,10 @@ class ChatSpammer : BaseModule(
 
         private val POP_MESSAGES = listOf(
             "> @here @{name} Popped {count} Totem $PVP_TAIL | {junk}",
-            "> @here @{name} is actually totemfag | {count} Popped | {junk} | OxClient",
+            "> @here @{name} is actually totemfag | {count} Popped | {junk} | Nexora Client",
             "> @here @{name} popped {count}x already lmao | {junk} | $TAG_LINE",
             "> @here bro @{name} needs {count} totems just to survive | {junk}",
-            "> @here @{name} totem #{count} down, ez clap | {junk} | OxClient"
+            "> @here @{name} totem #{count} down, ez clap | {junk} | Nexora Client"
         )
     }
 
@@ -294,7 +294,7 @@ class ChatSpammer : BaseModule(
         val hitAt = recentHitsByMe.remove(runtimeId) ?: return
         if (now - hitAt > SELF_HIT_WINDOW_MS) return
 
-        enqueue("> @here EZ @$name killed by OxClient | ${randomJunk()}")
+        enqueue("> @here EZ @$name killed by Nexora Client | ${randomJunk()}")
     }
 
     private fun handleLogout(uniqueId: Long, name: String) {

@@ -1,3 +1,4 @@
+
 package com.nexoraclient.module.misc
 
 import com.nexoraclient.core.proxy.EntityTracker
@@ -33,20 +34,20 @@ class ChatAdvertiser : BaseModule(
     private val shortcut          = bool("Shortcut", false)
 
     private val pvpMessages = listOf(
-        "> @here tpa pvp 1v1 little kiddos | %RANDOM% | OxClient",
-        "> @here 1v1 tpa pvp all ez | %RANDOM% | OxClient",
-        "> @here tpa to pvp nns | %RANDOM% | OxClient",
-        "> @here tpa for pvp all EZZ | %RANDOM% | OxClient",
-        "> @here tpa 1v1 im bored fr | %RANDOM% | OxClient",
-        "> @here anyone tpa pvp cant be that scared | %RANDOM% | OxClient",
-        "> @here tpa pvp free win here | %RANDOM% | OxClient",
-        "> @here tpa 1v1 no crystal easy | %RANDOM% | OxClient",
-        "> @here tpa pvp lets go who wants smoke | %RANDOM% | OxClient",
-        "> @here tpa all cracked pvpers welcome | %RANDOM% | OxClient",
-        "> @here tpa pvp best client wins obviously | %RANDOM% | OxClient",
-        "> @here tpa 1v1 quick fight nobody scared right | %RANDOM% | OxClient",
-        "> @here tpa pvp bring your best totem | %RANDOM% | OxClient",
-        "> @here tpa pvp all skill issue if you decline | %RANDOM% | OxClient"
+        "> @here tpa pvp 1v1 little kiddos | %RANDOM% | Nexora Client",
+        "> @here 1v1 tpa pvp all ez | %RANDOM% | Nexora Client",
+        "> @here tpa to pvp nns | %RANDOM% | Nexora Client",
+        "> @here tpa for pvp all EZZ | %RANDOM% | Nexora Client",
+        "> @here tpa 1v1 im bored fr | %RANDOM% | Nexora Client",
+        "> @here anyone tpa pvp cant be that scared | %RANDOM% | Nexora Client",
+        "> @here tpa pvp free win here | %RANDOM% | Nexora Client",
+        "> @here tpa 1v1 no crystal easy | %RANDOM% | Nexora Client",
+        "> @here tpa pvp lets go who wants smoke | %RANDOM% | Nexora Client",
+        "> @here tpa all cracked pvpers welcome | %RANDOM% | Nexora Client",
+        "> @here tpa pvp best client wins obviously | %RANDOM% | Nexora Client",
+        "> @here tpa 1v1 quick fight nobody scared right | %RANDOM% | Nexora Client",
+        "> @here tpa pvp bring your best totem | %RANDOM% | Nexora Client",
+        "> @here tpa pvp all skill issue if you decline | %RANDOM% | Nexora Client"
     )
 
     private val junkChars = "abcdefghjklmnopqrstuvwxyz0123456789"
@@ -149,9 +150,9 @@ class ChatAdvertiser : BaseModule(
 
         val session = activeSession ?: return
         val msg = if (killStreak % 5 == 0) {
-            "> @here $killStreak KILLSTREAK!! @$name just died | OxClient | ${randomJunk()}"
+            "> @here $killStreak KILLSTREAK!! @$name just died | Nexora Client | ${randomJunk()}"
         } else {
-            "> @here EZ @$name killed ($killStreak streak) | OxClient | ${randomJunk()}"
+            "> @here EZ @$name killed ($killStreak streak) | Nexora Client | ${randomJunk()}"
         }
         try { session.sendToServer(buildTextPacket(msg)) } catch (e: Exception) {}
     }
@@ -161,7 +162,7 @@ class ChatAdvertiser : BaseModule(
         val broken = killStreak
         killStreak = 0
         val session = activeSession ?: return
-        val msg = "> @here streak of $broken ended | still goated | OxClient | ${randomJunk()}"
+        val msg = "> @here streak of $broken ended | still goated | Nexora Client | ${randomJunk()}"
         try { session.sendToServer(buildTextPacket(msg)) } catch (e: Exception) {}
     }
 
@@ -207,8 +208,8 @@ class ChatAdvertiser : BaseModule(
                         playerLastNotifiedMs[player.runtimeId] = now
 
                         val messages = listOf(
-                            "> @${player.name} Dont Run Little NN | OxClient | %RANDOM%",
-                            "> @here @${player.name} is definitely runfag | random | OxClient | %RANDOM%"
+                            "> @${player.name} Dont Run Little NN | Nexora Client | %RANDOM%",
+                            "> @here @${player.name} is definitely runfag | random | Nexora Client | %RANDOM%"
                         )
 
                         val selectedMsg = messages[Random.nextInt(messages.size)]
