@@ -23,7 +23,6 @@ import com.nexoraclient.module.combat.KillAura
 import com.nexoraclient.module.combat.KillAuraPro
 import com.nexoraclient.module.combat.PcAura
 import com.nexoraclient.module.misc.ChatSpammer
-import com.nexoraclient.module.misc.AntiLag
 import com.nexoraclient.module.misc.ChatAdvertiser
 import com.nexoraclient.module.misc.Disconnect
 import com.nexoraclient.module.movement.AntiKnockback
@@ -135,7 +134,6 @@ class NexoraClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
-            AntiLag(),
             TPAuraPC(),
             AutoScaffold(),  // AutoRegear kaldırıldı, AutoScaffold eklendi
             ChatSpammer(),
