@@ -476,6 +476,9 @@ fun DashboardScreen(
     val savedAccounts     by AccountManager.accountsFlow.collectAsStateWithLifecycle()
     val selectedGamertag  by AccountManager.selectedGamertagFlow.collectAsStateWithLifecycle()
 
+    val accountLoggedIn = selectedGamertag != null &&
+        savedAccounts.any { it.gamertag == selectedGamertag && it.isRelayReady() }
+
     var showSignIn      by remember { mutableStateOf(false) }
     var showServerPanel by remember { mutableStateOf(false) }
     var showAppPicker   by remember { mutableStateOf(false) }
@@ -528,7 +531,9 @@ fun DashboardScreen(
                             onResetServer        = { scope.launch { ServerConfig.reset() } },
                             onDismissServerPanel = { showServerPanel = false },
                             overlayPermissionGranted   = overlayPermissionGranted,
-                            onRequestOverlayPermission = onRequestOverlayPermission
+                            onRequestOverlayPermission = onRequestOverlayPermission,
+                            accountLoggedIn            = accountLoggedIn,
+                            onRequestAccountLogin       = { showSignIn = true }
                         )
                         DashTab.ACCOUNTS -> AccountsTab(
                             accounts         = savedAccounts,
@@ -630,7 +635,9 @@ private fun DashboardTab(
     onResetServer        : () -> Unit,
     onDismissServerPanel : () -> Unit,
     overlayPermissionGranted   : Boolean = true,
-    onRequestOverlayPermission : () -> Unit = {}
+    onRequestOverlayPermission : () -> Unit = {},
+    accountLoggedIn       : Boolean = true,
+    onRequestAccountLogin : () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Nexora Client V1.1", subtitle = "Made by Oxygen8315") {
@@ -663,12 +670,29 @@ private fun DashboardTab(
         }
 
         AnimatedVisibility(
+            visible = !accountLoggedIn,
+            enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
+            exit    = fadeOut(tween(150)) + shrinkVertically(tween(200))
+        ) {
+            Column {
+                DashboardWarningBanner(
+                    message = "Account Login Required",
+                    onClick = onRequestAccountLogin
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+
+        AnimatedVisibility(
             visible = !overlayPermissionGranted,
             enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
             exit    = fadeOut(tween(150)) + shrinkVertically(tween(200))
         ) {
             Column {
-                OverlayPermissionWarning(onClick = onRequestOverlayPermission)
+                DashboardWarningBanner(
+                    message = "Overlay Permission Required",
+                    onClick = onRequestOverlayPermission
+                )
                 Spacer(Modifier.height(16.dp))
             }
         }
@@ -910,7 +934,7 @@ private fun AppPickerRow(app: InstalledAppInfo, onClick: () -> Unit) {
 }
 
 @Composable
-private fun OverlayPermissionWarning(onClick: () -> Unit) {
+private fun DashboardWarningBanner(message: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
@@ -923,7 +947,7 @@ private fun OverlayPermissionWarning(onClick: () -> Unit) {
         Text("⚠️", fontSize = 16.sp)
         Spacer(Modifier.width(10.dp))
         Text(
-            "Overlay Permission Required",
+            message,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
             color = NexoraOnSurface,
@@ -1082,6 +1106,7 @@ private fun ConfigTab() {
     val activeProfile  by Config.activeProfile.collectAsState(initial = null)
 
     var showSaveDialog by remember { mutableStateOf(false) }
+    var showMapArtDialog by remember { mutableStateOf(false) }
     var newProfileName by remember { mutableStateOf("") }
 
     var pendingExportName by remember { mutableStateOf<String?>(null) }
@@ -1139,19 +1164,16 @@ private fun ConfigTab() {
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Configs") {
+            TextButton(onClick = { showMapArtDialog = true }) {
+                Text("AutoMapArt Configs", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(8.dp))
             TextButton(onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) }) {
                 Text("Import", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
             Spacer(Modifier.width(8.dp))
             AddIconButton(onClick = { showSaveDialog = true })
         }
-
-        AutoMapArtSection(
-            selectedSize = mapArtSize,
-            onSelectSize = { mapArtSize = it },
-            onPickImage  = { mapArtImageLauncher.launch("image/*") }
-        )
-        Spacer(Modifier.height(16.dp))
 
         if (profiles.isEmpty()) {
             Box(
@@ -1237,6 +1259,30 @@ private fun ConfigTab() {
             shape = RoundedCornerShape(10.dp)
         )
     }
+
+    if (showMapArtDialog) {
+        Dialog(onDismissRequest = { showMapArtDialog = false }) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(NexoraBackground)
+                    .padding(16.dp)
+            ) {
+                AutoMapArtSection(
+                    selectedSize = mapArtSize,
+                    onSelectSize = { mapArtSize = it },
+                    onPickImage  = { mapArtImageLauncher.launch("image/*") }
+                )
+                Spacer(Modifier.height(12.dp))
+                TextButton(
+                    onClick = { showMapArtDialog = false },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Close", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1297,7 +1343,7 @@ private fun AutoMapArtSection(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                "Galeriden Görsel Seç",
+                "Choose Image From Gallery",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace,
@@ -1308,7 +1354,7 @@ private fun AutoMapArtSection(
         if (gridSize > 0 && counts.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
             Text(
-                "Gerekli Bloklar (${gridSize}x${gridSize})",
+                "Required Blocks (${gridSize}x${gridSize})",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = NexoraOnSurfaceDim,
