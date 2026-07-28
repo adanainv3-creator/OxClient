@@ -3,6 +3,8 @@ package com.nexoraclient.ui.dashboard
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
@@ -76,6 +78,8 @@ import com.nexoraclient.auth.MicrosoftAuthManager
 import com.nexoraclient.auth.SavedAccount
 import com.nexoraclient.config.ServerConfig
 import com.nexoraclient.config.Config
+import com.nexoraclient.config.MapArtPlan
+import com.nexoraclient.utils.BlockPalette
 import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.session.SessionManager
@@ -630,8 +634,31 @@ private fun DashboardTab(
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Nexora Client V1.1", subtitle = "Made by Oxygen8315") {
-            IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
-                MoreVertGlyph(tint = if (showServerPanel) NexoraAccentLight else NexoraOnSurfaceDim)
+            val context = LocalContext.current
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
+                    MoreVertGlyph(tint = if (showServerPanel) NexoraAccentLight else NexoraOnSurfaceDim)
+                }
+                IconButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://discord.gg/eRu3EbWdM"))
+                        )
+                    },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    DiscordGlyph(tint = NexoraOnSurfaceDim)
+                }
+                IconButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/@NexoraClientss"))
+                        )
+                    },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    YoutubeGlyph(tint = NexoraOnSurfaceDim)
+                }
             }
         }
 
@@ -1058,6 +1085,7 @@ private fun ConfigTab() {
     var newProfileName by remember { mutableStateOf("") }
 
     var pendingExportName by remember { mutableStateOf<String?>(null) }
+    var mapArtSize by remember { mutableStateOf(128) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -1092,6 +1120,23 @@ private fun ConfigTab() {
         }
     }
 
+    val mapArtImageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val bitmap = context.contentResolver.openInputStream(uri)?.use {
+                        BitmapFactory.decodeStream(it)
+                    }
+                    if (bitmap != null) {
+                        MapArtPlan.analyze(bitmap, mapArtSize)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Configs") {
             TextButton(onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) }) {
@@ -1100,6 +1145,13 @@ private fun ConfigTab() {
             Spacer(Modifier.width(8.dp))
             AddIconButton(onClick = { showSaveDialog = true })
         }
+
+        AutoMapArtSection(
+            selectedSize = mapArtSize,
+            onSelectSize = { mapArtSize = it },
+            onPickImage  = { mapArtImageLauncher.launch("image/*") }
+        )
+        Spacer(Modifier.height(16.dp))
 
         if (profiles.isEmpty()) {
             Box(
@@ -1184,6 +1236,111 @@ private fun ConfigTab() {
             containerColor = NexoraSurface,
             shape = RoundedCornerShape(10.dp)
         )
+    }
+}
+
+@Composable
+private fun AutoMapArtSection(
+    selectedSize: Int,
+    onSelectSize: (Int) -> Unit,
+    onPickImage: () -> Unit
+) {
+    val gridSize     by MapArtPlan.size.collectAsState(initial = 0)
+    val counts       by MapArtPlan.requiredCounts.collectAsState(initial = emptyList())
+
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(NexoraSurface)
+            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(12.dp))
+            .padding(16.dp)
+    ) {
+        Text(
+            "Auto Map Art",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = NexoraOnSurfaceDim,
+            fontFamily = FontFamily.Monospace
+        )
+        Spacer(Modifier.height(10.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(128, 256).forEach { size ->
+                val active = size == selectedSize
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (active) NexoraAccent else NexoraBackground)
+                        .border(1.dp, if (active) NexoraAccent else NexoraOutlineStrong, RoundedCornerShape(8.dp))
+                        .clickable { onSelectSize(size) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        "${size}x${size}",
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (active) Color.White else NexoraOnSurface
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Box(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                .background(NexoraBackground)
+                .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(8.dp))
+                .clickable { onPickImage() }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "Galeriden Görsel Seç",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace,
+                color = NexoraOnSurface
+            )
+        }
+
+        if (gridSize > 0 && counts.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "Gerekli Bloklar (${gridSize}x${gridSize})",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = NexoraOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(Modifier.height(8.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                counts.forEach { (blockId, count) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            BlockPalette.displayName(blockId),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = NexoraOnSurface
+                        )
+                        Text(
+                            "$count",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            color = NexoraOnSurfaceDim
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1631,5 +1788,53 @@ private fun MoreVertGlyph(modifier: Modifier = Modifier, tint: Color = Color.Whi
         listOf(-1, 0, 1).forEach { i ->
             drawCircle(color = tint, radius = r, center = Offset(cx, cy + i * spacing))
         }
+    }
+}
+
+@Composable
+private fun DiscordGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.28f, h * 0.22f)
+            cubicTo(w * 0.10f, h * 0.30f, w * 0.06f, h * 0.55f, w * 0.10f, h * 0.78f)
+            cubicTo(w * 0.22f, h * 0.86f, w * 0.34f, h * 0.90f, w * 0.40f, h * 0.90f)
+            lineTo(w * 0.46f, h * 0.80f)
+            cubicTo(w * 0.36f, h * 0.76f, w * 0.30f, h * 0.71f, w * 0.30f, h * 0.71f)
+            cubicTo(w * 0.42f, h * 0.78f, w * 0.58f, h * 0.78f, w * 0.70f, h * 0.71f)
+            cubicTo(w * 0.70f, h * 0.71f, w * 0.64f, h * 0.76f, w * 0.54f, h * 0.80f)
+            lineTo(w * 0.60f, h * 0.90f)
+            cubicTo(w * 0.66f, h * 0.90f, w * 0.78f, h * 0.86f, w * 0.90f, h * 0.78f)
+            cubicTo(w * 0.94f, h * 0.55f, w * 0.90f, h * 0.30f, w * 0.72f, h * 0.22f)
+            cubicTo(w * 0.72f, h * 0.22f, w * 0.62f, h * 0.16f, w * 0.50f, h * 0.16f)
+            cubicTo(w * 0.38f, h * 0.16f, w * 0.28f, h * 0.22f, w * 0.28f, h * 0.22f)
+            close()
+        }
+        drawPath(path = path, color = tint, style = Stroke(width = h * 0.07f, cap = StrokeCap.Round))
+        drawCircle(color = tint, radius = h * 0.055f, center = Offset(w * 0.37f, h * 0.52f))
+        drawCircle(color = tint, radius = h * 0.055f, center = Offset(w * 0.63f, h * 0.52f))
+    }
+}
+
+@Composable
+private fun YoutubeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(w * 0.08f, h * 0.20f),
+            size = Size(w * 0.84f, h * 0.60f),
+            cornerRadius = CornerRadius(w * 0.18f),
+            style = Stroke(width = h * 0.09f)
+        )
+        val play = Path().apply {
+            moveTo(w * 0.42f, h * 0.36f)
+            lineTo(w * 0.42f, h * 0.64f)
+            lineTo(w * 0.66f, h * 0.50f)
+            close()
+        }
+        drawPath(path = play, color = tint)
     }
 }

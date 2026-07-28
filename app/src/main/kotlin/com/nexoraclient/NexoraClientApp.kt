@@ -16,6 +16,7 @@ import com.nexoraclient.module.ModuleManager
 import com.nexoraclient.module.social.FriendManager
 import com.nexoraclient.module.combat.AutoArmor
 import com.nexoraclient.module.movement.AutoScaffold  // Yeni eklenen import
+import com.nexoraclient.module.movement.AutoMapArt
 import com.nexoraclient.module.combat.AutoTotem
 import com.nexoraclient.module.combat.Criticals
 import com.nexoraclient.module.combat.CrystalAura
@@ -23,6 +24,7 @@ import com.nexoraclient.module.combat.KillAura
 import com.nexoraclient.module.combat.KillAuraPro
 import com.nexoraclient.module.combat.PcAura
 import com.nexoraclient.module.misc.ChatSpammer
+import com.nexoraclient.module.misc.AntiLag
 import com.nexoraclient.module.misc.ChatAdvertiser
 import com.nexoraclient.module.misc.Disconnect
 import com.nexoraclient.module.movement.AntiKnockback
@@ -134,8 +136,10 @@ class NexoraClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
+            AntiLag(),
             TPAuraPC(),
             AutoScaffold(),  // AutoRegear kaldırıldı, AutoScaffold eklendi
+            AutoMapArt(),
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect()
