@@ -54,6 +54,7 @@ import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
 import com.nexoraclient.module.social.FriendManager
+import com.nexoraclient.module.social.isFriendEntity
 import com.nexoraclient.session.SessionManager
 import com.nexoraclient.ui.theme.*
 import com.nexoraclient.utils.InventoryUtil
@@ -70,7 +71,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     companion object {
         private const val CHANNEL_ID = "ox_overlay"
         private const val NOTIF_ID   = 1002
-        private const val TARGET_RANGE = 64f
+        private const val TARGET_RANGE = 128f
 
         fun start(ctx: Context) {
             val i = Intent(ctx, OverlayService::class.java)
@@ -146,7 +147,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
                 OverlayState.updateTotemCount(totemCount)
 
-                val nearest = EntityTracker.getNearestPlayer(TARGET_RANGE)
+                val nearest = EntityTracker.getPlayers(TARGET_RANGE)
+                    .filterNot { it.isFriendEntity }
+                    .minByOrNull { EntityTracker.distanceTo(it) }
                 val targetLabel = nearest?.let { e ->
                     e.name.ifBlank { e.identifier.removePrefix("minecraft:") }
                 }
@@ -517,11 +520,12 @@ private fun MenuFab(onClick: () -> Unit, onDrag: (Float, Float) -> Unit) {
             },
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = "Ox",
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
+        androidx.compose.foundation.Image(
+            painter            = painterResource(id = R.mipmap.ic_nexora_logo),
+            contentDescription = "Nexora",
+            modifier           = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
         )
     }
 }
