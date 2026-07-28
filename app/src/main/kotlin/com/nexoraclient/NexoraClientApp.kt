@@ -30,6 +30,7 @@ import com.nexoraclient.module.movement.AntiKnockback
 import com.nexoraclient.module.movement.CreativeFly
 import com.nexoraclient.module.movement.Jetpack
 import com.nexoraclient.module.movement.MotionFly
+import com.nexoraclient.module.movement.OrbitLock
 import com.nexoraclient.module.movement.Speed
 import com.nexoraclient.module.movement.TPAura
 import com.nexoraclient.module.movement.TPAuraPC
@@ -126,6 +127,7 @@ class NexoraClientApp : Application() {
             Speed(),
             Jetpack(),
             TPAura(),
+            OrbitLock(),
             AntiKnockback(),
             FullBright(),
             ESP(),

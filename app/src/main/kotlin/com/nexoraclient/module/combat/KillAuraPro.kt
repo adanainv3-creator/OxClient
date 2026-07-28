@@ -93,10 +93,10 @@ class KillAuraPro : BaseModule(
         if (!isEnabled || !headLock.value) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
         val pkt = event.packet as? PlayerAuthInputPacket ?: return
-        applyHeadLock(pkt)
+        applyHeadLock(event, pkt)
     }
 
-    private fun applyHeadLock(pkt: PlayerAuthInputPacket) {
+    private fun applyHeadLock(event: PacketEvent, pkt: PlayerAuthInputPacket) {
         val now = System.currentTimeMillis()
         val cached = cachedHeadLockTarget?.takeIf { EntityTracker.getById(it.runtimeId) != null }
         if (cached == null || now - lastHeadLockScanMs >= HEAD_LOCK_SCAN_INTERVAL_MS) {
@@ -117,6 +117,10 @@ class KillAuraPro : BaseModule(
         pkt.rotation = Vector3f.from(newPitch, newYaw, newYaw)
         EntityTracker.selfYaw = newYaw
         EntityTracker.selfPitch = newPitch
+
+        // KRİTİK FIX: cancelAndReplace çağrılmazsa relay ham wire byte'larını
+        // gönderiyor, bu mutation server'a hiç ulaşmıyordu. Bkz. KillAura.kt.
+        event.cancelAndReplace(pkt)
     }
 
     private fun smoothYaw(current: Float, target: Float, factor: Float): Float {

@@ -1,3 +1,4 @@
+
 package com.nexoraclient.module.movement
 
 import com.nexoraclient.core.proxy.EntityTracker
@@ -114,7 +115,7 @@ class TPAuraPC : BaseModule(
 
         if (rotationMode.value == RotationMode.SILENT) {
             val target = getCachedTargets().firstOrNull() ?: return
-            applySilentRotation(pkt, target)
+            applySilentRotation(event, pkt, target)
         }
     }
 
@@ -296,7 +297,7 @@ class TPAuraPC : BaseModule(
         PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
     }
 
-    private fun applySilentRotation(pkt: PlayerAuthInputPacket, target: EntityTracker.TrackedEntity) {
+    private fun applySilentRotation(event: PacketEvent, pkt: PlayerAuthInputPacket, target: EntityTracker.TrackedEntity) {
         val now = System.currentTimeMillis()
         if (now - lastRotSendMs < 50L) return
         lastRotSendMs = now
@@ -312,6 +313,10 @@ class TPAuraPC : BaseModule(
         pkt.rotation = Vector3f.from(newPitch, newYaw, newYaw)
         EntityTracker.selfYaw   = newYaw
         EntityTracker.selfPitch = newPitch
+
+        // KRİTİK FIX: cancelAndReplace çağrılmazsa relay ham wire byte'larını
+        // gönderiyor, bu mutation server'a hiç ulaşmıyordu. Bkz. KillAura.kt.
+        event.cancelAndReplace(pkt)
     }
 
     private fun smoothAngle(current: Float, target: Float, factor: Float): Float {

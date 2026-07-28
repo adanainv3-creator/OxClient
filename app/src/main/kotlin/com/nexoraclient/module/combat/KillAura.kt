@@ -94,7 +94,7 @@ class KillAura : BaseModule(
         if (!isEnabled || !headLock.value) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
         val pkt = event.packet as? org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket ?: return
-        applyHeadLock(pkt)
+        applyHeadLock(event, pkt)
     }
 
     private suspend fun tickLoop() {
@@ -148,7 +148,7 @@ class KillAura : BaseModule(
         }
     }
 
-    private fun applyHeadLock(pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) {
+    private fun applyHeadLock(event: PacketEvent, pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket) {
         val now = System.currentTimeMillis()
         val cached = cachedHeadLockTarget?.takeIf { EntityTracker.getById(it.runtimeId) != null }
         if (cached == null || now - lastHeadLockScanMs >= HEAD_LOCK_SCAN_INTERVAL_MS) {
@@ -176,6 +176,13 @@ class KillAura : BaseModule(
 
         EntityTracker.selfYaw = newYaw
         EntityTracker.selfPitch = newPitch
+
+        // KRİTİK FIX: NexoraRelaySession.ServerSession.onPacket, event iptal/replace
+        // edilmediği sürece ham wire byte buffer'ını (decode edilmemiş orijinal paket)
+        // server'a gönderiyor — yukarıdaki mutation'lar cancelAndReplace çağrılmadan
+        // hiçbir zaman server'a ulaşmıyordu. Bu satır olmadan headlock görsel olarak
+        // hesaplanıyor ama gerçek pakette hiç etkisi olmuyordu.
+        event.cancelAndReplace(pkt)
     }
 
     private fun smoothYaw(current: Float, target: Float, factor: Float): Float {

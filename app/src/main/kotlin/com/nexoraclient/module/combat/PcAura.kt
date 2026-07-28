@@ -101,7 +101,7 @@ class PcAura : BaseModule(
                 getCachedTargets().firstOrNull().also { cachedRotTarget = it }
             }
             if (target != null) {
-                applySilentRotation(pkt, target)
+                applySilentRotation(event, pkt, target)
             }
         }
     }
@@ -277,6 +277,7 @@ class PcAura : BaseModule(
     }
 
     private fun applySilentRotation(
+        event: PacketEvent,
         pkt: org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket,
         target: EntityTracker.TrackedEntity
     ) {
@@ -297,6 +298,10 @@ class PcAura : BaseModule(
 
         EntityTracker.selfYaw = newYaw
         EntityTracker.selfPitch = newPitch
+
+        // KRİTİK FIX: cancelAndReplace çağrılmazsa relay ham wire byte'larını
+        // gönderiyor, bu mutation server'a hiç ulaşmıyordu. Bkz. KillAura.kt.
+        event.cancelAndReplace(pkt)
     }
 
     private fun smoothAngle(current: Float, target: Float, factor: Float): Float {
