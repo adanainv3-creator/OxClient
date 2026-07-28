@@ -17,7 +17,7 @@ import kotlin.math.*
 import kotlin.random.Random
 
 class TPAuraPC : BaseModule(
-    name        = "NexoraAura",
+    name        = "NexoraTp",
     category    = ModuleCategory.COMBAT,
     description = "PC kalitesinde teleport + saldırı modülü"
 ), PacketEventBus.PacketListener {
