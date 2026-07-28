@@ -228,6 +228,13 @@ class CrystalAura : BaseModule(
         val now = System.currentTimeMillis()
         val last = lastPlaceMsMap[target.runtimeId] ?: 0L
         if (now - last < placeDelayMs.value) return
+        // ÖNEMLİ FIX: cooldown artık DENEME anında başlıyor, sadece başarılı
+        // yerleştirmede değil. Eskiden yerleştirme sürekli başarısız olduğunda
+        // (uygun yüzey yok / LOS engelli / hedef pending vb.) bu satır hiç
+        // çalışmıyordu, bu yüzden pahalı 5x5 aday taraması (MultiTarget modda
+        // hedef başına) her tick (varsayılan 20ms) tekrar tekrar çalışıp asıl
+        // lag kaynağı oluyordu.
+        lastPlaceMsMap[target.runtimeId] = now
 
         val session = PacketEventBus.currentSession ?: return
 
@@ -268,7 +275,6 @@ class CrystalAura : BaseModule(
             if (placedThisTick >= MAX_PLACES_PER_TICK) break
             if (!takePlaceToken(burst)) break
             if (tryPlaceCrystalAt(session, prepared, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) {
-                lastPlaceMsMap[target.runtimeId] = now
                 placedThisTick++
             }
         }

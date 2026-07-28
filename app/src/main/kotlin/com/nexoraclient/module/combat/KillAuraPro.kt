@@ -53,11 +53,18 @@ class KillAuraPro : BaseModule(
     @Volatile private var headLockPitch = 0f
     @Volatile private var cachedHeadLockTarget: EntityTracker.TrackedEntity? = null
     @Volatile private var lastHeadLockScanMs = 0L
+    @Volatile private var lastScanMs = 0L
+    @Volatile private var cachedTargets: List<EntityTracker.TrackedEntity> = emptyList()
     private var tickJob: Job? = null
 
     companion object {
         private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
         private const val TICK_INTERVAL_MS = 5L
+        // KillAura.kt'deki aynı fix: hedef yokken/CPS kapısı açık kalınca
+        // selectTargets() saniyede 200 kez (her tick) çalışıp tüm entity'leri
+        // tarıyordu — asıl lag kaynağı buydu. Artık tarama en fazla bu aralıkla
+        // yapılıp cache'leniyor.
+        private const val SCAN_INTERVAL_MS = 50L
     }
 
     override fun onEnable() {
@@ -67,6 +74,8 @@ class KillAuraPro : BaseModule(
         headLockPitch = EntityTracker.selfPitch
         cachedHeadLockTarget = null
         lastHeadLockScanMs = 0L
+        lastScanMs = 0L
+        cachedTargets = emptyList()
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
     }
@@ -145,7 +154,11 @@ class KillAuraPro : BaseModule(
         val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
         if (now - lastAttackMs < delayMs) return
 
-        val targets = selectTargets()
+        if (now - lastScanMs >= SCAN_INTERVAL_MS) {
+            cachedTargets = selectTargets()
+            lastScanMs = now
+        }
+        val targets = cachedTargets
         if (targets.isEmpty()) return
 
         lastAttackMs = now

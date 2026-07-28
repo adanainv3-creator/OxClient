@@ -28,6 +28,12 @@ class KillAura : BaseModule(
     companion object {
         private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
         private const val TICK_INTERVAL_MS = 5L
+        // Hedef yoksa ya da CPS kapısı açık kalıp saldırı henüz gerçekleşmediyse
+        // lastAttackMs güncellenmiyordu — bu da her 5ms'de bir (saniyede 200 kez)
+        // tüm entity'leri tarayan selectTargets()'in tekrar tekrar çalışmasına
+        // sebep oluyordu (asıl lag kaynağı). Tarama artık en fazla bu aralıkla
+        // yapılıp sonuç cache'leniyor, tick 5ms'de kalsa da tarama 20Hz'e düşüyor.
+        private const val SCAN_INTERVAL_MS = 50L
     }
 
     private val cpsMin          = int  ("CPS Min",          28,   1,  30)
@@ -58,6 +64,8 @@ class KillAura : BaseModule(
     @Volatile private var headLockPitch      = 0f
     @Volatile private var cachedHeadLockTarget: EntityTracker.TrackedEntity? = null
     @Volatile private var lastHeadLockScanMs = 0L
+    @Volatile private var lastScanMs = 0L
+    @Volatile private var cachedTargets: List<EntityTracker.TrackedEntity> = emptyList()
 
     private var tickJob: Job? = null
 
@@ -70,6 +78,8 @@ class KillAura : BaseModule(
         headLockPitch = EntityTracker.selfPitch
         cachedHeadLockTarget = null
         lastHeadLockScanMs = 0L
+        lastScanMs = 0L
+        cachedTargets = emptyList()
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
     }
@@ -100,7 +110,11 @@ class KillAura : BaseModule(
         
         if (now - lastAttackMs < delayMs) return
 
-        val targets = selectTargets()
+        if (now - lastScanMs >= SCAN_INTERVAL_MS) {
+            cachedTargets = selectTargets()
+            lastScanMs = now
+        }
+        val targets = cachedTargets
         if (targets.isEmpty()) {
             consecutiveMisses++
             return

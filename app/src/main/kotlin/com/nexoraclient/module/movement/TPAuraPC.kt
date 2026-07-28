@@ -231,6 +231,7 @@ class TPAuraPC : BaseModule(
             ridingRuntimeEntityId = 0L
         }
         session.serverBound(movePacket)
+        session.clientBound(movePacket)
 
         EntityTracker.selfX = newPos.x
         EntityTracker.selfY = newPos.y

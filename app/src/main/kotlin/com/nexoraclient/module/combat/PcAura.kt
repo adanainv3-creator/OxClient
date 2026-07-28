@@ -46,6 +46,15 @@ class PcAura : BaseModule(
     @Volatile private var headLockPitch = 0f
     @Volatile private var cachedRotTarget: EntityTracker.TrackedEntity? = null
 
+    // tick() ve getTargetCount()/isTargeting() cache'siz her çağrıda selectTargets()
+    // (tam entity taraması) yapıyordu. tick() 10ms'de bir çalıştığından hedef yokken
+    // veya CPS kapısı açık kalınca bu saniyede 100 kez tekrarlanıp lag'e sebep oluyordu.
+    private companion object {
+        const val SCAN_INTERVAL_MS = 50L
+    }
+    @Volatile private var lastScanMs = 0L
+    @Volatile private var cachedTargets: List<EntityTracker.TrackedEntity> = emptyList()
+
     private var tickJob: Job? = null
 
     override fun onEnable() {
@@ -55,6 +64,8 @@ class PcAura : BaseModule(
         headLockYaw = EntityTracker.selfYaw
         headLockPitch = EntityTracker.selfPitch
         cachedRotTarget = null
+        lastScanMs = 0L
+        cachedTargets = emptyList()
 
         PacketEventBus.register(this)
         tickJob = scope.launch { tickLoop() }
@@ -64,6 +75,15 @@ class PcAura : BaseModule(
         tickJob?.cancel()
         PacketEventBus.unregister(this)
         super.onDisable()
+    }
+
+    private fun getCachedTargets(): List<EntityTracker.TrackedEntity> {
+        val now = System.currentTimeMillis()
+        if (now - lastScanMs >= SCAN_INTERVAL_MS) {
+            cachedTargets = selectTargets()
+            lastScanMs = now
+        }
+        return cachedTargets
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -78,7 +98,7 @@ class PcAura : BaseModule(
             val target = if (cached != null && now - lastRotSendMs < 50L) {
                 cached
             } else {
-                selectTargets().firstOrNull().also { cachedRotTarget = it }
+                getCachedTargets().firstOrNull().also { cachedRotTarget = it }
             }
             if (target != null) {
                 applySilentRotation(pkt, target)
@@ -103,7 +123,7 @@ class PcAura : BaseModule(
 
         if (now - lastAttackMs < delayMs) return
 
-        val targets = selectTargets()
+        val targets = getCachedTargets()
         if (targets.isEmpty()) return
 
         lastAttackMs = now
@@ -124,12 +144,15 @@ class PcAura : BaseModule(
         if (!silentRot.value && targets.isNotEmpty()) {
             val target = targets.first()
             val rot = RotationUtil.toEntity(target)
-            PacketUtil.sendMoveAtSelf(
-                session,
-                yaw = rot.yaw,
-                pitch = rot.pitch,
-                onGround = true
-            )
+            // PacketUtil.sendMoveAtSelf yalnızca serverBound gönderiyor — sunucu
+            // döndüğünü sanıyor ama ekranda hiçbir şey dönmüyordu ("çalışmıyor" şikayeti
+            // buydu). TPAuraPC'deki teleport fix'iyle aynı prensip: paketi burada elle
+            // kurup hem sunucuya hem istemciye (ekrana) gönderiyoruz.
+            val rotPacket = RotationUtil.buildMovePacket(rot.yaw, rot.pitch, onGround = true)
+            session.serverBound(rotPacket)
+            session.clientBound(rotPacket)
+            EntityTracker.selfYaw = rot.yaw
+            EntityTracker.selfPitch = rot.pitch
         }
     }
 
@@ -287,7 +310,7 @@ class PcAura : BaseModule(
         return normalized
     }
 
-    fun getTargetCount(): Int = selectTargets().size
+    fun getTargetCount(): Int = getCachedTargets().size
 
-    fun isTargeting(): Boolean = selectTargets().isNotEmpty()
+    fun isTargeting(): Boolean = getCachedTargets().isNotEmpty()
 }
