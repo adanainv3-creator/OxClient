@@ -1,3 +1,4 @@
+
 package com.nexoraclient.module.movement
 
 import com.nexoraclient.config.MapArtPlan
@@ -6,6 +7,7 @@ import com.nexoraclient.core.relay.NexoraRelaySession
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.BaseModule
 import com.nexoraclient.module.ModuleCategory
+import com.nexoraclient.utils.BlockPalette
 import com.nexoraclient.utils.InventoryUtil
 import com.nexoraclient.utils.WorldBlockTracker
 import kotlinx.coroutines.Job
@@ -27,9 +29,32 @@ class AutoMapArt : BaseModule(
         private const val TICK_INTERVAL_MS = 50L
         private const val STEP_SIZE        = 0.20f
         private const val ARRIVE_DIST      = 0.35f
+        // Envanter tarama aralığı — her N tick'te bir tara (N*50ms)
+        private const val SCAN_INTERVAL_TICKS = 20
     }
 
     private val skipMissing = bool("Skip Missing Block", true)
+
+    /**
+     * Kullanıcının overlay'de işaretlediği "elimde olan" bloklar.
+     *
+     * Bu set boşken: tüm BlockPalette kullanılır (eski davranış).
+     * Bu set doluyken: sadece bu bloklar paletten seçilir ve
+     * her güncellemede MapArtPlan.reanalyze() çağrılarak grid yeniden hesaplanır.
+     */
+    @Volatile var availableBlocks: Set<String> = emptySet()
+        set(value) {
+            val changed = field != value
+            field = value
+            // Blok seti değiştiyse grid'i hemen yeniden hesapla
+            if (changed) MapArtPlan.reanalyze(value)
+        }
+
+    /**
+     * Envanteri otomatik tarayarak sahip olunan map-art bloklarını belirle.
+     * Overlay'deki "Auto Scan" switch'i açıksa her SCAN_INTERVAL_TICKS tick'te çalışır.
+     */
+    val autoScanInventory = bool("Auto Scan Inventory", false)
 
     private var tickJob: Job? = null
     private var started = false
@@ -39,6 +64,7 @@ class AutoMapArt : BaseModule(
     private var originY = 0
     private var originZ = 0
     private var missingCount = 0
+    private var scanTick = 0
 
     override fun onEnable() {
         super.onEnable()
@@ -46,6 +72,7 @@ class AutoMapArt : BaseModule(
         index = 0
         missingCount = 0
         targets = emptyList()
+        scanTick = 0
         tickJob?.cancel()
         tickJob = launchTickLoop(TICK_INTERVAL_MS) { tick() }
     }
@@ -54,6 +81,29 @@ class AutoMapArt : BaseModule(
         tickJob?.cancel(); tickJob = null
         super.onDisable()
     }
+
+    // -------------------------------------------------------------------------
+    // Envanter taraması — tüm 0..35 slotunu BlockPalette ALL ile karşılaştırır
+    // -------------------------------------------------------------------------
+
+    private val allPaletteIds: Set<String> by lazy {
+        BlockPalette.ALL.map { it.identifier }.toHashSet()
+    }
+
+    fun scanInventoryBlocks(): Set<String> {
+        val found = mutableSetOf<String>()
+        for (slot in 0..35) {
+            val item = EntityTracker.getInventoryItem(slot) ?: continue
+            if (item.count <= 0) continue
+            val id = runCatching { item.definition?.identifier }.getOrNull() ?: continue
+            if (id in allPaletteIds) found.add(id)
+        }
+        return found
+    }
+
+    // -------------------------------------------------------------------------
+    // Tick loop
+    // -------------------------------------------------------------------------
 
     private fun buildSnakeOrder(grid: Array<Array<String>>): List<Triple<Int, Int, String>> {
         val size = grid.size
@@ -66,6 +116,18 @@ class AutoMapArt : BaseModule(
     }
 
     private fun tick() {
+        // Auto scan: her SCAN_INTERVAL_TICKS tick'te envanter tara ve güncelle
+        if (autoScanInventory.value) {
+            scanTick++
+            if (scanTick >= SCAN_INTERVAL_TICKS) {
+                scanTick = 0
+                val scanned = scanInventoryBlocks()
+                if (scanned != availableBlocks) {
+                    availableBlocks = scanned  // setter reanalyze() tetikler
+                }
+            }
+        }
+
         val session = PacketEventBus.currentSession ?: return
         val grid = MapArtPlan.grid.value
         if (grid == null) {

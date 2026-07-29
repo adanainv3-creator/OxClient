@@ -50,13 +50,16 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.nexoraclient.R
 import com.nexoraclient.config.Config
+import com.nexoraclient.config.MapArtPlan
 import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
+import com.nexoraclient.module.movement.AutoMapArt
 import com.nexoraclient.module.social.FriendManager
 import com.nexoraclient.module.social.isFriendEntity
 import com.nexoraclient.session.SessionManager
 import com.nexoraclient.ui.theme.*
+import com.nexoraclient.utils.BlockPalette
 import com.nexoraclient.utils.InventoryUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -1007,6 +1010,10 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                 module.settings.forEach { s ->
                     SettingRow(setting = s, onShortcutChanged = onShortcutChanged)
                 }
+                // AutoMapArt'a özel: envanter blok seçici panel
+                if (module is AutoMapArt) {
+                    AutoMapArtBlockPanel(module = module)
+                }
             }
         }
     }
@@ -1145,6 +1152,196 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// AutoMapArt — Envanter Blok Seçici Panel
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun AutoMapArtBlockPanel(module: AutoMapArt) {
+    val scope = rememberCoroutineScope()
+
+    // Mevcut seçili bloklar (module'dan)
+    var selected by remember { mutableStateOf(module.availableBlocks) }
+
+    // Envanterden taranan bloklar (scan butonu ile güncellenir)
+    var scanned by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Blok listesi — envanterden gelen varsa onları göster, yoksa tüm palette
+    val displayList = remember(scanned) {
+        if (scanned.isNotEmpty()) scanned.toList().sortedBy { BlockPalette.displayName(it) }
+        else BlockPalette.ALL.map { it.identifier }.sortedBy { BlockPalette.displayName(it) }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Başlık + kontrol butonları
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Available Blocks",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = NexoraOnSurface
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Envanteri tara butonu
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(NexoraSurfaceRaised)
+                        .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(6.dp))
+                        .clickable {
+                            val found = module.scanInventoryBlocks()
+                            scanned = found
+                            selected = found
+                            module.availableBlocks = found
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("Scan Inv", fontSize = 10.sp, color = NexoraAccentLight)
+                }
+                // Tüm seçimleri temizle (tüm palette kullan)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(NexoraSurfaceRaised)
+                        .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(6.dp))
+                        .clickable {
+                            selected = emptySet()
+                            scanned = emptySet()
+                            module.availableBlocks = emptySet()
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("All", fontSize = 10.sp, color = NexoraOnSurfaceDim)
+                }
+            }
+        }
+
+        // Seçili blok sayısı açıklaması
+        Text(
+            if (selected.isEmpty()) "Tüm palette kullanılıyor"
+            else "${selected.size} blok seçili — grid yeniden hesaplandı",
+            fontSize = 10.sp,
+            color = if (selected.isEmpty()) NexoraOnSurfaceDim else NexoraAccentLight
+        )
+
+        // Blok listesi — scrollable checkbox grid
+        if (displayList.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                displayList.forEach { blockId ->
+                    val isChecked = selected.isEmpty() || blockId in selected
+                    val paletteColor = BlockPalette.colorOf(blockId)
+                    val r = (paletteColor shr 16) and 0xFF
+                    val g = (paletteColor shr 8) and 0xFF
+                    val b = paletteColor and 0xFF
+                    val composeColor = Color(r / 255f, g / 255f, b / 255f)
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (isChecked && selected.isNotEmpty()) NexoraSurface
+                                else Color.Transparent
+                            )
+                            .clickable {
+                                selected = if (selected.isEmpty()) {
+                                    // İlk kez bir şey tiklenince: tüm paletten bu biri kaldırılıyor gibi değil,
+                                    // sadece bu blok seçili olarak başla
+                                    setOf(blockId)
+                                } else {
+                                    if (blockId in selected) selected - blockId
+                                    else selected + blockId
+                                }.also { module.availableBlocks = it }
+                            }
+                            .padding(horizontal = 6.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Blok renk küpü
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(composeColor)
+                                .border(1.dp, Color.White.copy(0.15f), RoundedCornerShape(3.dp))
+                        )
+                        // Blok adı
+                        Text(
+                            BlockPalette.displayName(blockId),
+                            fontSize = 11.sp,
+                            color = if (isChecked && selected.isNotEmpty()) NexoraOnSurface
+                                    else NexoraOnSurfaceDim,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // Checkbox göstergesi
+                        if (selected.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(
+                                        if (isChecked) NexoraAccent else Color.Transparent
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isChecked) NexoraAccent else NexoraOutlineStrong,
+                                        RoundedCornerShape(3.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isChecked) {
+                                    Text("✓", fontSize = 9.sp, color = Color.White,
+                                        fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Grid özeti — MapArtPlan'dan anlık sayım
+        val requiredCounts by MapArtPlan.requiredCounts.collectAsState()
+        if (requiredCounts.isNotEmpty() && selected.isNotEmpty()) {
+            HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
+            Text("Grid özeti:", fontSize = 10.sp, color = NexoraOnSurfaceDim)
+            Column(
+                modifier = Modifier.heightIn(max = 100.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(1.dp)
+            ) {
+                requiredCounts.take(10).forEach { (id, count) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(BlockPalette.displayName(id), fontSize = 10.sp, color = NexoraOnSurface)
+                        Text("$count", fontSize = 10.sp, color = NexoraAccentLight,
+                            fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                if (requiredCounts.size > 10) {
+                    Text("... +${requiredCounts.size - 10} daha", fontSize = 9.sp, color = NexoraOnSurfaceDim)
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 @Composable
 private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
