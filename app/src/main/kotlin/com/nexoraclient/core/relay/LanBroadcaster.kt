@@ -28,8 +28,8 @@ object LanBroadcaster {
     private val serverGuid    = System.currentTimeMillis()
 
     @Volatile private var relayPort      : Int    = 19150
-    @Volatile private var motd           : String = "OxClient"
-    @Volatile private var subMotd        : String = "OxClient"
+    @Volatile private var motd           : String = "NoxeraClient"
+    @Volatile private var subMotd        : String = "NoxeraClient"
     @Volatile private var protocolVersion: Int    = 748
     @Volatile private var mcVersion      : String = "1.21.60"
     @Volatile private var playerCount    : Int    = 0
@@ -40,8 +40,8 @@ object LanBroadcaster {
 
     fun start(
         relayPort      : Int,
-        motd           : String = "OxClient",
-        subMotd        : String = "OxClient",
+        motd           : String = "NoxeraClient",
+        subMotd        : String = "NoxeraClient",
         protocolVersion: Int,
         mcVersion      : String,
         maxPlayers     : Int = 10
@@ -119,7 +119,7 @@ object LanBroadcaster {
             } finally {
                 try { socket?.close() } catch (_: Exception) {}
             }
-        }, "OxLan-PingListener").apply {
+        }, "NexoraLan-PingListener").apply {
             isDaemon = true
             start()
         }
@@ -145,7 +145,7 @@ object LanBroadcaster {
             } finally {
                 try { socket?.close() } catch (_: Exception) {}
             }
-        }, "OxLan-Broadcaster").apply {
+        }, "NexoraLan-Broadcaster").apply {
             isDaemon = true
             start()
         }

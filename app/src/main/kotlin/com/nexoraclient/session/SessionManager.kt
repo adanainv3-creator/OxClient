@@ -10,13 +10,23 @@ import com.nexoraclient.core.relay.NexoraRelaySession
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.ModuleManager
 import com.nexoraclient.utils.BlockTracker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 object SessionManager {
 
     private const val TAG = "SessionManager"
+
+    // Activity/lifecycleScope'a bağlı değil: DashboardActivity.onDestroy() içinde
+    // super.onDestroy() çağrıldıktan sonra lifecycleScope iptal olduğu için relay
+    // kapatma işini onun scope'unda yapmak riskliydi. SessionManager singleton
+    // olduğundan kendi arka plan scope'unu kullanıyor.
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _isActive       = MutableStateFlow(false)
     val isActive: StateFlow<Boolean> = _isActive.asStateFlow()
@@ -79,21 +89,28 @@ object SessionManager {
 
     fun stop() {
         if (!_isActive.value) return
-        try {
-            ModuleManager.disableAll()
-            relay?.stop()
-        } catch (e: Exception) {
-        } finally {
-            relay                = null
-            _isActive.value      = false
-            _connectedHost.value = ""
-            _connectedPort.value = 0
-            _statusMessage.value = "Kapalı"
-            _sessionCount.value  = 0
-            PacketEventBus.setSession(null)
-            EntityTracker.reset()
-            BlockTracker.clear()
-            ConnectionManager.onDisconnected("Relay durduruldu")
+
+        // UI hemen "kapalı" görsün diye state'i anında güncelliyoruz.
+        val relayToStop      = relay
+        relay                = null
+        _isActive.value      = false
+        _connectedHost.value = ""
+        _connectedPort.value = 0
+        _statusMessage.value = "Kapalı"
+        _sessionCount.value  = 0
+        PacketEventBus.setSession(null)
+        EntityTracker.reset()
+        BlockTracker.clear()
+        ConnectionManager.onDisconnected("Relay durduruldu")
+
+        // Asıl ağır iş (Netty event loop group shutdown) arka planda yapılıyor;
+        // caller thread'i (main thread olabilir) bloklamıyor.
+        ioScope.launch {
+            try {
+                ModuleManager.disableAll()
+                relayToStop?.stop()
+            } catch (e: Exception) {
+            }
         }
     }
 

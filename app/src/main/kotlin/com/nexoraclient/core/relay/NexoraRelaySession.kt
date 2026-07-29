@@ -214,12 +214,34 @@ class NexoraRelaySession internal constructor(
     fun disconnect(reason: String = "Relay kapatıldı") {
         if (!closed.compareAndSet(false, true)) return
         pendingQueue.clear()
-        try { clientSession.disconnect() }           catch (_: Exception) {}
-        try { serverSession?.disconnect() }          catch (_: Exception) {}
-        try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
+        try { clientSession.disconnect() } catch (_: Exception) {}
+        closeServerConnection()
         relay.removeSession(this)
         listeners.forEach { try { it.onSessionEnd(this) } catch (_: Exception) {} }
         listeners.clear()
+    }
+
+    /**
+     * Sunucu tarafı RakNet bağlantısını kapatır. Event loop'u disconnect
+     * paketi gönderilir gönderilmez değil, channel gerçekten kapandıktan
+     * SONRA kapatır. Aksi halde disconnect bildirimi karşı sunucuya hiç
+     * ulaşmadan UDP soketi öldürülüyor, sunucu eski oturumu
+     * RAK_SESSION_TIMEOUT (20sn) dolana kadar canlı sanıyor ve hızlı
+     * yeniden girişte "already connected" hatası veriyordu.
+     */
+    private fun closeServerConnection() {
+        val srv = serverSession
+        val channel = try { srv?.peer?.channel } catch (_: Exception) { null }
+
+        try { srv?.disconnect() } catch (_: Exception) {}
+
+        if (channel != null && channel.isOpen) {
+            channel.closeFuture().addListener {
+                try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
+            }
+        } else {
+            try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
+        }
     }
 
     private fun installClientDisconnectHandler() {
@@ -229,8 +251,7 @@ class NexoraRelaySession internal constructor(
                     override fun channelInactive(ctx: ChannelHandlerContext) {
                         if (closed.compareAndSet(false, true)) {
                             pendingQueue.clear()
-                            try { serverSession?.disconnect() }          catch (_: Exception) {}
-                            try { serverEventLoop.shutdownGracefully() } catch (_: Exception) {}
+                            closeServerConnection()
                             relay.removeSession(this@NexoraRelaySession)
                             listeners.forEach { try { it.onSessionEnd(this@NexoraRelaySession) } catch (_: Exception) {} }
                             listeners.clear()

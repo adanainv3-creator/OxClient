@@ -20,8 +20,8 @@ class NexoraRelay(
 ) {
     companion object {
         private const val TAG           = "NexoraRelay"
-        private const val PONG_MOTD     = "oxse"
-        private const val PONG_SUB_MOTD = "OxClient"
+        private const val PONG_MOTD     = "nexora"
+        private const val PONG_SUB_MOTD = "NexoraClient"
 
         val RELAY_CODEC: BedrockCodec by lazy { CodecRegistry.getLatestCodec() }
     }
@@ -142,11 +142,20 @@ class NexoraRelay(
     internal fun removeSession(session: NexoraRelaySession) = sessions.remove(session)
 
     private fun shutdownGroups() {
-        try { bossGroup?.shutdownGracefully()?.sync()  } catch (_: Exception) {}
-        try { workerGroup?.shutdownGracefully()?.sync() } catch (_: Exception) {}
+        // Fire-and-forget: shutdownGracefully() zaten arka planda kendi thread'inde
+        // kapanıyor. .sync() ile beklemek çağıran thread'i (bizim durumumuzda main
+        // thread) varsayılan 2sn quiet period + 15sn timeout kadar bloklayabiliyordu;
+        // boss + worker art arda sync edilince donma 10sn'ye kadar çıkıyordu.
+        // quietPeriod=0 / maxTimeout=1sn verip sync çağırmayarak thread'i serbest
+        // bırakıyoruz, grup arka planda kendi kapanır.
+        val boss   = bossGroup
+        val worker = workerGroup
         bossGroup     = null
         workerGroup   = null
         serverChannel = null
+
+        try { boss?.shutdownGracefully(0, 1, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+        try { worker?.shutdownGracefully(0, 1, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
     }
 
     val isRunning: Boolean get() = running

@@ -243,6 +243,10 @@ class DashboardActivity : ComponentActivity() {
     }
 
     private fun stopRelay() {
+        // SessionManager.stop() artık state'i anında günceller ve ağır Netty
+        // shutdown işini kendi arka plan scope'unda yapar (bkz. SessionManager.kt),
+        // bu yüzden burada main thread'i bloklamaz; lifecycleScope'a sarmaya
+        // gerek yok (onDestroy() içinde zaten iptal olurdu).
         SessionManager.stop()
         PacketEventBus.clear()
         EntityTracker.reset()
