@@ -165,7 +165,7 @@ class CrystalAura : BaseModule(
                 }
             }
             is UpdateBlockPacket -> {
-                val id = runCatching { pkt.definition?.runtimeId }.getOrNull()
+                val id = try { pkt.definition?.runtimeId } catch (_: Exception) { null }
                 if (id != null) {
                     val pos = pkt.blockPosition
                     pendingObsidian.remove(posKey(pos.x, pos.y, pos.z))
@@ -178,7 +178,7 @@ class CrystalAura : BaseModule(
             }
             is LevelSoundEventPacket -> {
                 if (noParticles.value) {
-                    val name = runCatching { pkt.sound?.name }.getOrNull() ?: ""
+                    val name = try { pkt.sound?.name } catch (_: Exception) { null } ?: ""
                     if (name.contains("EXPLODE", ignoreCase = true)) event.cancel()
                 }
             }
@@ -187,7 +187,7 @@ class CrystalAura : BaseModule(
             }
             is EntityEventPacket -> {
                 if (burstOnLowHpTotem.value) {
-                    val typeName = runCatching { pkt.type?.toString()?.uppercase() }.getOrNull() ?: ""
+                    val typeName = try { pkt.type?.toString()?.uppercase() } catch (_: Exception) { null } ?: ""
                     if (typeName.contains("TOTEM")) {
                         totemBurstUntil[pkt.runtimeEntityId] = System.currentTimeMillis() + burstDurationMs.value
                     }
