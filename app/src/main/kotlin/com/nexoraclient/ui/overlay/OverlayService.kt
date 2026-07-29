@@ -1164,8 +1164,10 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
     // Mevcut seçili bloklar (module'dan)
     var selected by remember { mutableStateOf(module.availableBlocks) }
 
-    // Envanterden taranan bloklar (scan butonu ile güncellenir)
-    var scanned by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Envanterden taranan bloklar (scan butonu ile güncellenir) — module.lastScannedBlocks'tan
+    // geri okunuyor çünkü menü kapanıp açıldığında bu ComposeView baştan kuruluyor ve
+    // remember state sıfırlanıyor; kalıcılık module instance'ında tutuluyor.
+    var scanned by remember { mutableStateOf(module.lastScannedBlocks) }
 
     // Blok listesi — envanterden gelen varsa onları göster, yoksa tüm palette
     val displayList = remember(scanned) {
@@ -1201,6 +1203,7 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                             scanned = found
                             selected = found
                             module.availableBlocks = found
+                            module.lastScannedBlocks = found
                         }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
@@ -1216,6 +1219,7 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                             selected = emptySet()
                             scanned = emptySet()
                             module.availableBlocks = emptySet()
+                            module.lastScannedBlocks = emptySet()
                         }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {

@@ -31,7 +31,22 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     @Volatile private var loggedFirstSuccess = false
     @Volatile private var loggedFirstFailure = false
 
-    fun init() {
+    init {
+        // NOT: init() çağrısının unutulması/gecikmesi durumuna karşı savunma —
+        // WorldBlockTracker referans alınır alınmaz (örn. hasAnyTerrainData()
+        // çağrısıyla) kendini otomatik kaydeder. register() idempotent olduğu
+        // için dışarıdan ayrıca init() çağırmak hâlâ güvenli ve tavsiye edilir
+        // (asıl kritik nokta: PacketEventBus.setSession(session) her yeni
+        // bağlantıda çağrıldığında WorldBlockTracker.init() de çağrılmalı —
+        // aksi halde PacketEventBus.clear() sonrası (reconnect) bu obje bir
+        // daha ASLA yeniden kaydolmaz çünkü Kotlin object'i sadece bir kez
+        // initialize olur).
+        register()
+    }
+
+    fun init() = register()
+
+    private fun register() {
         PacketEventBus.register(this)
     }
 
@@ -42,17 +57,9 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     @Volatile private var loggedCacheOverride = false
 
-    private fun handleClientCacheStatus(event: PacketEvent, p: ClientCacheStatusPacket) {
+    private fun handleClientCacheStatus(p: ClientCacheStatusPacket) {
         if (p.isSupported) {
             p.isSupported = false
-            // KRİTİK FIX: cancelAndReplace çağrılmadan bu mutation server'a hiç
-            // gitmiyordu (bkz. NexoraRelaySession raw wire passthrough). Server
-            // gerçek client'ın isSupported=true değerini görüp chunk'ları
-            // blob-cache modunda gönderiyordu; handleLevelChunkPacket bunu
-            // decode edemediği için sections HİÇ dolmuyordu, hasAnyTerrainData()
-            // sürekli false dönüyordu — CrystalAura'nın körlemesine "her yerde
-            // obsidian var" varsayıp yanlış yerlere atış yapmasının kök sebebi.
-            event.cancelAndReplace(p)
             if (!loggedCacheOverride) {
                 loggedCacheOverride = true
             }
@@ -65,7 +72,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             is LevelChunkPacket -> handleLevelChunkPacket(p)
             is UpdateBlockPacket -> handleUpdateBlock(p)
             is UpdateSubChunkBlocksPacket -> handleUpdateSubChunkBlocks(p)
-            is ClientCacheStatusPacket -> handleClientCacheStatus(event, p)
+            is ClientCacheStatusPacket -> handleClientCacheStatus(p)
             is ChangeDimensionPacket -> reset()
             else -> {}
         }

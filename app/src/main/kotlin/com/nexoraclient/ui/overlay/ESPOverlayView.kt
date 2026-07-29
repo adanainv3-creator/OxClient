@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.view.View
 import com.nexoraclient.module.ModuleManager
+import com.nexoraclient.module.movement.AutoMapArt
 import com.nexoraclient.module.visual.ArrayListModule
 import com.nexoraclient.module.visual.ESP
 import com.nexoraclient.module.visual.EnemyESP
@@ -24,6 +25,7 @@ class ESPOverlayView(context: Context) : View(context) {
     private val enemyEspModule: EnemyESP? by lazy { ModuleManager.byName("EnemyESP") as? EnemyESP }
     private val xrayModule: Xray? by lazy { ModuleManager.byName("Xray") as? Xray }
     private val arrayListModule: ArrayListModule? by lazy { ModuleManager.byName("Mod List") as? ArrayListModule }
+    private val autoMapArtModule: AutoMapArt? by lazy { ModuleManager.byName("AutoMapArt") as? AutoMapArt }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -46,6 +48,11 @@ class ESPOverlayView(context: Context) : View(context) {
         val arrayList = arrayListModule
         if (arrayList != null && arrayList.isEnabled) {
             try { arrayList.render(canvas, width, height) } catch (_: Exception) {}
+        }
+
+        val autoMapArt = autoMapArtModule
+        if (autoMapArt != null && autoMapArt.isEnabled) {
+            try { autoMapArt.render(canvas, width, height) } catch (_: Exception) {}
         }
 
         postInvalidateOnAnimation()
