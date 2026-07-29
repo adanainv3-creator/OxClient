@@ -49,8 +49,11 @@ class ChatSpammer : BaseModule(
         )
     }
 
-    private val shortcut = bool("Shortcut", false)
+    // ---------- Modül seçenekleri ----------
+    private val shortcut = bool("Shortcut", false)        // (Şu an kullanılmıyor, ileride kısayol için)
+    private val totemCounter = bool("TotemCounter", true) // Totem pop sayacını aç/kapa
 
+    // ---------- Durum tabloları ----------
     private val popCounts = ConcurrentHashMap<String, Int>()
     private val recentPopMs = ConcurrentHashMap<Long, Long>()
     private val pendingRegen      = ConcurrentHashMap<Long, Long>()
@@ -67,12 +70,14 @@ class ChatSpammer : BaseModule(
     private data class PlayerSnapshot(val name: String, val x: Float, val y: Float, val z: Float, val isFriend: Boolean)
     private val playerSnapshots = ConcurrentHashMap<Long, PlayerSnapshot>()
 
+    // ---------- Paket işleyici ----------
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         activeSession = event.session
 
         when (val p = event.packet) {
 
+            // ---------- Chat mesajlarına prefix ekle ----------
             is TextPacket -> {
                 if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
                 if (p.sourceName == "__ox_internal__") return
@@ -84,23 +89,29 @@ class ChatSpammer : BaseModule(
                 event.cancelAndReplace(buildTextPacket(formatted))
             }
 
+            // ---------- EntityEventPacket (Totem veya Ölüm) ----------
             is EntityEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
 
+                // Ölüm işlemi her zaman çalışır
                 if (typeStr.contains("DEATH")) {
                     handleDeath(p.runtimeEntityId)
                     return
                 }
 
-                if (!typeStr.contains("TOTEM")) return
-                handleTotemPop(p.runtimeEntityId)
+                // Totem pop – sadece seçenek açıkken
+                if (typeStr.contains("TOTEM") && totemCounter.get()) {
+                    handleTotemPop(p.runtimeEntityId)
+                }
             }
 
+            // ---------- LevelEventPacket (Totem patlama efekti) ----------
             is LevelEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
+                if (!totemCounter.get()) return
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (!typeStr.contains("TOTEM")) return
@@ -121,9 +132,11 @@ class ChatSpammer : BaseModule(
                 handleTotemPop(nearest.runtimeId)
             }
 
+            // ---------- MobEffectPacket (Regen + Absorption kombinasyonu) ----------
             is MobEffectPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
+                if (!totemCounter.get()) return
 
                 val eventStr = runCatching { p.event?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (!eventStr.contains("ADD")) return
@@ -145,6 +158,7 @@ class ChatSpammer : BaseModule(
                 }
             }
 
+            // ---------- InventoryTransaction (Kendi vuruşumuzu takip) ----------
             is InventoryTransactionPacket -> {
                 if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
                 if (p.transactionType != InventoryTransactionType.ITEM_USE_ON_ENTITY) return
@@ -152,6 +166,7 @@ class ChatSpammer : BaseModule(
                 recentHitsByMe[p.runtimeEntityId] = System.currentTimeMillis()
             }
 
+            // ---------- PlayerListPacket (Oyuncu çıkışı – logout) ----------
             is PlayerListPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
 
@@ -169,9 +184,6 @@ class ChatSpammer : BaseModule(
                     val tracked = EntityTracker.getByUniqueId(entry.entityId)
                     val snap    = playerSnapshots[entry.entityId]
 
-                    // tracked genelde burada zaten null oluyor: RemoveEntityPacket, PlayerListPacket'ten
-                    // önce gelip entity'yi EntityTracker'dan siliyor. O yüzden mesafe/isim/friend
-                    // kontrolü için periyodik snapshot'a düşüyoruz, tracked'e zorunlu bağımlı değiliz.
                     val isFriend = tracked?.isFriendEntity ?: snap?.isFriend ?: false
                     if (isFriend) {
                         knownPlayerNames.remove(entry.entityId)
@@ -203,8 +215,10 @@ class ChatSpammer : BaseModule(
         }
     }
 
+    // ---------- Modül yaşam döngüsü ----------
     override fun onEnable() {
         super.onEnable()
+        // Tüm geçici verileri temizle
         popCounts.clear()
         recentPopMs.clear()
         pendingRegen.clear()
@@ -239,6 +253,7 @@ class ChatSpammer : BaseModule(
         scheduler = null
     }
 
+    // ---------- Yardımcı fonksiyonlar ----------
     private fun refreshPlayerSnapshots() {
         EntityTracker.getPlayers().forEach { e ->
             if (e.runtimeId == EntityTracker.selfRuntimeId) return@forEach
@@ -258,6 +273,7 @@ class ChatSpammer : BaseModule(
         messageQueue.offer(message)
     }
 
+    // ---------- Totem pop işleyicisi ----------
     private fun handleTotemPop(runtimeId: Long) {
         val entity = EntityTracker.getById(runtimeId)
         if (entity?.isFriendEntity == true) return
@@ -279,6 +295,7 @@ class ChatSpammer : BaseModule(
         enqueue(text)
     }
 
+    // ---------- Ölüm işleyicisi ----------
     private fun handleDeath(runtimeId: Long) {
         val entity = EntityTracker.getById(runtimeId) ?: return
         if (!entity.isPlayer) return
@@ -297,6 +314,7 @@ class ChatSpammer : BaseModule(
         enqueue("> @here EZ @$name killed by Nexora Client | ${randomJunk()}")
     }
 
+    // ---------- Logout işleyicisi ----------
     private fun handleLogout(uniqueId: Long, name: String) {
         val now = System.currentTimeMillis()
         val last = recentLogoutMs[uniqueId]
@@ -306,6 +324,7 @@ class ChatSpammer : BaseModule(
         enqueue("> @$name Ez Logged | ${randomJunk()}")
     }
 
+    // ---------- Paket oluşturucu ----------
     private fun buildTextPacket(message: String): TextPacket = TextPacket().apply {
         type               = TextPacket.Type.CHAT
         isNeedsTranslation = false
@@ -316,6 +335,7 @@ class ChatSpammer : BaseModule(
         setFilteredMessage("")
     }
 
+    // ---------- Rastgele saçma karakter üretici ----------
     private fun randomJunk(): String {
         val len = Random.nextInt(JUNK_RANGE.first, JUNK_RANGE.last + 1)
         return buildString(len) { repeat(len) { append(JUNK_CHARS[Random.nextInt(JUNK_CHARS.length)]) } }
