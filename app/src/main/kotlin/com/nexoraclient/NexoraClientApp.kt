@@ -16,7 +16,7 @@ import com.nexoraclient.module.ModuleManager
 import com.nexoraclient.module.social.FriendManager
 import com.nexoraclient.module.combat.AutoArmor
 import com.nexoraclient.module.movement.AutoScaffold  // Yeni eklenen import
-import com.nexoraclient.module.movement.AutoMapArt
+import com.nexoraclient.module.misc.AutoMapArt
 import com.nexoraclient.module.combat.AutoTotem
 import com.nexoraclient.module.combat.Criticals
 import com.nexoraclient.module.misc.InventoryHelper
