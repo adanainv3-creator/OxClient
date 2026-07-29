@@ -118,6 +118,7 @@ object EntityTracker : PacketEventBus.PacketListener {
     @Volatile var selfSpeedXZ    : Float   = 0f
 
     @Volatile var selfHotbarSlot : Int     = 0
+    @Volatile var selfIsRaining  : Boolean = false
 
     @Volatile var inventoriesServerAuthoritative: Boolean = true
 
@@ -190,6 +191,7 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfHealth = 20f; selfMaxHealth = 20f; selfAbsorb = 0f; selfArmor = 0f
         selfHunger = 20f; selfSaturation = 5f; selfOnGround = true
         selfGameMode = 0; selfDimension = 0; selfSpeedXZ = 0f
+        selfIsRaining = false
         prevSelfX = 0f; prevSelfZ = 0f
         inventoriesServerAuthoritative = true
         _entityCountFlow.value = 0; _selfHealthFlow.value = 20f
@@ -209,6 +211,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             is UpdateAttributesPacket   -> handleAttributes(p)
             is PlayerListPacket         -> handlePlayerList(p)
             is EntityEventPacket        -> handleEntityEvent(p)
+            is LevelEventPacket         -> handleLevelEvent(p)
             is SetPlayerGameTypePacket  -> selfGameMode = p.gamemode
             is RespawnPacket            -> if (p.state == RespawnPacket.State.SERVER_SEARCHING) { selfX = p.position.x; selfY = p.position.y; selfZ = p.position.z }
             is ChangeDimensionPacket    -> handleDimension(p)
@@ -234,6 +237,17 @@ object EntityTracker : PacketEventBus.PacketListener {
         selfYaw = p.rotation.y; selfPitch = p.rotation.x
         selfGameMode = p.playerGameType.ordinal
         inventoriesServerAuthoritative = p.isInventoriesServerAuthoritative
+    }
+
+    // START_RAIN / STOP_RAIN (ve fırtına) LevelEventPacket ile geliyor.
+    // Trident/riptide gibi yağmura bağlı mekanikler bu bayrağı okuyabilsin diye
+    // sadece global bir durum bayrağı tutuyoruz, entity ile ilgisi yok.
+    private fun handleLevelEvent(p: LevelEventPacket) {
+        val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
+        when {
+            typeStr.contains("START_RAIN") || typeStr.contains("START_THUNDER") -> selfIsRaining = true
+            typeStr.contains("STOP_RAIN")                                       -> selfIsRaining = false
+        }
     }
 
     private fun handleAddEntity(p: AddEntityPacket) {
