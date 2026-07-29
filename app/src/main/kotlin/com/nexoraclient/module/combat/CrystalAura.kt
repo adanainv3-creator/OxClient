@@ -41,10 +41,7 @@ class CrystalAura : BaseModule(
     enum class PlaceStrategy { Closest, MultiTarget }
 
     companion object {
-        private const val SEARCH_RADIUS   = 2
         private const val SELF_EYE_HEIGHT = 1.62f
-        private const val MAX_BREAKS_PER_TICK = 5
-        private const val MAX_PLACES_PER_TICK = 6
         private const val BLOCK_DEF_SCAN_CAP  = 20000
         private const val BLOCK_DEF_MISS_LIMIT = 64
     }
@@ -53,7 +50,7 @@ class CrystalAura : BaseModule(
     private val place            = bool("Place",              true)
     private val breakCrystals    = bool("Break",               true)
     private val strategy         = enum("Strategy",            PlaceStrategy.MultiTarget)
-    private val tickIntervalMs   = int ("Tick Interval",       20, 20, 200)
+    private val tickIntervalMs   = int ("Tick Interval",       10, 5, 200)
 
     // --- Hedefleme ---
     private val targetRange      = int ("Target Range",   14, 4, 30)
@@ -63,9 +60,11 @@ class CrystalAura : BaseModule(
 
     // --- Yerleştirme ---
     private val placeRange       = int ("Place Range",      8, 2, 16)
-    private val placeDelayMs     = int ("Place Delay",      60, 40, 2000)
-    private val placeRetryMs     = int ("Place Retry Ms",  300, 100, 3000)
-    private val maxPlacePerSec   = int ("Max Place/Sec",    18, 1, 30)
+    private val searchRadius     = int ("Search Radius",    3, 1, 6)
+    private val maxPlacePerTick  = int ("Max Places/Tick",  24, 1, 60)
+    private val placeDelayMs     = int ("Place Delay",      10, 1, 2000)
+    private val placeRetryMs     = int ("Place Retry Ms",  200, 50, 3000)
+    private val maxPlacePerSec   = int ("Max Place/Sec",    60, 1, 200)
     private val searchYBelow     = int ("Search Y Below",     3, 1, 8)
     private val searchYAbove     = int ("Search Y Above",     2, 1, 8)
     private val requireLOS       = bool("Require LOS",         false)
@@ -73,7 +72,7 @@ class CrystalAura : BaseModule(
     // --- Burst (düşük can / totem sonrası) ---
     private val burstOnLowHpTotem   = bool("Burst LowHp/Totem",    true)
     private val burstHealth         = int ("Burst Health Threshold", 8, 1, 20)
-    private val burstMaxPlacePerSec = int ("Burst Max Place/Sec",   28, 1, 40)
+    private val burstMaxPlacePerSec = int ("Burst Max Place/Sec",   90, 1, 250)
     private val burstDurationMs     = int ("Burst Duration Ms",   1500, 200, 5000)
 
     // --- Obsidian ---
@@ -84,7 +83,8 @@ class CrystalAura : BaseModule(
 
     // --- Kırma ---
     private val breakRange       = int ("Break Range",     10, 2, 20)
-    private val breakDelayMs     = int ("Break Delay",      30, 30, 300)
+    private val maxBreakPerTick  = int ("Max Breaks/Tick",  16, 1, 40)
+    private val breakDelayMs     = int ("Break Delay",       5, 1, 300)
     private val breakCrit        = enum("Break Crit",         CritMode.MovePacket)
 
     // --- Görünmezlik / legit davranış ---
@@ -200,7 +200,26 @@ class CrystalAura : BaseModule(
         if (place.value) {
             when (strategy.value) {
                 PlaceStrategy.Closest -> doPlace(targets.first())
-                PlaceStrategy.MultiTarget -> for (t in targets) doPlace(t)
+                PlaceStrategy.MultiTarget -> doPlaceMulti(targets)
+            }
+        }
+    }
+
+    // ÖNEMLİ HIZ FIX: eskiden her hedef için doPlace() kendi içinde ayrı ayrı
+    // prepareItemForUse() çağırıyordu — 3 düşman varsa aynı tick içinde 3 kere
+    // hotbar'a geçip geri dönülüyordu (crystal slotu -> place -> revert, x3).
+    // Bu hem gereksiz gecikme hem de sunucuya art arda hotbar-select spam'i
+    // demekti. Artık kristal slotu MultiTarget başına TEK SEFER hazırlanıp tüm
+    // hedeflere aynı prepared item ile yerleştirme yapılıyor, sonda tek revert.
+    private fun doPlaceMulti(targets: List<EntityTracker.TrackedEntity>) {
+        val session = PacketEventBus.currentSession ?: return
+        val prepared = prepareItemForUse(session, "minecraft:end_crystal") ?: return
+        try {
+            for (t in targets) doPlace(t, session, prepared)
+        } finally {
+            prepared.revertTo?.let {
+                InventoryUtil.sendHotbarSelect(session, it)
+                EntityTracker.selfHotbarSlot = it
             }
         }
     }
@@ -212,7 +231,14 @@ class CrystalAura : BaseModule(
             .filter { it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { !friendSkip.value || !it.isFriendEntity }
             .filter { MathUtil.dist3(it.x, it.y, it.z, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) > 0.15f }
-            .sortedBy { EntityTracker.distanceTo(it) }
+            // ÖNCELİK: burst-eligible (düşük can / totem sonrası) hedefler önce —
+            // bitirilmeye yakın hedefe odaklanmak, sadece en yakın hedefe bakmaktan
+            // daha "OP" sonuç veriyor (kill'i tamamlamak, dağınık az-hasar yerine).
+            .sortedWith(
+                compareByDescending<EntityTracker.TrackedEntity> { isBurstTarget(it) }
+                    .thenBy { it.health }
+                    .thenBy { EntityTracker.distanceTo(it) }
+            )
             .toList()
     }
 
@@ -224,19 +250,19 @@ class CrystalAura : BaseModule(
         return Triple(target.x + vx * (t * 20f), target.y, target.z + vz * (t * 20f))
     }
 
-    private fun doPlace(target: EntityTracker.TrackedEntity) {
+    private fun doPlace(target: EntityTracker.TrackedEntity, sharedSession: NexoraRelaySession? = null, sharedPrepared: PreparedItem? = null) {
         val now = System.currentTimeMillis()
         val last = lastPlaceMsMap[target.runtimeId] ?: 0L
         if (now - last < placeDelayMs.value) return
         // ÖNEMLİ FIX: cooldown artık DENEME anında başlıyor, sadece başarılı
         // yerleştirmede değil. Eskiden yerleştirme sürekli başarısız olduğunda
         // (uygun yüzey yok / LOS engelli / hedef pending vb.) bu satır hiç
-        // çalışmıyordu, bu yüzden pahalı 5x5 aday taraması (MultiTarget modda
+        // çalışmıyordu, bu yüzden pahalı aday taraması (MultiTarget modda
         // hedef başına) her tick (varsayılan 20ms) tekrar tekrar çalışıp asıl
         // lag kaynağı oluyordu.
         lastPlaceMsMap[target.runtimeId] = now
 
-        val session = PacketEventBus.currentSession ?: return
+        val session = sharedSession ?: PacketEventBus.currentSession ?: return
 
         val (px, py, pz) = predictedPos(target)
         val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()
@@ -247,8 +273,9 @@ class CrystalAura : BaseModule(
         data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val distSq: Float)
         val candidates = mutableListOf<Candidate>()
 
-        for (dx in -SEARCH_RADIUS..SEARCH_RADIUS) {
-            for (dz in -SEARCH_RADIUS..SEARCH_RADIUS) {
+        val radius = searchRadius.value
+        for (dx in -radius..radius) {
+            for (dz in -radius..radius) {
                 val bx = tx + dx; val bz = tz + dz
                 val hit = findSurface(bx, ty, bz) ?: run {
                     if (autoObsidian.value) tryPlaceObsidianSupportAt(session, bx, ty, bz)
@@ -266,22 +293,25 @@ class CrystalAura : BaseModule(
 
         if (candidates.isEmpty()) return
 
-        // Kristal slotunu SADECE BİR KEZ hazırla. Önceden her yerleştirmede ayrı ayrı
-        // switch+revert yapılıyordu — art arda hızlı hotbar değişimi sunucu tarafında
-        // çoğu yerleştirmeyi geçersiz kılıyor, "aynı anda az kristal" bundan kaynaklanıyordu.
-        val prepared = prepareItemForUse(session, "minecraft:end_crystal") ?: return
+        // Kristal slotunu SADECE BİR KEZ hazırla. MultiTarget modunda bu artık
+        // doPlaceMulti() tarafından tüm hedefler için ortaklaşa yapılıyor
+        // (sharedPrepared). Closest modunda ya da tek başına çağrıldığında
+        // burada kendi prepare/revert'ini yapar.
+        val prepared = sharedPrepared ?: prepareItemForUse(session, "minecraft:end_crystal") ?: return
 
         for (c in candidates.sortedBy { it.distSq }) {
-            if (placedThisTick >= MAX_PLACES_PER_TICK) break
+            if (placedThisTick >= maxPlacePerTick.value) break
             if (!takePlaceToken(burst)) break
             if (tryPlaceCrystalAt(session, prepared, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) {
                 placedThisTick++
             }
         }
 
-        prepared.revertTo?.let {
-            InventoryUtil.sendHotbarSelect(session, it)
-            EntityTracker.selfHotbarSlot = it
+        if (sharedPrepared == null) {
+            prepared.revertTo?.let {
+                InventoryUtil.sendHotbarSelect(session, it)
+                EntityTracker.selfHotbarSlot = it
+            }
         }
     }
 
@@ -366,7 +396,7 @@ class CrystalAura : BaseModule(
         if (crystals.isEmpty()) return
         lastBreakMs = now
 
-        val toBreak = crystals.sortedBy { EntityTracker.distanceTo(it) }.take(MAX_BREAKS_PER_TICK)
+        val toBreak = crystals.sortedBy { EntityTracker.distanceTo(it) }.take(maxBreakPerTick.value)
 
         for (c in toBreak) scope.launch { attackCrystal(c.runtimeId, session) }
     }

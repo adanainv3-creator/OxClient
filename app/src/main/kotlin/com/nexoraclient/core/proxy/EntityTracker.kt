@@ -1,3 +1,4 @@
+
 package com.nexoraclient.core.proxy
 
 import com.nexoraclient.events.PacketEvent
@@ -168,10 +169,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
             stream?.use { it.readBytes() }
             conn.disconnect()
-        } catch (e: Exception) {
-            // Hata sessize alınmıştı – artık loglayalım ki sorun görünsün
-            android.util.Log.e(TAG, "Position report failed", e)
-        }
+        } catch (_: Exception) { }
     }
 
     fun reset() {
@@ -209,28 +207,24 @@ object EntityTracker : PacketEventBus.PacketListener {
             is PlayerAuthInputPacket    -> handleAuthInput(p, event.direction)
             is MobEquipmentPacket       -> handleMobEquipment(p, event.direction)
             is PlayerHotbarPacket       -> handlePlayerHotbar(p, event.direction)
-            is InventoryContentPacket   -> handleInventoryContent(p)
-            is InventorySlotPacket      -> handleInventorySlot(p)
+            is InventoryContentPacket   -> {
+                handleInventoryContent(p)
+            }
+            is InventorySlotPacket      -> {
+                handleInventorySlot(p)
+            }
+            is org.cloudburstmc.protocol.bedrock.packet.UnknownPacket -> {
+            }
             else -> {}
         }
     }
 
     private fun handleStartGame(p: StartGamePacket) {
-        selfRuntimeId = p.runtimeEntityId
-        selfUniqueId  = p.uniqueEntityId
-        selfX = p.playerPosition.x
-        selfY = p.playerPosition.y
-        selfZ = p.playerPosition.z
-        selfYaw = p.rotation.y
-        selfPitch = p.rotation.x
+        selfRuntimeId = p.runtimeEntityId; selfUniqueId = p.uniqueEntityId
+        selfX = p.playerPosition.x; selfY = p.playerPosition.y; selfZ = p.playerPosition.z
+        selfYaw = p.rotation.y; selfPitch = p.rotation.x
         selfGameMode = p.playerGameType.ordinal
         inventoriesServerAuthoritative = p.isInventoriesServerAuthoritative
-
-        // 🔥 Kendi oyuncu ismini burada kaydet – eskiden eksikti
-        val playerName = p.playerName ?: ""
-        if (playerName.isNotBlank()) {
-            playerNames[selfUniqueId] = playerName
-        }
     }
 
     private fun handleAddEntity(p: AddEntityPacket) {
@@ -250,6 +244,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             velY       = p.motion.y,
             velZ       = p.motion.z,
         )
+        // Önce entity'yi kaydet, metadata'yı IO thread dışında decode et
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
         trackAdd(e)
         notifyUpdate()
@@ -277,6 +272,7 @@ object EntityTracker : PacketEventBus.PacketListener {
             velZ       = p.motion.z,
             name       = p.username ?: "",
         )
+        // Önce entity'yi kaydet, metadata'yı IO thread dışında decode et
         entities[p.runtimeEntityId] = e; uniqueToRuntime[p.uniqueEntityId] = p.runtimeEntityId
         trackAdd(e)
         notifyUpdate()
@@ -309,6 +305,10 @@ object EntityTracker : PacketEventBus.PacketListener {
         val flags: Set<*>? = try { p.flags } catch (_: Exception) { null }
 
         if (flags != null && flags.isNotEmpty()) {
+            // Bu paket her hareket eden entity için her tick'te geliyor - flag başına
+            // toString()+uppercase() eskiden her tick her entity için yeni bir String
+            // allocate ediyordu (GC baskısı = FPS düşüşü). Enum sabit isimleri zaten
+            // büyük harf olduğundan uppercase() gereksizdi, kaldırıldı.
             for (flag in flags) {
                 when (flag.toString()) {
                     "HAS_X"        -> e.x       += p.x
@@ -357,6 +357,10 @@ object EntityTracker : PacketEventBus.PacketListener {
         if (p.runtimeEntityId != selfRuntimeId && p.runtimeEntityId != 0L) return
         if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
             selfHotbarSlot = p.hotbarSlot
+            // MobEquipmentPacket asıl item verisini de taşıyor (item alanı) - envanter
+            // takibinin InventoryContentPacket/InventorySlotPacket senkronizasyonuna bağımlı
+            // kalmaması için burada da direkt yazıyoruz. Bu, iki paket arasında oluşabilecek
+            // sıralama/gecikme farkından kaynaklı bayat item verisini engeller.
             val item = p.item
             if (item != null && !isEmptyItem(item)) {
                 selfInventory[p.hotbarSlot] = item
@@ -367,6 +371,9 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     private fun handlePlayerHotbar(p: PlayerHotbarPacket, dir: PacketEvent.Direction) {
+        // Gerçek cihaz hotbar tuşuyla (1-9) slot değiştirdiğinde item değişmiyorsa
+        // MobEquipmentPacket DEĞİL, bu paket gönderiliyor. Bu dinlenmezse selfHotbarSlot
+        // bayatlaşıyor ve KillAura/CrystalAura yanlış (boş) slotu kullanıp yumruk hasarı verir.
         if (dir != PacketEvent.Direction.CLIENT_TO_SERVER) return
         if (!p.isSelectHotbarSlot) return
         if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
@@ -403,7 +410,10 @@ object EntityTracker : PacketEventBus.PacketListener {
         }
     }
 
-    // PlayerListEntry için ping alanı cache'lenmiştir
+    // PlayerListEntry sınıfı için ping alanı reflection'ı bir kere çözülüp cache'leniyor.
+    // Öncesinde her oyuncu girişi için, her PlayerListPacket'te getDeclaredField() ile
+    // yeniden çözülüyordu — reflection lookup pahalıdır ve tekrar tekrar yapılmasına
+    // gerek yok, alan adı/tipi paket boyunca değişmiyor.
     private object PingFieldCache {
         @Volatile private var resolved = false
         @Volatile private var field: java.lang.reflect.Field? = null
@@ -587,6 +597,9 @@ object EntityTracker : PacketEventBus.PacketListener {
     fun getByUniqueId(uid: Long) = uniqueToRuntime[uid]?.let { entities[it] }
     fun getByName(name: String)  = entities.values.firstOrNull { it.name.equals(name, ignoreCase = true) }
 
+    // Bu sorgular render/combat modülleri tarafından her frame çağrılabiliyor. Eskiden
+    // range + type için ayrı ayrı .filter{} zincirleri her çağrıda birden fazla ArrayList
+    // allocate ediyordu. Şimdi tek geçişte (single-pass), gereksiz ara liste olmadan filtreleniyor.
     fun getEntitiesInRange(range: Float, predicate: (TrackedEntity) -> Boolean = { true }): List<TrackedEntity> {
         val r2 = range * range
         val out = ArrayList<TrackedEntity>()
@@ -600,6 +613,9 @@ object EntityTracker : PacketEventBus.PacketListener {
     fun getHostiles(range: Float = Float.MAX_VALUE) = getEntitiesInRange(range) { it.isHostile }
     fun getCrystals(range: Float = Float.MAX_VALUE) = getEntitiesInRange(range) { it.isCrystal }
 
+    // Sadece en yakını bulmak için gerçek mesafe (sqrt) gerekmez — sıralama karesi alınmış
+    // mesafeyle aynıdır. sqrt() maliyeti ve ara liste allokasyonu tamamen kaldırıldı: tek
+    // geçişte, allocation yapmadan hem filtreleme hem "en yakın" karşılaştırması yapılıyor.
     private inline fun nearestInRange(range: Float, predicate: (TrackedEntity) -> Boolean): TrackedEntity? {
         val r2 = range * range
         var best: TrackedEntity? = null
@@ -630,6 +646,9 @@ object EntityTracker : PacketEventBus.PacketListener {
     fun isLowHealth(t: Float = 6f)      = selfHealth <= t
     fun isCriticalHealth(t: Float = 3f) = selfHealth <= t
 
+    // playerCount()/hostileCount() her çağrıda tüm entity haritasını taramak yerine
+    // artık add/remove noktalarında güncellenen sayaçları okuyor (O(1), her frame HUD
+    // tarafından çağrılsa bile maliyetsiz).
     fun count()        = entities.size
     fun playerCount()  = playerCounter.get()
     fun hostileCount() = hostileCounter.get()
