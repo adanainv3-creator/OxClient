@@ -59,6 +59,9 @@ object Definitions {
         val fallbackBlockFile = blockFiles.firstOrNull { extractVersion(it) == null }
             ?: blockFiles.firstOrNull()
 
+        // Cache loaded block palettes to avoid OOM
+        val blockPaletteCache = mutableMapOf<String, Pair<DefinitionRegistry<BlockDefinition>, DefinitionRegistry<BlockDefinition>>>()
+
         for (itemFile in itemFiles) {
             val version = extractVersion(itemFile)
             if (version == null) {
@@ -71,7 +74,11 @@ object Definitions {
             }
 
             try {
-                val (blocks, blocksHashed) = loadBlockPalette(context, blockFile)
+                // Load block palette only if not already cached
+                val (blocks, blocksHashed) = blockPaletteCache.getOrPut(blockFile) {
+                    loadBlockPalette(context, blockFile)
+                }
+                
                 val items = loadItemPalette(context, itemFile)
                 registry[version] = VersionedDefinitions(version, blocks, blocksHashed, items)
             } catch (e: Exception) {
