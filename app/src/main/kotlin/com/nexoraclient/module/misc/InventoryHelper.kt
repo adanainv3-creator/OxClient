@@ -115,7 +115,7 @@ class InventoryHelper : BaseModule(
         super.onDisable()
     }
 
-    private fun buildSlotPlan(): arrayOfNulls<SlotTarget> {
+    private fun buildSlotPlan(): Array<SlotTarget?> {
         val plan = arrayOfNulls<SlotTarget>(HOTBAR_SIZE)
         var slot = 0
         for (rule in rules) {

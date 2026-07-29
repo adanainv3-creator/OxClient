@@ -515,7 +515,7 @@ class AutoMapArt : BaseModule(
 
         InventoryUtil.sendInventoryMove(
             session           = session,
-            sourceContainer   = ContainerSlotType.CONTAINER,
+            sourceContainer   = ContainerSlotType.LEVEL_ENTITY,
             sourceContainerId = openContainerId,
             sourceSlot        = slotIndex,
             sourceItem        = sourceItem,
@@ -889,7 +889,7 @@ class AutoMapArt : BaseModule(
     }
 
     private inner class MapArtPathRunner(start: Vector3i, private val goal: Vector3i) {
-        private companion object { const val PATH_FOLLOWING_TIMEOUT = 200 }
+        private val PATH_FOLLOWING_TIMEOUT = 200
 
         var active = true
             private set
