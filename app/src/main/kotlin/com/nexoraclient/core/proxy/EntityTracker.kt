@@ -69,7 +69,8 @@ object EntityTracker : PacketEventBus.PacketListener {
         var prevY        : Float   = 0f,
         var prevZ        : Float   = 0f,
         var hurtTime     : Int     = 0,
-        var deathAnim    : Boolean = false
+        var deathAnim    : Boolean = false,
+        var offHandItem  : ItemData? = null
     ) {
         val speedXZ     : Float   get() = MathUtil.dist2(x, z, prevX, prevZ)
         val isMoving    : Boolean get() = speedXZ > 0.01f
@@ -376,21 +377,34 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleMobEquipment(p: MobEquipmentPacket, dir: PacketEvent.Direction) {
-        if (dir != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        if (p.runtimeEntityId != selfRuntimeId && p.runtimeEntityId != 0L) return
-        if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
-            selfHotbarSlot = p.hotbarSlot
-            // MobEquipmentPacket asıl item verisini de taşıyor (item alanı) - envanter
-            // takibinin InventoryContentPacket/InventorySlotPacket senkronizasyonuna bağımlı
-            // kalmaması için burada da direkt yazıyoruz. Bu, iki paket arasında oluşabilecek
-            // sıralama/gecikme farkından kaynaklı bayat item verisini engeller.
-            val item = p.item
-            if (item != null && !isEmptyItem(item)) {
-                selfInventory[p.hotbarSlot] = item
-            } else {
-                selfInventory.remove(p.hotbarSlot)
+        if (dir == PacketEvent.Direction.CLIENT_TO_SERVER) {
+            if (p.runtimeEntityId != selfRuntimeId && p.runtimeEntityId != 0L) return
+            if (p.containerId == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.INVENTORY) {
+                selfHotbarSlot = p.hotbarSlot
+                // MobEquipmentPacket asıl item verisini de taşıyor (item alanı) - envanter
+                // takibinin InventoryContentPacket/InventorySlotPacket senkronizasyonuna bağımlı
+                // kalmaması için burada da direkt yazıyoruz. Bu, iki paket arasında oluşabilecek
+                // sıralama/gecikme farkından kaynaklı bayat item verisini engeller.
+                val item = p.item
+                if (item != null && !isEmptyItem(item)) {
+                    selfInventory[p.hotbarSlot] = item
+                } else {
+                    selfInventory.remove(p.hotbarSlot)
+                }
             }
+            return
         }
+
+        // SERVER_TO_CLIENT: sunucu başka oyuncuların equipment (özellikle offhand)
+        // değişikliklerini bu paketle bize yayınlar — totem takibi/pop sayacı gibi
+        // özellikler başka oyuncuların offhand'ine bakabilsin diye burada tutuyoruz.
+        if (dir != PacketEvent.Direction.SERVER_TO_CLIENT) return
+        if (p.runtimeEntityId == selfRuntimeId) return
+        if (p.containerId != org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId.OFFHAND) return
+
+        val e = entities[p.runtimeEntityId] ?: return
+        val item = p.item
+        e.offHandItem = if (item != null && !isEmptyItem(item)) item else null
     }
 
     private fun handlePlayerHotbar(p: PlayerHotbarPacket, dir: PacketEvent.Direction) {

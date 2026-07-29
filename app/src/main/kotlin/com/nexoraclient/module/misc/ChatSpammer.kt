@@ -37,6 +37,14 @@ class ChatSpammer : BaseModule(
         private const val TOTEM_EVENT_RADIUS = 3f
         private const val SELF_HIT_WINDOW_MS = 3000L
         private const val SNAPSHOT_INTERVAL_MS = 1000L
+
+        // ---------- PC Counter (offhand-polling tabanlı alternatif algılama) ----------
+        private const val PC_COUNTER_POLL_INTERVAL_MS = 150L
+        private const val PC_COUNTER_DEBOUNCE_MS = 1200L
+        private const val PC_COUNTER_RANGE = 100f
+        // VARSAYIM: Bedrock'ta item kimliği string identifier ile tutuluyor
+        // (numeric legacy id değil). Projende farklıysa değiştir.
+        private const val TOTEM_ITEM_IDENTIFIER = "minecraft:totem_of_undying"
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
         private val JUNK_RANGE = 12..22
 
@@ -52,6 +60,8 @@ class ChatSpammer : BaseModule(
     // ---------- Modül seçenekleri ----------
     private val shortcut = bool("Shortcut", false)        // (Şu an kullanılmıyor, ileride kısayol için)
     private val totemCounter = bool("TotemCounter", true) // Totem pop sayacını aç/kapa
+    private val pcCounterMode = bool("Offhand Polling Mode", false)   // Açıkken: offhand-polling tabanlı algılamaya geç, diğer (event tabanlı) totem yolları devre dışı kalır
+    private val pcCounterSendChat = bool("Send Chat", true) // Referans koddaki SendChat karşılığı — varsayılan kapalı
 
     // ---------- Durum tabloları ----------
     private val popCounts = ConcurrentHashMap<String, Int>()
@@ -69,6 +79,11 @@ class ChatSpammer : BaseModule(
 
     private data class PlayerSnapshot(val name: String, val x: Float, val y: Float, val z: Float, val isFriend: Boolean)
     private val playerSnapshots = ConcurrentHashMap<Long, PlayerSnapshot>()
+
+    // ---------- PC Counter durum tabloları ----------
+    private val lastHadTotem   = ConcurrentHashMap<Long, Boolean>()
+    private val pcPopCounts    = ConcurrentHashMap<String, Int>()
+    private val pcRecentPopMs  = ConcurrentHashMap<Long, Long>()
 
     // ---------- Paket işleyici ----------
     override fun onPacket(event: PacketEvent) {
@@ -92,15 +107,22 @@ class ChatSpammer : BaseModule(
             // ---------- EntityEventPacket (Totem veya Ölüm) ----------
             is EntityEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
-                if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
+
+                // Kendi ölümüm — PC Counter state'ini (respawn sonrası) temizle
+                if (p.runtimeEntityId == EntityTracker.selfRuntimeId) {
+                    if (typeStr.contains("DEATH")) resetPcCounterState()
+                    return
+                }
 
                 // Ölüm işlemi her zaman çalışır
                 if (typeStr.contains("DEATH")) {
                     handleDeath(p.runtimeEntityId)
                     return
                 }
+
+                if (pcCounterMode.value) return // Bu modda diğer totem algılama yolları kapalı
 
                 // Totem pop – sadece seçenek açıkken
                 if (typeStr.contains("TOTEM") && totemCounter.value) {
@@ -112,6 +134,7 @@ class ChatSpammer : BaseModule(
             is LevelEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (!totemCounter.value) return
+                if (pcCounterMode.value) return // Bu modda diğer totem algılama yolları kapalı
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (!typeStr.contains("TOTEM")) return
@@ -137,6 +160,7 @@ class ChatSpammer : BaseModule(
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
                 if (!totemCounter.value) return
+                if (pcCounterMode.value) return // Bu modda diğer totem algılama yolları kapalı
 
                 val eventStr = runCatching { p.event?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (!eventStr.contains("ADD")) return
@@ -229,10 +253,14 @@ class ChatSpammer : BaseModule(
         knownPlayerNames.clear()
         playerSnapshots.clear()
         messageQueue.clear()
+        lastHadTotem.clear()
+        pcPopCounts.clear()
+        pcRecentPopMs.clear()
 
         scheduler = Executors.newSingleThreadScheduledExecutor().also {
             it.scheduleWithFixedDelay({ flushQueue() }, 0, QUEUE_DELAY_MS, TimeUnit.MILLISECONDS)
             it.scheduleWithFixedDelay({ refreshPlayerSnapshots() }, 0, SNAPSHOT_INTERVAL_MS, TimeUnit.MILLISECONDS)
+            it.scheduleWithFixedDelay({ pollTotemsPcCounter() }, 0, PC_COUNTER_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS)
         }
     }
 
@@ -248,6 +276,9 @@ class ChatSpammer : BaseModule(
         knownPlayerNames.clear()
         playerSnapshots.clear()
         messageQueue.clear()
+        lastHadTotem.clear()
+        pcPopCounts.clear()
+        pcRecentPopMs.clear()
 
         scheduler?.shutdownNow()
         scheduler = null
@@ -273,7 +304,77 @@ class ChatSpammer : BaseModule(
         messageQueue.offer(message)
     }
 
-    // ---------- Totem pop işleyicisi ----------
+    // ---------- PC Counter: offhand-polling tabanlı alternatif totem algılama ----------
+    // Referans: C++ PopCounter.cpp — her tick offhand slotunu okuyup totem varken
+    // yoksa "pop" sayıyor. Event tabanlı yollardan (EntityEventPacket/LevelEventPacket/
+    // MobEffectPacket) daha az güvenilir: gerçek bir hasar/patlama sinyaliyle
+    // doğrulama yapmıyor, sadece item'ın kaybolduğunu görüyor.
+    //
+    // BİLİNEN KISITLAMA: Oyuncu totemi patlatmadan elle offhand'den çıkarıp başka
+    // bir item takarsa (veya item'ı düşürürse) bu da yanlışlıkla "pop" sayılır.
+    // pcCounterMode açıkken diğer (daha güvenilir) event tabanlı yollar bilerek
+    // devre dışı bırakıldığından burada çapraz doğrulama yapılamıyor.
+    //
+    // VARSAYIM (doğrulaman lazım): TrackedEntity üzerinde başka oyuncuların offhand
+    // item'ına erişim olduğunu varsayıyorum (`e.offHandIdentifier`). Projende böyle
+    // bir alan yoksa, MobEquipmentPacket'i (inventorySlot = OFFHAND) dinleyip
+    // EntityTracker'a bu bilgiyi eklemen gerekiyor — Bedrock diğer oyuncuların
+    // equipment değişikliklerini bu paketle broadcast eder.
+    private fun pollTotemsPcCounter() {
+        if (!isEnabled || !totemCounter.value || !pcCounterMode.value) return
+
+        val activeRuntimeIds = HashSet<Long>()
+
+        EntityTracker.getPlayers().forEach { e ->
+            if (e.runtimeId == EntityTracker.selfRuntimeId) return@forEach
+
+            if (e.isFriendEntity) {
+                lastHadTotem.remove(e.runtimeId)
+                return@forEach
+            }
+
+            val dist = EntityTracker.distanceTo(e)
+            if (dist > PC_COUNTER_RANGE) {
+                lastHadTotem.remove(e.runtimeId)
+                return@forEach
+            }
+
+            activeRuntimeIds.add(e.runtimeId)
+
+            val hasTotem = runCatching {
+                e.offHandIdentifier == TOTEM_ITEM_IDENTIFIER
+            }.getOrElse { false }
+
+            val had = lastHadTotem[e.runtimeId] ?: false
+            if (had && !hasTotem) {
+                val now = System.currentTimeMillis()
+                val last = pcRecentPopMs[e.runtimeId]
+                if (last == null || now - last >= PC_COUNTER_DEBOUNCE_MS) {
+                    pcRecentPopMs[e.runtimeId] = now
+
+                    val name = e.name.takeIf { it.isNotEmpty() } ?: "unknown"
+                    val count = (pcPopCounts[name] ?: 0) + 1
+                    pcPopCounts[name] = count
+
+                    if (pcCounterSendChat.value) {
+                        enqueue("> @here @$name popped $count totem(s) [PC] | ${randomJunk()}")
+                    }
+                }
+            }
+            lastHadTotem[e.runtimeId] = hasTotem
+        }
+
+        // Artık menzilde/görünür olmayan oyuncuların state'ini temizle
+        lastHadTotem.keys.retainAll(activeRuntimeIds)
+        pcRecentPopMs.keys.retainAll(activeRuntimeIds)
+    }
+
+    private fun resetPcCounterState() {
+        lastHadTotem.clear()
+        pcPopCounts.clear()
+        pcRecentPopMs.clear()
+    }
+    // ---------- Totem pop işleyicisi (event tabanlı) ----------
     private fun handleTotemPop(runtimeId: Long) {
         val entity = EntityTracker.getById(runtimeId)
         if (entity?.isFriendEntity == true) return
