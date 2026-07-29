@@ -103,7 +103,7 @@ class ChatSpammer : BaseModule(
                 }
 
                 // Totem pop – sadece seçenek açıkken
-                if (typeStr.contains("TOTEM") && totemCounter.get()) {
+                if (typeStr.contains("TOTEM") && totemCounter.value) {
                     handleTotemPop(p.runtimeEntityId)
                 }
             }
@@ -111,7 +111,7 @@ class ChatSpammer : BaseModule(
             // ---------- LevelEventPacket (Totem patlama efekti) ----------
             is LevelEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
-                if (!totemCounter.get()) return
+                if (!totemCounter.value) return
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (!typeStr.contains("TOTEM")) return
@@ -136,7 +136,7 @@ class ChatSpammer : BaseModule(
             is MobEffectPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
-                if (!totemCounter.get()) return
+                if (!totemCounter.value) return
 
                 val eventStr = runCatching { p.event?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (!eventStr.contains("ADD")) return

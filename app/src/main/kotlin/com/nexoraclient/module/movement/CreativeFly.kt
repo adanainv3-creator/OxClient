@@ -16,9 +16,11 @@ class CreativeFly : BaseModule(
     category    = ModuleCategory.MOVEMENT,
     description = "Ability tabanlı native uçuş (MotionFly'daki gibi motion paket hilesi değil)"
 ) {
-    private val flySpeed  = float("Fly Speed",  0.5f, 0.05f, 2.0f)
-    private val walkSpeed = float("Walk Speed", 0.1f, 0.02f, 0.5f)
-    private val keepAlive = bool ("Keep Alive", true) // sunucu abilities'i sıfırlarsa hemen geri uygula
+    // Hızları düşürerek sunucu geri atmalarını azaltıyoruz
+    private val flySpeed          = float("Fly Speed",          0.3f,  0.05f, 2.0f)
+    private val walkSpeed         = float("Walk Speed",         0.05f, 0.02f, 0.5f)
+    private val verticalFlySpeed  = float("Vertical Fly Speed", 0.25f, 0.01f, 1.0f) // Yeni! Dikey uçuş hızı
+    private val keepAlive         = bool ("Keep Alive",         true)
 
     @Volatile private var lastSession: NexoraRelaySession? = null
     @Volatile private var abilitiesSent = false
@@ -59,6 +61,7 @@ class CreativeFly : BaseModule(
     private fun sendAbilities(session: NexoraRelaySession, enabled: Boolean) {
         val fs = if (enabled) flySpeed.value else 0.05f
         val ws = walkSpeed.value
+        val vs = if (enabled) verticalFlySpeed.value else 0.05f // false durumunda da küçük bir değer
 
         val packet = UpdateAbilitiesPacket().apply {
             playerPermission  = if (enabled) PlayerPermission.OPERATOR else PlayerPermission.VISITOR
@@ -76,7 +79,8 @@ class CreativeFly : BaseModule(
                     Ability.ATTACK_PLAYERS,
                     Ability.ATTACK_MOBS,
                     Ability.FLY_SPEED,
-                    Ability.WALK_SPEED
+                    Ability.WALK_SPEED,
+                    Ability.VERTICAL_FLY_SPEED   // ★ EKLENDİ – dikey hareket için gerekli
                 )
                 if (enabled) {
                     values += Ability.MAY_FLY
@@ -85,8 +89,9 @@ class CreativeFly : BaseModule(
                 }
                 abilityValues.addAll(values.toTypedArray())
 
-                this.walkSpeed = ws
-                this.flySpeed  = fs
+                this.walkSpeed        = ws
+                this.flySpeed         = fs
+                this.verticalFlySpeed = vs   // ★ EKLENDİ
             })
         }
         session.clientBound(packet)
