@@ -54,7 +54,7 @@ import com.nexoraclient.config.MapArtPlan
 import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
-import com.nexoraclient.module.movement.AutoMapArt
+import com.nexoraclient.module.misc.AutoMapArt
 import com.nexoraclient.module.social.FriendManager
 import com.nexoraclient.module.social.isFriendEntity
 import com.nexoraclient.session.SessionManager

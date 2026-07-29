@@ -6,6 +6,7 @@ import com.nexoraclient.core.relay.NexoraRelaySession
 import com.nexoraclient.events.PacketEvent
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
+import com.nexoraclient.module.misc.InventoryHelper
 import com.nexoraclient.module.social.isFriendEntity
 import com.nexoraclient.utils.MathUtil
 import com.nexoraclient.utils.PacketUtil
@@ -13,6 +14,7 @@ import com.nexoraclient.utils.CritLock
 import com.nexoraclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
+import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import kotlinx.coroutines.*
 
 /**
@@ -47,6 +49,8 @@ class KillAuraPro : BaseModule(
     private val headLock       = bool ("Head Lock",        true)
     private val headLockSmooth = float("Head Lock Smooth", 1f, 0.01f, 1f)
     private val shortcut      = bool ("Shortcut",      false)
+    private val hurtNotify    = bool ("Hurt Notify",   true)
+    private val autoWeapon    = bool ("AutoWeapon",    true)
 
     @Volatile private var lastAttackMs = 0L
     @Volatile private var headLockYaw   = 0f
@@ -189,8 +193,40 @@ class KillAuraPro : BaseModule(
         val clickPos = Vector3f.from(predPos.first, predPos.second + 1.5f, predPos.third)
 
         PacketUtil.sendSwing(session)
-        val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+
+        // Yağmurda AutoWeapon açıksa InventoryHelper'ın ayırdığı sabit trident
+        // slotundan saldırı gönder (seçili hotbar slotu değişmeden).
+        val rainSlot = InventoryHelper.currentRainTridentSlot
+        val hotbarSlot = if (autoWeapon.value && EntityTracker.selfIsRaining && rainSlot != null) {
+            rainSlot
+        } else {
+            EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+        }
         PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
+
+        if (hurtNotify.value) sendHurtNotification(session, target)
+    }
+
+    // ---------- Sadece kendimize görünen "Hurted" bildirimi ----------
+    // Sunucuya gönderilmiyor; doğrudan client'a paket enjekte ediyoruz, bu yüzden
+    // başka hiçbir oyuncu bu mesajı göremiyor. KillAura.kt ile birebir aynı mantık.
+    private fun sendHurtNotification(session: NexoraRelaySession, target: EntityTracker.TrackedEntity) {
+        val targetName = target.name.takeIf { it.isNotEmpty() } ?: "Player"
+        val text = "§b§lNexoraClient §7§l>>> §c§lHurted §r§7($targetName)"
+
+        val packet = TextPacket().apply {
+            type               = TextPacket.Type.RAW
+            isNeedsTranslation = false
+            sourceName         = ""
+            xuid               = ""
+            platformChatId     = ""
+            setMessage(text)
+            setFilteredMessage("")
+        }
+
+        // NOT: KillAura.kt'deki ile aynı varsayım — client'a paket enjekte eden
+        // metodun adı projede "clientBound" değilse burayı da güncelle.
+        runCatching { session.clientBound(packet) }
     }
 
     // Criticals.kt'deki fix ile birebir aynı prensip: gerçek zaman aralıklı

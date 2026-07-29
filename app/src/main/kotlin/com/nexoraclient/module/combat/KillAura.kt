@@ -2,9 +2,11 @@
 package com.nexoraclient.module.combat
 
 import com.nexoraclient.core.proxy.EntityTracker
+import com.nexoraclient.core.relay.NexoraRelaySession
 import com.nexoraclient.events.PacketEvent
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
+import com.nexoraclient.module.misc.InventoryHelper
 import com.nexoraclient.module.social.isFriendEntity
 import com.nexoraclient.utils.MathUtil
 import com.nexoraclient.utils.PacketUtil
@@ -12,6 +14,7 @@ import com.nexoraclient.utils.CritLock
 import com.nexoraclient.utils.RotationUtil
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 
 class KillAura : BaseModule(
     name        = "KillAura",
@@ -54,6 +57,8 @@ class KillAura : BaseModule(
     private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
+    private val hurtNotify      = bool ("Hurt Notify",      true)
+    private val autoWeapon      = bool ("AutoWeapon",       true)
 
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L
@@ -275,8 +280,41 @@ class KillAura : BaseModule(
             else -> {}
         }
 
-        val hotbarSlot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+        // Yağmur yağıyorsa ve InventoryHelper'da "Rain Trident Priority" açıksa,
+        // o modülün tridenti ayırdığı sabit slottan saldırı paketi gönder
+        // (aktif olarak seçili hotbar slotu değişmeden, riptide/trident için).
+        // AutoWeapon kapalıysa bu davranış tamamen devre dışı kalır.
+        val rainSlot = InventoryHelper.currentRainTridentSlot
+        val hotbarSlot = if (autoWeapon.value && EntityTracker.selfIsRaining && rainSlot != null) {
+            rainSlot
+        } else {
+            EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+        }
         PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
+
+        if (hurtNotify.value) sendHurtNotification(session, e)
+    }
+
+    // ---------- Sadece kendimize görünen "Hurted" bildirimi ----------
+    // Sunucuya gönderilmiyor; doğrudan client'a paket enjekte ediyoruz, bu yüzden
+    // başka hiçbir oyuncu bu mesajı göremiyor.
+    private fun sendHurtNotification(session: NexoraRelaySession, target: EntityTracker.TrackedEntity) {
+        val targetName = target.name.takeIf { it.isNotEmpty() } ?: "Player"
+        val text = "§b§lNexoraClient §7§l>>> §c§lHurted §r§7($targetName)"
+
+        val packet = TextPacket().apply {
+            type               = TextPacket.Type.RAW
+            isNeedsTranslation = false
+            sourceName         = ""
+            xuid               = ""
+            platformChatId     = ""
+            setMessage(text)
+            setFilteredMessage("")
+        }
+
+        // NOT: Bu projede client'a paket enjekte eden metodun adı "clientBound"
+        // değilse (ör. sendToClient), burayı gerçek NexoraRelaySession API'sine göre güncelle.
+        runCatching { session.clientBound(packet) }
     }
 
     private suspend fun injectCrit(s: com.nexoraclient.core.relay.NexoraRelaySession) {

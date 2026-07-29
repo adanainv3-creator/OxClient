@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.view.View
 import com.nexoraclient.module.ModuleManager
-import com.nexoraclient.module.movement.AutoMapArt
+import com.nexoraclient.module.misc.AutoMapArt
 import com.nexoraclient.module.visual.ArrayListModule
 import com.nexoraclient.module.visual.ESP
 import com.nexoraclient.module.visual.EnemyESP

@@ -27,6 +27,7 @@ import com.nexoraclient.module.combat.KillAuraPro
 import com.nexoraclient.module.combat.PcAura
 import com.nexoraclient.module.misc.ChatSpammer
 import com.nexoraclient.module.misc.ChatAdvertiser
+import com.nexoraclient.module.misc.ComboShortcut
 import com.nexoraclient.module.misc.Disconnect
 import com.nexoraclient.module.movement.AntiKnockback
 import com.nexoraclient.module.movement.CreativeFly
@@ -146,7 +147,13 @@ class NexoraClientApp : Application() {
             BypassFly(),
             ChatSpammer(),
             ChatAdvertiser(),
-            Disconnect()
+            Disconnect(),
+            ComboShortcut(1),
+            ComboShortcut(2),
+            ComboShortcut(3),
+            ComboShortcut(4),
+            ComboShortcut(5),
+            ComboShortcut(6)
         )
     }
 }
