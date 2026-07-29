@@ -6,6 +6,7 @@ import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.BaseModule
 import com.nexoraclient.module.ModuleCategory
 import com.nexoraclient.module.social.isFriendEntity
+import com.nexoraclient.utils.InventoryUtil
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
@@ -42,9 +43,6 @@ class ChatSpammer : BaseModule(
         private const val PC_COUNTER_POLL_INTERVAL_MS = 150L
         private const val PC_COUNTER_DEBOUNCE_MS = 1200L
         private const val PC_COUNTER_RANGE = 100f
-        // VARSAYIM: Bedrock'ta item kimliği string identifier ile tutuluyor
-        // (numeric legacy id değil). Projende farklıysa değiştir.
-        private const val TOTEM_ITEM_IDENTIFIER = "minecraft:totem_of_undying"
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
         private val JUNK_RANGE = 12..22
 
@@ -60,8 +58,8 @@ class ChatSpammer : BaseModule(
     // ---------- Modül seçenekleri ----------
     private val shortcut = bool("Shortcut", false)        // (Şu an kullanılmıyor, ileride kısayol için)
     private val totemCounter = bool("TotemCounter", true) // Totem pop sayacını aç/kapa
-    private val pcCounterMode = bool("Offhand Polling Mode", false)   // Açıkken: offhand-polling tabanlı algılamaya geç, diğer (event tabanlı) totem yolları devre dışı kalır
-    private val pcCounterSendChat = bool("Send Chat", true) // Referans koddaki SendChat karşılığı — varsayılan kapalı
+    private val pcCounterMode = bool("PC Counter Mode", false)   // Açıkken: offhand-polling tabanlı algılamaya geç, diğer (event tabanlı) totem yolları devre dışı kalır
+    private val pcCounterSendChat = bool("PC Counter Send Chat", false) // Referans koddaki SendChat karşılığı — varsayılan kapalı
 
     // ---------- Durum tabloları ----------
     private val popCounts = ConcurrentHashMap<String, Int>()
@@ -315,11 +313,10 @@ class ChatSpammer : BaseModule(
     // pcCounterMode açıkken diğer (daha güvenilir) event tabanlı yollar bilerek
     // devre dışı bırakıldığından burada çapraz doğrulama yapılamıyor.
     //
-    // VARSAYIM (doğrulaman lazım): TrackedEntity üzerinde başka oyuncuların offhand
-    // item'ına erişim olduğunu varsayıyorum (`e.offHandIdentifier`). Projende böyle
-    // bir alan yoksa, MobEquipmentPacket'i (inventorySlot = OFFHAND) dinleyip
-    // EntityTracker'a bu bilgiyi eklemen gerekiyor — Bedrock diğer oyuncuların
-    // equipment değişikliklerini bu paketle broadcast eder.
+    // VARSAYIM (doğrulandı — EntityTracker.kt'ye eklendi): TrackedEntity.offHandItem,
+    // MobEquipmentPacket'in SERVER_TO_CLIENT/OFFHAND yayınından besleniyor.
+    // Totem kontrolü projede zaten var olan InventoryUtil.isTotem() ile yapılıyor
+    // (runtime-id fallback'i dahil, string identifier'a bağımlı kalmıyor).
     private fun pollTotemsPcCounter() {
         if (!isEnabled || !totemCounter.value || !pcCounterMode.value) return
 
@@ -342,7 +339,7 @@ class ChatSpammer : BaseModule(
             activeRuntimeIds.add(e.runtimeId)
 
             val hasTotem = runCatching {
-                e.offHandIdentifier == TOTEM_ITEM_IDENTIFIER
+                InventoryUtil.isTotem(e.offHandItem)
             }.getOrElse { false }
 
             val had = lastHadTotem[e.runtimeId] ?: false
