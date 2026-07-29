@@ -4,6 +4,7 @@ import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
 import com.nexoraclient.utils.InventoryUtil
+import com.nexoraclient.utils.WorldBlockTracker
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import java.util.concurrent.ConcurrentHashMap
@@ -17,6 +18,18 @@ class InventoryHelper : BaseModule(
         private const val CHECK_INTERVAL_MS  = 300L
         private const val RESEND_COOLDOWN_MS = 300L
         private const val HOTBAR_SIZE        = 9
+
+        // Yağmur veya su (fiziksel blok kontrolüyle) aktifken hangi slotun trident
+        // için ayrıldığını dışarıya (KillAura/KillAuraPro) bildirmek için kullanılıyor.
+        // İkisi de yoksa veya özellik kapalıysa null.
+        @Volatile var currentTridentSlot: Int? = null
+            private set
+
+        // Yağmur/su yokken (yani "havada") normal kuralların kılıç için ayırdığı
+        // slot — combat modülleri saldırıda hangi slotu kullanacağını buradan
+        // gerçek konfigürasyona bakarak belirleyebilsin diye.
+        @Volatile var currentSwordSlot: Int? = null
+            private set
     }
 
     enum class HotbarItem(val identifier: String?, val meta: Int) {
@@ -80,17 +93,25 @@ class InventoryHelper : BaseModule(
         )
     }
 
+    // ---------- Yağmur/Su durumunda trident önceliği ----------
+    private val waterTridentEnabled = bool("Water/Rain Trident Priority", false)
+    private val tridentSlot         = int ("Trident Slot",               8, 0, HOTBAR_SIZE - 1)
+
     private val lastSendMs = ConcurrentHashMap<Int, Long>()
     @Volatile private var tickJob: kotlinx.coroutines.Job? = null
 
     override fun onEnable() {
         super.onEnable()
         lastSendMs.clear()
+        currentTridentSlot = null
+        currentSwordSlot = null
         tickJob = launchTickLoop(CHECK_INTERVAL_MS) { checkAndRefill() }
     }
 
     override fun onDisable() {
         tickJob?.cancel(); tickJob = null
+        currentTridentSlot = null
+        currentSwordSlot = null
         super.onDisable()
     }
 
@@ -120,6 +141,23 @@ class InventoryHelper : BaseModule(
         val session = PacketEventBus.currentSession ?: return
         val snapshot = EntityTracker.getInventorySnapshot()
         val plan = buildSlotPlan()
+
+        // Kılıcın normal kurallara göre hangi slotta olduğunu belirle — bu,
+        // yağmur/su yokken ("havada") combat modüllerinin döneceği slot.
+        currentSwordSlot = plan.indexOfFirst { it != null && isSwordIdentifier(it.identifier) }
+            .takeIf { it >= 0 }
+
+        // Yağmur yağıyorsa VEYA gerçekten suya değiyorsak (WorldBlockTracker ile
+        // blok bazlı kontrol) ve özellik açıksa, ayrılan slotu zorla trident yap —
+        // o slot için tanımlı normal kuralın önüne geçer.
+        val wetActive = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
+        if (waterTridentEnabled.value && wetActive) {
+            val slot = tridentSlot.value.coerceIn(0, HOTBAR_SIZE - 1)
+            plan[slot] = SlotTarget(HotbarItem.Trident.identifier!!, HotbarItem.Trident.meta, 1)
+            currentTridentSlot = slot
+        } else {
+            currentTridentSlot = null
+        }
 
         for (slot in 0 until HOTBAR_SIZE) {
             val target = plan[slot] ?: continue
@@ -179,4 +217,9 @@ class InventoryHelper : BaseModule(
         if (meta >= 0 && item!!.damage != meta) return false
         return true
     }
+
+    // Herhangi bir kılıç türünü (wood/stone/iron/gold/diamond/netherite) yakalar,
+    // kullanıcı hangi kılıcı kural olarak seçerse seçsin çalışsın diye.
+    private fun isSwordIdentifier(identifier: String): Boolean =
+        identifier.endsWith("_sword")
 }

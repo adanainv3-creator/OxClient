@@ -12,6 +12,7 @@ import com.nexoraclient.utils.MathUtil
 import com.nexoraclient.utils.PacketUtil
 import com.nexoraclient.utils.CritLock
 import com.nexoraclient.utils.RotationUtil
+import com.nexoraclient.utils.WorldBlockTracker
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
@@ -194,17 +195,30 @@ class KillAuraPro : BaseModule(
 
         PacketUtil.sendSwing(session)
 
-        // Yağmurda AutoWeapon açıksa InventoryHelper'ın ayırdığı sabit trident
-        // slotundan saldırı gönder (seçili hotbar slotu değişmeden).
-        val rainSlot = InventoryHelper.currentRainTridentSlot
-        val hotbarSlot = if (autoWeapon.value && EntityTracker.selfIsRaining && rainSlot != null) {
-            rainSlot
-        } else {
-            EntityTracker.selfHotbarSlot.coerceIn(0, 8)
-        }
+        // Silah seçimi: yağmur/su + AutoWeapon açıksa trident slotu, değilse
+        // ("havadayken") InventoryHelper'ın kılıç için ayırdığı slot kullanılır.
+        val hotbarSlot = resolveWeaponSlot()
         PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
 
         if (hurtNotify.value) sendHurtNotification(session, target)
+    }
+
+    // ---------- Silah slotu seçimi ----------
+    // KillAura.kt ile birebir aynı mantık: AutoWeapon kapalıysa dokunulmaz;
+    // yağmur/suda trident slotuna, aksi halde InventoryHelper'ın gerçek
+    // konfigürasyonuna bakarak kılıcın olduğu slota geçilir.
+    private fun resolveWeaponSlot(): Int {
+        val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+        if (!autoWeapon.value) return fallback
+
+        val wet = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
+        if (wet) {
+            InventoryHelper.currentTridentSlot?.let { return it }
+            return fallback
+        }
+
+        InventoryHelper.currentSwordSlot?.let { return it }
+        return fallback
     }
 
     // ---------- Sadece kendimize görünen "Hurted" bildirimi ----------

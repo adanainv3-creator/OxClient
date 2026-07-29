@@ -12,6 +12,7 @@ import com.nexoraclient.utils.MathUtil
 import com.nexoraclient.utils.PacketUtil
 import com.nexoraclient.utils.CritLock
 import com.nexoraclient.utils.RotationUtil
+import com.nexoraclient.utils.WorldBlockTracker
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
@@ -280,19 +281,37 @@ class KillAura : BaseModule(
             else -> {}
         }
 
-        // Yağmur yağıyorsa ve InventoryHelper'da "Rain Trident Priority" açıksa,
-        // o modülün tridenti ayırdığı sabit slottan saldırı paketi gönder
-        // (aktif olarak seçili hotbar slotu değişmeden, riptide/trident için).
-        // AutoWeapon kapalıysa bu davranış tamamen devre dışı kalır.
-        val rainSlot = InventoryHelper.currentRainTridentSlot
-        val hotbarSlot = if (autoWeapon.value && EntityTracker.selfIsRaining && rainSlot != null) {
-            rainSlot
-        } else {
-            EntityTracker.selfHotbarSlot.coerceIn(0, 8)
-        }
+        // Silah seçimi: yağmur/su varsa ve AutoWeapon açıksa InventoryHelper'ın
+        // ayırdığı sabit trident slotundan saldır; değilse (havadayken) yine
+        // InventoryHelper'ın kurallarına göre kılıcın oturduğu slottan saldır.
+        // AutoWeapon kapalıysa hiçbir slot zorlaması yapılmaz, seçili slot kullanılır.
+        val hotbarSlot = resolveWeaponSlot()
         PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
 
         if (hurtNotify.value) sendHurtNotification(session, e)
+    }
+
+    // ---------- Silah slotu seçimi ----------
+    // 1) AutoWeapon kapalıysa: dokunmuyoruz, o an seçili hotbar slotu kullanılır.
+    // 2) Yağmur yağıyorsa VEYA WorldBlockTracker gerçekten suda olduğumuzu
+    //    söylüyorsa: InventoryHelper'ın trident için ayırdığı sabit slot kullanılır.
+    // 3) İkisi de yoksa ("havadayken"): InventoryHelper'ın kurallarına göre
+    //    kılıcın bulunduğu slot kullanılır (gerçek konfigürasyona bakan
+    //    "düzgün kontrol" — sadece o an seçili slota güvenmiyoruz).
+    // 4) InventoryHelper hiç aktif değilse veya ilgili slot bulunamadıysa,
+    //    en son çare olarak seçili hotbar slotuna düşülür.
+    private fun resolveWeaponSlot(): Int {
+        val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+        if (!autoWeapon.value) return fallback
+
+        val wet = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
+        if (wet) {
+            InventoryHelper.currentTridentSlot?.let { return it }
+            return fallback
+        }
+
+        InventoryHelper.currentSwordSlot?.let { return it }
+        return fallback
     }
 
     // ---------- Sadece kendimize görünen "Hurted" bildirimi ----------

@@ -12,6 +12,7 @@ import org.cloudburstmc.protocol.bedrock.packet.UpdateBlockPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateSubChunkBlocksPacket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import kotlin.math.floor
 
 object WorldBlockTracker : PacketEventBus.PacketListener {
 
@@ -107,6 +108,26 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         if (overrides.containsKey(blockPosKey(x, y, z))) return true
         val cx = x shr 4; val cz = z shr 4; val sy = y shr 4
         return sections.containsKey(sectionKey(cx, sy, cz))
+    }
+
+    private val WATER_IDS = arrayOf(
+        "minecraft:water", "minecraft:flowing_water", "minecraft:bubble_column"
+    )
+
+    // Oyuncunun gerçekten suya değip değmediğini dünya blok verisinden (gerçek
+    // zemin/blok kontrolü) okuyoruz — sadece yağmur/hava durumuna değil,
+    // fiziksel olarak suda olup olmamaya bakan güvenilir kontrol bu.
+    // Hem ayak hem göz hizası kontrol edilir: yüzeyde yüzerken (baş dışarıda)
+    // veya tamamen dalmışken de "suda" sayılsın diye.
+    fun isPlayerInWater(): Boolean {
+        val bx = floor(EntityTracker.selfX).toInt()
+        val bz = floor(EntityTracker.selfZ).toInt()
+        val feetY = floor(EntityTracker.selfY).toInt()
+        val eyeY  = floor(EntityTracker.selfY + 1.2f).toInt()
+
+        if (!hasData(bx, feetY, bz) && !hasData(bx, eyeY, bz)) return false
+
+        return isBlock(bx, feetY, bz, *WATER_IDS) || isBlock(bx, eyeY, bz, *WATER_IDS)
     }
 
     private fun handleUpdateBlock(p: UpdateBlockPacket) {
