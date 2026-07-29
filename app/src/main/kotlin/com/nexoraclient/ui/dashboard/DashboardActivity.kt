@@ -289,27 +289,56 @@ class DashboardActivity : ComponentActivity() {
     }
 }
 
-// Fixed, shared gate password. This is NOT a real access control — anyone who
-// has this string (or decompiles the APK) can get past the gate. Use this only
-// as a soft splash/gate, never to protect anything actually sensitive.
-private const val GATE_PASSWORD = "nexora2026"
+// Gate password check is verified against the backend (/verify) instead of a
+// local hardcoded string. Only the password is sent — no email/identity leaves
+// the device for this check.
+private const val VERIFY_URL = "https://oxclient.com.tr/verify"
+
+/** POSTs { "password": ... } to /verify (no email field) and returns the "valid" flag. */
+private fun checkGatePassword(password: String): Boolean {
+    return try {
+        val url = java.net.URL(VERIFY_URL)
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 8000
+            readTimeout = 8000
+            setRequestProperty("Content-Type", "application/json")
+        }
+        val body = org.json.JSONObject().apply { put("password", password) }.toString()
+        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+
+        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        val responseText = stream?.bufferedReader()?.use { it.readText() } ?: return false
+        org.json.JSONObject(responseText).optBoolean("valid", false)
+    } catch (_: Exception) {
+        false
+    }
+}
 
 @Composable
 private fun PasswordGateScreen(onUnlock: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var passwordVisible by remember { mutableStateOf(false) }
+    var isChecking by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-    val canSubmit = input.isNotBlank()
+    val canSubmit = input.isNotBlank() && !isChecking
 
     fun trySubmit() {
         if (!canSubmit) return
-        if (input == GATE_PASSWORD) {
-            errorMessage = null
-            onUnlock()
-        } else {
-            errorMessage = "Wrong password"
-            input = ""
+        isChecking = true
+        errorMessage = null
+        scope.launch {
+            val valid = withContext(Dispatchers.IO) { checkGatePassword(input) }
+            isChecking = false
+            if (valid) {
+                onUnlock()
+            } else {
+                errorMessage = "Wrong password"
+                input = ""
+            }
         }
     }
 
@@ -382,7 +411,11 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent)
             ) {
-                Text("UNLOCK", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                Text(
+                    if (isChecking) "CHECKING..." else "UNLOCK",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
