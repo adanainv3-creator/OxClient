@@ -19,7 +19,9 @@ import com.nexoraclient.module.movement.AutoScaffold  // Yeni eklenen import
 import com.nexoraclient.module.movement.AutoMapArt
 import com.nexoraclient.module.combat.AutoTotem
 import com.nexoraclient.module.combat.Criticals
+import com.nexoraclient.module.misc.InventoryHelper
 import com.nexoraclient.module.combat.CrystalAura
+import com.nexoraclient.module.movement.BypassFly
 import com.nexoraclient.module.combat.KillAura
 import com.nexoraclient.module.combat.KillAuraPro
 import com.nexoraclient.module.combat.PcAura
@@ -118,6 +120,7 @@ class NexoraClientApp : Application() {
         ModuleManager.registerAll(
             KillAura(),
             KillAuraPro(),
+            PcAura(),
             CrystalAura(),
             AutoTotem(),
             Criticals(),
@@ -131,10 +134,16 @@ class NexoraClientApp : Application() {
             FullBright(),
             ESP(),
             EnemyESP(),
+            Xray(),
+            InventoryHelper(),
             HeadTrack(),
             FOVChanger(),
             ArrayListModule(),
-            AutoArmor(), 
+            AutoArmor(),
+            TPAuraPC(),
+            AutoScaffold(), 
+            AutoMapArt(),
+            BypassFly(),
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect()
