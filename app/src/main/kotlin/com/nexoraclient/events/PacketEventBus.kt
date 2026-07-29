@@ -70,12 +70,12 @@ object PacketEventBus {
             private set
         @Volatile var serverToClient: Long = 0L
             private set
-        @Volatile var lastPacketName: String = ""
-            private set
+        @Volatile private var lastPacketClass: Class<*>? = null
+        val lastPacketName: String get() = lastPacketClass?.simpleName ?: ""
 
         internal fun record(event: PacketEvent) {
             totalPublished++
-            lastPacketName = event.packetName
+            lastPacketClass = event.packet.javaClass
             if (event.isClientToServer) clientToServer++ else serverToClient++
         }
 
@@ -84,7 +84,7 @@ object PacketEventBus {
         internal fun reset() {
             totalPublished = 0; totalCancelled = 0
             clientToServer = 0; serverToClient = 0
-            lastPacketName = ""
+            lastPacketClass = null
         }
     }
 }
