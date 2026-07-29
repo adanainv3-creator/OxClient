@@ -44,6 +44,7 @@ class CrystalAura : BaseModule(
         private const val SELF_EYE_HEIGHT = 1.62f
         private const val BLOCK_DEF_SCAN_CAP  = 20000
         private const val BLOCK_DEF_MISS_LIMIT = 64
+        private const val CANDIDATE_CACHE_MS  = 300L
     }
 
     // --- Genel ---
@@ -102,6 +103,10 @@ class CrystalAura : BaseModule(
     @Volatile private var lastSelfSurroundMs = 0L
 
     private val blockDefCache = ConcurrentHashMap<String, BlockDefinition>()
+    private val candidateCache = ConcurrentHashMap<Long, TargetCache>()
+
+    private data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val distSq: Float)
+    private data class TargetCache(val tx: Int, val ty: Int, val tz: Int, val candidates: List<Candidate>, val ts: Long)
 
     private val placeTokens        = AtomicInteger(0)
     @Volatile private var tokenWindowStart = 0L
@@ -133,6 +138,7 @@ class CrystalAura : BaseModule(
         super.onEnable()
         pendingPositions.clear(); pendingObsidian.clear()
         blockDefCache.clear(); lastPlaceMsMap.clear(); totemBurstUntil.clear()
+        candidateCache.clear()
         placeTokens.set(0); tokenWindowStart = 0L
         tickJob?.cancel()
         tickJob = launchTickLoop(tickIntervalMs.value.toLong()) { tick() }
@@ -142,6 +148,7 @@ class CrystalAura : BaseModule(
         tickJob?.cancel(); tickJob = null
         super.onDisable()
         pendingPositions.clear(); pendingObsidian.clear(); lastPlaceMsMap.clear()
+        candidateCache.clear()
     }
 
     override fun onPacket(event: PacketEvent) {
@@ -195,7 +202,14 @@ class CrystalAura : BaseModule(
         if (breakCrystals.value) doBreakInRange()
 
         val targets = selectTargets()
-        if (targets.isEmpty()) return
+        if (targets.isEmpty()) {
+            if (candidateCache.isNotEmpty()) candidateCache.clear()
+            return
+        }
+        if (candidateCache.size > targets.size) {
+            val liveIds = targets.mapTo(HashSet(targets.size)) { it.runtimeId }
+            candidateCache.keys.retainAll(liveIds)
+        }
 
         if (place.value) {
             when (strategy.value) {
@@ -270,25 +284,32 @@ class CrystalAura : BaseModule(
         var placedThisTick = 0
         val burst = isBurstTarget(target)
 
-        data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val distSq: Float)
-        val candidates = mutableListOf<Candidate>()
+        val cached = candidateCache[target.runtimeId]
+        val candidates: List<Candidate>
+        if (cached != null && cached.tx == tx && cached.ty == ty && cached.tz == tz && now - cached.ts < CANDIDATE_CACHE_MS) {
+            candidates = cached.candidates
+        } else {
+            val scanned = ArrayList<Candidate>((2 * searchRadius.value + 1) * (2 * searchRadius.value + 1))
+            val radius = searchRadius.value
+            for (dx in -radius..radius) {
+                for (dz in -radius..radius) {
+                    val bx = tx + dx; val bz = tz + dz
+                    val hit = findSurface(bx, ty, bz) ?: run {
+                        if (autoObsidian.value) tryPlaceObsidianSupportAt(session, bx, ty, bz)
+                        null
+                    } ?: continue
 
-        val radius = searchRadius.value
-        for (dx in -radius..radius) {
-            for (dz in -radius..radius) {
-                val bx = tx + dx; val bz = tz + dz
-                val hit = findSurface(bx, ty, bz) ?: run {
-                    if (autoObsidian.value) tryPlaceObsidianSupportAt(session, bx, ty, bz)
-                    null
-                } ?: continue
+                    val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f
 
-                val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f
+                    if (requireLOS.value && !hasLineOfSight(cx, cy, cz)) continue
 
-                if (requireLOS.value && !hasLineOfSight(cx, cy, cz)) continue
-
-                val ddx = cx - target.x; val ddy = cy - (target.y + 0.9f); val ddz = cz - target.z
-                candidates.add(Candidate(bx, bz, hit.y, hit.blockId, ddx*ddx + ddy*ddy + ddz*ddz))
+                    val ddx = cx - target.x; val ddy = cy - (target.y + 0.9f); val ddz = cz - target.z
+                    scanned.add(Candidate(bx, bz, hit.y, hit.blockId, ddx*ddx + ddy*ddy + ddz*ddz))
+                }
             }
+            scanned.sortBy { it.distSq }
+            candidates = scanned
+            candidateCache[target.runtimeId] = TargetCache(tx, ty, tz, candidates, now)
         }
 
         if (candidates.isEmpty()) return
@@ -299,7 +320,7 @@ class CrystalAura : BaseModule(
         // burada kendi prepare/revert'ini yapar.
         val prepared = sharedPrepared ?: prepareItemForUse(session, "minecraft:end_crystal") ?: return
 
-        for (c in candidates.sortedBy { it.distSq }) {
+        for (c in candidates) {
             if (placedThisTick >= maxPlacePerTick.value) break
             if (!takePlaceToken(burst)) break
             if (tryPlaceCrystalAt(session, prepared, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) {
