@@ -578,7 +578,7 @@ class AutoMapArt : BaseModule(
      * bir client input'u yok) her tick MovePlayerPacket ile path node'una doğru
      * ilerletir — mantık (timeout'ta yeniden pathfind, goal'a varınca dur) birebir aynı.
      */
-    private inner class MapArtPathRunner(start: Vector3i, private val goal: Vector3i) {
+    private class MapArtPathRunner(start: Vector3i, private val goal: Vector3i) {
         private companion object { const val PATH_FOLLOWING_TIMEOUT = 200 }
 
         var active = true
