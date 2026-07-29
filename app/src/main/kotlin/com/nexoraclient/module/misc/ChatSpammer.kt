@@ -28,7 +28,7 @@ class ChatSpammer : BaseModule(
     description = "Chat prefix + totem pop sayacı"
 ) {
     companion object {
-        private const val VERSION      = "v1.0"
+        private const val VERSION      = "v1.1"
         private const val TAG_LINE     = "Nexora Client $VERSION"
         private const val PVP_TAIL     = "by Nexora Client | Best Mobile Client"
         private const val QUEUE_DELAY_MS = 600L

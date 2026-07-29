@@ -118,7 +118,6 @@ class NexoraClientApp : Application() {
         ModuleManager.registerAll(
             KillAura(),
             KillAuraPro(),
-            PcAura(),
             CrystalAura(),
             AutoTotem(),
             Criticals(),
@@ -132,14 +131,10 @@ class NexoraClientApp : Application() {
             FullBright(),
             ESP(),
             EnemyESP(),
-            Xray(),
             HeadTrack(),
             FOVChanger(),
             ArrayListModule(),
-            AutoArmor(),
-            TPAuraPC(),
-            AutoScaffold(),  // AutoRegear kaldırıldı, AutoScaffold eklendi
-            AutoMapArt(),
+            AutoArmor(), 
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect()
