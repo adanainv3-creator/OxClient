@@ -4,64 +4,86 @@ import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.core.relay.NexoraRelaySession
 import com.nexoraclient.events.PacketEvent
 import com.nexoraclient.module.*
+import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
+import org.cloudburstmc.protocol.bedrock.data.PlayerAuthInputData
 import org.cloudburstmc.protocol.bedrock.data.PlayerPermission
 import org.cloudburstmc.protocol.bedrock.data.command.CommandPermission
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
+import org.cloudburstmc.protocol.bedrock.packet.RequestAbilityPacket
+import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateAbilitiesPacket
 
 class CreativeFly : BaseModule(
     name        = "CreativeFly",
     category    = ModuleCategory.MOVEMENT,
-    description = "Ability tabanlı native uçuş (MotionFly'daki gibi motion paket hilesi değil)"
+    description = "Ability tabanlı uçuş — FlyModule ile aynı mekanizma: sadece dikey motion (Jump/Sneak), yatay hareket vanilla WASD'a bırakılır"
 ) {
-    // Hızları düşürerek sunucu geri atmalarını azaltıyoruz
-    private val flySpeed          = float("Fly Speed",          0.3f,  0.05f, 2.0f)
-    private val walkSpeed         = float("Walk Speed",         0.05f, 0.02f, 0.5f)
-    private val verticalFlySpeed  = float("Vertical Fly Speed", 0.25f, 0.01f, 1.0f) // Yeni! Dikey uçuş hızı
-    private val keepAlive         = bool ("Keep Alive",         true)
+    private val flySpeed  = float("Fly Speed",  0.5f, 0.1f, 1.5f)
+    private val walkSpeed = float("Walk Speed", 0.1f, 0.02f, 0.5f)
 
     @Volatile private var lastSession: NexoraRelaySession? = null
-    @Volatile private var abilitiesSent = false
+    @Volatile private var canFly = false
 
     override fun onEnable() {
         super.onEnable()
-        abilitiesSent = false
+        canFly = false
     }
 
     override fun onDisable() {
         super.onDisable()
         lastSession?.let { sendAbilities(it, false) }
-        abilitiesSent = false
+        canFly = false
     }
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         val pkt = event.packet
 
-        if (pkt is PlayerAuthInputPacket && event.direction == PacketEvent.Direction.CLIENT_TO_SERVER) {
-            lastSession = event.session
-            if (!abilitiesSent) {
-                sendAbilities(event.session, true)
-                abilitiesSent = true
-            }
+        // Client'ın kendi FLYING isteği ve sunucunun ability paketleri bizim spoof
+        // ettiğimiz durumu bozabilir — ikisini de koşulsuz engelliyoruz (FlyModule
+        // ile aynı davranış, artık ayrı bir "Keep Alive" ayarı yok).
+        if (pkt is RequestAbilityPacket && pkt.ability == Ability.FLYING) {
+            event.cancel()
+            return
+        }
+        if (pkt is UpdateAbilitiesPacket) {
+            event.cancel()
+            return
         }
 
-        // Sunucu kendi UpdateAbilitiesPacket'ini gönderip bizimkini ezerse
-        // (Keep Alive açıksa) hemen tekrar uçuş yetkisini uygula.
-        if (keepAlive.value && pkt is UpdateAbilitiesPacket &&
-            event.direction == PacketEvent.Direction.SERVER_TO_CLIENT
-        ) {
-            event.cancel()
-            lastSession?.let { sendAbilities(it, true) }
+        if (pkt !is PlayerAuthInputPacket) return
+        if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+
+        lastSession = event.session
+
+        if (!canFly) {
+            sendAbilities(event.session, true)
+            canFly = true
+        }
+
+        // Dikey hareket: Jump=yukarı, Sneak=aşağı. Yatay hareket tamamen vanilla
+        // WASD fiziğine bırakılıyor — MotionFly'daki gibi tam 3D motion override yok,
+        // ekstra timer/jitter da yok (doğal PlayerAuthInputPacket hızında çalışır).
+        var verticalMotion = 0f
+        if (pkt.inputData.contains(PlayerAuthInputData.JUMPING)) {
+            verticalMotion = flySpeed.value
+        } else if (pkt.inputData.contains(PlayerAuthInputData.SNEAKING)) {
+            verticalMotion = -flySpeed.value
+        }
+
+        if (verticalMotion != 0f) {
+            event.session.clientBound(SetEntityMotionPacket().apply {
+                runtimeEntityId = EntityTracker.selfRuntimeId
+                motion = Vector3f.from(0f, verticalMotion, 0f)
+            })
         }
     }
 
     private fun sendAbilities(session: NexoraRelaySession, enabled: Boolean) {
         val fs = if (enabled) flySpeed.value else 0.05f
         val ws = walkSpeed.value
-        val vs = if (enabled) verticalFlySpeed.value else 0.05f // false durumunda da küçük bir değer
 
         val packet = UpdateAbilitiesPacket().apply {
             playerPermission  = if (enabled) PlayerPermission.OPERATOR else PlayerPermission.VISITOR
@@ -79,8 +101,7 @@ class CreativeFly : BaseModule(
                     Ability.ATTACK_PLAYERS,
                     Ability.ATTACK_MOBS,
                     Ability.FLY_SPEED,
-                    Ability.WALK_SPEED,
-                    Ability.VERTICAL_FLY_SPEED   // ★ EKLENDİ – dikey hareket için gerekli
+                    Ability.WALK_SPEED
                 )
                 if (enabled) {
                     values += Ability.MAY_FLY
@@ -89,9 +110,8 @@ class CreativeFly : BaseModule(
                 }
                 abilityValues.addAll(values.toTypedArray())
 
-                this.walkSpeed        = ws
-                this.flySpeed         = fs
-                this.verticalFlySpeed = vs   // ★ EKLENDİ
+                this.walkSpeed = ws
+                this.flySpeed  = fs
             })
         }
         session.clientBound(packet)
