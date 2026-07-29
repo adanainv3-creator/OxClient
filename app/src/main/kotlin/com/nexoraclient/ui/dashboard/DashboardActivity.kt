@@ -289,67 +289,27 @@ class DashboardActivity : ComponentActivity() {
     }
 }
 
-private sealed class VerifyResult {
-    object Valid : VerifyResult()
-    object Invalid : VerifyResult()
-    object NetworkError : VerifyResult()
-}
-
-private fun verifyPasswordRemote(email: String, password: String): VerifyResult {
-    return try {
-        val conn = java.net.URL("https://oxclient.com.tr/verify")
-            .openConnection() as java.net.HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.connectTimeout = 8000
-        conn.readTimeout = 8000
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.outputStream.use {
-            it.write(
-                org.json.JSONObject()
-                    .put("email", email)
-                    .put("password", password)
-                    .toString()
-                    .toByteArray()
-            )
-        }
-        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
-        val body = stream.bufferedReader().use { it.readText() }
-        if (org.json.JSONObject(body).optBoolean("valid", false)) VerifyResult.Valid else VerifyResult.Invalid
-    } catch (_: Exception) {
-        VerifyResult.NetworkError
-    }
-}
+// Fixed, shared gate password. This is NOT a real access control — anyone who
+// has this string (or decompiles the APK) can get past the gate. Use this only
+// as a soft splash/gate, never to protect anything actually sensitive.
+private const val GATE_PASSWORD = "nexora2026"
 
 @Composable
 private fun PasswordGateScreen(onUnlock: () -> Unit) {
-    var email by remember { mutableStateOf("") }
     var input by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
 
-    val canSubmit = !loading && input.isNotBlank() && email.isNotBlank()
+    val canSubmit = input.isNotBlank()
 
     fun trySubmit() {
         if (!canSubmit) return
-        loading = true
-        errorMessage = null
-        scope.launch {
-            when (withContext(Dispatchers.IO) { verifyPasswordRemote(email.trim(), input) }) {
-                VerifyResult.Valid -> { loading = false; onUnlock() }
-                VerifyResult.Invalid -> {
-                    loading = false
-                    errorMessage = "Wrong email or password"
-                    input = ""
-                }
-                VerifyResult.NetworkError -> {
-                    loading = false
-                    errorMessage = "Connection failed, try again"
-                }
-            }
+        if (input == GATE_PASSWORD) {
+            errorMessage = null
+            onUnlock()
+        } else {
+            errorMessage = "Wrong password"
+            input = ""
         }
     }
 
@@ -382,32 +342,11 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                 fontFamily = FontFamily.Monospace
             )
             OutlinedTextField(
-                value = email,
-                onValueChange = { email = it; errorMessage = null },
-                singleLine = true,
-                isError = errorMessage != null,
-                label = { Text("Email", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Email,
-                    imeAction = androidx.compose.ui.text.input.ImeAction.Next
-                ),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                    onNext = { focusRequester.requestFocus() }
-                ),
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(6.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NexoraAccent,
-                    unfocusedBorderColor = NexoraOutlineStrong,
-                    cursorColor = NexoraAccentLight
-                ),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = NexoraOnBackground)
-            )
-            OutlinedTextField(
                 value = input,
                 onValueChange = { input = it; errorMessage = null },
                 singleLine = true,
                 isError = errorMessage != null,
+                label = { Text("Password", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                 visualTransformation = if (passwordVisible)
                     androidx.compose.ui.text.input.VisualTransformation.None
                 else
@@ -424,7 +363,7 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                         )
                     }
                 },
-                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = NexoraAccent,
@@ -443,7 +382,7 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                 shape = RoundedCornerShape(6.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent)
             ) {
-                Text(if (loading) "CHECKING..." else "UNLOCK", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                Text("UNLOCK", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
             }
         }
     }

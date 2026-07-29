@@ -1,6 +1,7 @@
 
 package com.nexoraclient.core.proxy
 
+import com.nexoraclient.auth.AccountManager
 import com.nexoraclient.events.PacketEvent
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.utils.MathUtil
@@ -142,7 +143,15 @@ object EntityTracker : PacketEventBus.PacketListener {
         }
     }
 
-    fun getSelfName(): String = playerNames[selfUniqueId] ?: ""
+    // Kendi ismimiz için önce oturum açık hesabın gamertag'ine bakıyoruz; sunucu
+    // kendi entity'miz için ayrı bir nametag paketi göndermeyebiliyor, o yüzden
+    // playerNames[selfUniqueId] çoğu zaman boş kalıyordu ve raporlama sessizce
+    // hiç göndermiyordu. AccountManager her zaman dolu olduğu için buna öncelik
+    // veriyoruz, paket verisini sadece yedek olarak tutuyoruz.
+    fun getSelfName(): String =
+        AccountManager.selectedAccount?.gamertag?.takeIf { it.isNotBlank() }
+            ?: playerNames[selfUniqueId]
+            ?: ""
 
     private fun reportPosition() {
         if (selfRuntimeId == 0L) return
