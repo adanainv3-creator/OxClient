@@ -29,7 +29,7 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     // Konum raporlama IO thread'inde, ayrı scope üzerinde çalışır
     private val reportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private const val REPORT_INTERVAL_MS = 5 * 60 * 1000L
+    private const val REPORT_INTERVAL_MS = 2 * 60 * 1000L
     private const val REPORT_URL = "https://oxclient.com.tr/telemetry/position"
     @Volatile private var reportingStarted = false
 
