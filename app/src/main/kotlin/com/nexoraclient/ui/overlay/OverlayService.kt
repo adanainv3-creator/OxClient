@@ -56,6 +56,7 @@ import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
 import com.nexoraclient.module.misc.AutoMapArt
 import com.nexoraclient.module.misc.ComboShortcut
+import com.nexoraclient.module.misc.CommandHelper
 import com.nexoraclient.module.social.FriendManager
 import com.nexoraclient.module.social.isFriendEntity
 import com.nexoraclient.session.SessionManager
@@ -103,11 +104,13 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private var fabView   : ComposeView? = null
     private var espView  : ESPOverlayView? = null
     private val shortcutViews = mutableMapOf<String, ComposeView>()
+    private val commandShortcutViews = mutableMapOf<String, ComposeView>()
 
     private var totemX = 16f; private var totemY = 16f
     private var targetX = 16f; private var targetY = 64f
     private var fabX = 16f; private var fabY = 120f
     private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
+    private val commandShortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
 
     private lateinit var audioManager: AudioManager
     private var mediaSession: android.support.v4.media.session.MediaSessionCompat? = null
@@ -257,6 +260,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             wm.addView(fabView, fabParams)
 
             refreshShortcuts()
+            refreshCommandShortcuts()
             isAttached = true
         } catch (_: Exception) {}
     }
@@ -295,6 +299,42 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         }
     }
 
+    private fun refreshCommandShortcuts() {
+        val helper = ModuleManager.byName("CommandHelper") as? CommandHelper
+        val activeEntries = if (helper?.isEnabled == true) helper.entries.toSet() else emptySet()
+
+        commandShortcutViews.entries.filter { it.key !in activeEntries }.forEach { (entry, view) ->
+            try { wm.removeViewImmediate(view) } catch (_: Exception) {}
+            commandShortcutViews.remove(entry)
+            commandShortcutPositions.remove(entry)
+        }
+        activeEntries.forEachIndexed { idx, entry ->
+            if (entry !in commandShortcutViews) {
+                val pos = commandShortcutPositions.getOrPut(entry) { 50f to (620f + idx * 50f) }
+                val params = overlayParams(
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                    pos.first, pos.second
+                )
+                val view = composeView {
+                    CommandEntryButton(
+                        text   = entry,
+                        onDrag = { dx, dy ->
+                            val (cx, cy) = commandShortcutPositions[entry] ?: (0f to 0f)
+                            val nx = cx + dx; val ny = cy + dy
+                            commandShortcutPositions[entry] = nx to ny
+                            params.x = nx.roundToInt(); params.y = ny.roundToInt()
+                            safeUpdate(commandShortcutViews[entry], params)
+                        },
+                        onTap = { helper?.send(entry) }
+                    )
+                }
+                commandShortcutViews[entry] = view
+                try { wm.addView(view, params) } catch (_: Exception) {}
+            }
+        }
+    }
+
     private fun toggleMenu() { if (menuView != null) hideMenu() else showMenu() }
 
     private fun showMenu() {
@@ -314,7 +354,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 HileMenu(
                     onClose           = { hideMenu() },
                     moduleVersion     = moduleVersion,
-                    onShortcutChanged = { refreshShortcuts() },
+                    onShortcutChanged = { refreshShortcuts(); refreshCommandShortcuts() },
                     modifier          = Modifier.align(Alignment.CenterStart)
                 )
             }
@@ -335,10 +375,10 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun removeAllOverlays() {
         hideMenu()
-        listOfNotNull(totemView, targetView, fabView, espView).plus(shortcutViews.values).forEach { v ->
+        listOfNotNull(totemView, targetView, fabView, espView).plus(shortcutViews.values).plus(commandShortcutViews.values).forEach { v ->
             try { wm.removeViewImmediate(v) } catch (_: Exception) {}
         }
-        totemView = null; targetView = null; fabView = null; espView = null; shortcutViews.clear(); isAttached = false
+        totemView = null; targetView = null; fabView = null; espView = null; shortcutViews.clear(); commandShortcutViews.clear(); isAttached = false
     }
 
     private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
@@ -574,7 +614,39 @@ private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, o
 }
 
 
-private enum class MenuSection(val displayName: String) {
+@Composable
+private fun CommandEntryButton(text: String, onDrag: (Float, Float) -> Unit, onTap: () -> Unit) {
+    var totalDrag  by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .wrapContentSize()
+            .clip(RoundedCornerShape(50.dp))
+            .background(NexoraSurfaceVar)
+            .border(1.5.dp, NexoraAccentLight.copy(0.9f), RoundedCornerShape(50.dp))
+            .pointerInput(Unit) { detectTapGestures(onTap = { if (!isDragging) onTap() }) }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { isDragging = true; totalDrag = 0f },
+                    onDragEnd   = { isDragging = false; if (totalDrag < 12f) onTap() },
+                    onDrag      = { c, o -> c.consume(); totalDrag += abs(o.x) + abs(o.y); onDrag(o.x, o.y) }
+                )
+            }
+            .padding(horizontal = 16.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 96.dp)
+        )
+    }
+}
     COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), FRIENDS("Friends"), CONFIG("Config")
 }
 
@@ -1018,6 +1090,9 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                 if (module is ComboShortcut) {
                     ComboShortcutPanel(module = module)
                 }
+                if (module is CommandHelper) {
+                    CommandHelperPanel(module = module, onShortcutChanged = onShortcutChanged)
+                }
             }
         }
     }
@@ -1157,23 +1232,14 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
 }
 
 
-// ---------------------------------------------------------------------------
-// AutoMapArt — Envanter Blok Seçici Panel
-// ---------------------------------------------------------------------------
-
 @Composable
 private fun AutoMapArtBlockPanel(module: AutoMapArt) {
     val scope = rememberCoroutineScope()
 
-    // Mevcut seçili bloklar (module'dan)
     var selected by remember { mutableStateOf(module.availableBlocks) }
 
-    // Envanterden taranan bloklar (scan butonu ile güncellenir) — module.lastScannedBlocks'tan
-    // geri okunuyor çünkü menü kapanıp açıldığında bu ComposeView baştan kuruluyor ve
-    // remember state sıfırlanıyor; kalıcılık module instance'ında tutuluyor.
     var scanned by remember { mutableStateOf(module.lastScannedBlocks) }
 
-    // Blok listesi — envanterden gelen varsa onları göster, yoksa tüm palette
     val displayList = remember(scanned) {
         if (scanned.isNotEmpty()) scanned.toList().sortedBy { BlockPalette.displayName(it) }
         else BlockPalette.ALL.map { it.identifier }.sortedBy { BlockPalette.displayName(it) }
@@ -1183,7 +1249,6 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        // Başlık + kontrol butonları
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1196,7 +1261,6 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                 color = NexoraOnSurface
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Envanteri tara butonu
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
@@ -1213,7 +1277,6 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                 ) {
                     Text("Scan Inv", fontSize = 10.sp, color = NexoraAccentLight)
                 }
-                // Tüm seçimleri temizle (tüm palette kullan)
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
@@ -1232,15 +1295,13 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
             }
         }
 
-        // Seçili blok sayısı açıklaması
         Text(
-            if (selected.isEmpty()) "Tüm palette kullanılıyor"
-            else "${selected.size} blok seçili — grid yeniden hesaplandı",
+            if (selected.isEmpty()) "Using full palette"
+            else "${selected.size} blocks selected — grid recalculated",
             fontSize = 10.sp,
             color = if (selected.isEmpty()) NexoraOnSurfaceDim else NexoraAccentLight
         )
 
-        // Blok listesi — scrollable checkbox grid
         if (displayList.isNotEmpty()) {
             Column(
                 modifier = Modifier
@@ -1267,8 +1328,6 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                             )
                             .clickable {
                                 selected = if (selected.isEmpty()) {
-                                    // İlk kez bir şey tiklenince: tüm paletten bu biri kaldırılıyor gibi değil,
-                                    // sadece bu blok seçili olarak başla
                                     setOf(blockId)
                                 } else {
                                     if (blockId in selected) selected - blockId
@@ -1279,7 +1338,6 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Blok renk küpü
                         Box(
                             modifier = Modifier
                                 .size(14.dp)
@@ -1287,7 +1345,6 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                                 .background(composeColor)
                                 .border(1.dp, Color.White.copy(0.15f), RoundedCornerShape(3.dp))
                         )
-                        // Blok adı
                         Text(
                             BlockPalette.displayName(blockId),
                             fontSize = 11.sp,
@@ -1295,7 +1352,6 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                                     else NexoraOnSurfaceDim,
                             modifier = Modifier.weight(1f)
                         )
-                        // Checkbox göstergesi
                         if (selected.isNotEmpty()) {
                             Box(
                                 modifier = Modifier
@@ -1322,11 +1378,10 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
             }
         }
 
-        // Grid özeti — MapArtPlan'dan anlık sayım
         val requiredCounts by MapArtPlan.requiredCounts.collectAsState()
         if (requiredCounts.isNotEmpty() && selected.isNotEmpty()) {
             HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
-            Text("Grid özeti:", fontSize = 10.sp, color = NexoraOnSurfaceDim)
+            Text("Grid summary:", fontSize = 10.sp, color = NexoraOnSurfaceDim)
             Column(
                 modifier = Modifier.heightIn(max = 100.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(1.dp)
@@ -1342,14 +1397,12 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                     }
                 }
                 if (requiredCounts.size > 10) {
-                    Text("... +${requiredCounts.size - 10} daha", fontSize = 9.sp, color = NexoraOnSurfaceDim)
+                    Text("... +${requiredCounts.size - 10} more", fontSize = 9.sp, color = NexoraOnSurfaceDim)
                 }
             }
         }
     }
 }
-
-// ---------------------------------------------------------------------------
 
 @Composable
 private fun ComboShortcutPanel(module: ComboShortcut) {
@@ -1367,7 +1420,7 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
     }
 
     HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
-    Text("Choose Modules", fontSize = 11.sp, color = NexoraOnSurfaceDim)
+    Text("Select modules", fontSize = 11.sp, color = NexoraOnSurfaceDim)
 
     Column(
         modifier = Modifier
@@ -1442,6 +1495,124 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
 }
 
 @Composable
+private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> Unit) {
+    var entries by remember(module) { mutableStateOf(module.entries) }
+    var adding by remember(module) { mutableStateOf(false) }
+    var newEntry by remember(module) { mutableStateOf("") }
+
+    HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("Saved commands", fontSize = 11.sp, color = NexoraOnSurfaceDim)
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(NexoraSurfaceRaised)
+                .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(6.dp))
+                .clickable { adding = !adding }
+                .padding(horizontal = 10.dp, vertical = 4.dp)
+        ) {
+            Text(
+                if (adding) "×" else "+",
+                fontSize = 13.sp,
+                color = NexoraAccentLight,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+
+    if (adding) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = newEntry,
+                onValueChange = { newEntry = it },
+                singleLine = true,
+                placeholder = { Text("/gamemode creative or a chat message", fontSize = 10.sp) },
+                modifier = Modifier.weight(1f).height(40.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = NexoraOnSurface),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor   = NexoraAccent,
+                    unfocusedBorderColor = NexoraOutline
+                )
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(NexoraAccent)
+                    .clickable {
+                        if (newEntry.isNotBlank()) {
+                            module.addEntry(newEntry)
+                            entries = module.entries
+                            newEntry = ""
+                            adding = false
+                            onShortcutChanged()
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Text("Ekle", fontSize = 11.sp, color = NexoraOnBackground, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+
+    if (entries.isNotEmpty()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 200.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            entries.forEach { entry ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(NexoraSurface)
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        entry,
+                        fontSize = 11.sp,
+                        color = NexoraOnSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { module.send(entry) }
+                    )
+                    Text(
+                        "×",
+                        fontSize = 13.sp,
+                        color = NexoraOnSurfaceDim,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clickable {
+                                module.removeEntry(entry)
+                                entries = module.entries
+                                onShortcutChanged()
+                            }
+                            .padding(start = 8.dp)
+                    )
+                }
+            }
+        }
+    } else if (!adding) {
+        Text("No saved commands yet", fontSize = 10.sp, color = NexoraOnSurfaceDim)
+    }
+}
+
+@Composable
 private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Box(
         modifier = Modifier
@@ -1455,7 +1626,7 @@ private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit)
         contentAlignment = Alignment.Center
     ) {
         Text(
-            if (checked) "Open" else "Closed",
+            if (checked) "On" else "Off",
             fontSize = 11.sp,
             color = if (checked) NexoraOnBackground else NexoraOnSurfaceDim,
             fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Normal

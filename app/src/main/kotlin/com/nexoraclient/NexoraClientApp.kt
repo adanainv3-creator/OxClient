@@ -15,7 +15,7 @@ import com.nexoraclient.core.relay.Definitions
 import com.nexoraclient.module.ModuleManager
 import com.nexoraclient.module.social.FriendManager
 import com.nexoraclient.module.combat.AutoArmor
-import com.nexoraclient.module.movement.AutoScaffold  // Yeni eklenen import
+import com.nexoraclient.module.movement.AutoScaffold
 import com.nexoraclient.module.misc.AutoMapArt
 import com.nexoraclient.module.combat.AutoTotem
 import com.nexoraclient.module.combat.Criticals
@@ -28,6 +28,7 @@ import com.nexoraclient.module.combat.PcAura
 import com.nexoraclient.module.misc.ChatSpammer
 import com.nexoraclient.module.misc.ChatAdvertiser
 import com.nexoraclient.module.misc.ComboShortcut
+import com.nexoraclient.module.misc.CommandHelper
 import com.nexoraclient.module.misc.Disconnect
 import com.nexoraclient.module.movement.AntiKnockback
 import com.nexoraclient.module.movement.CreativeFly
@@ -71,7 +72,7 @@ class NexoraClientApp : Application() {
             try {
                 Definitions.init(applicationContext)
             } catch (e: Exception) {
-                Log.e(TAG, "Definitions yükleme hatası: ${e.message}", e)
+                Log.e(TAG, "Definitions load error: ${e.message}", e)
             }
         }, "NexoraDefinitionsLoader").apply {
             isDaemon = true
@@ -83,7 +84,6 @@ class NexoraClientApp : Application() {
         registerModules()
     }
 
-    /** Yakalanmamış hataları Downloads/baba.txt dosyasına yazar, sonra normal çökme akışına devam eder. */
     private fun installCrashLogger() {
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
@@ -91,7 +91,7 @@ class NexoraClientApp : Application() {
                 val content = "${java.util.Date()}\n\n${Log.getStackTraceString(throwable)}"
                 writeCrashToDownloads(content)
             } catch (e: Exception) {
-                Log.e(TAG, "Crash log yazılamadı: ${e.message}", e)
+                Log.e(TAG, "Failed to write crash log: ${e.message}", e)
             }
             defaultHandler?.uncaughtException(thread, throwable)
         }
@@ -153,7 +153,8 @@ class NexoraClientApp : Application() {
             ComboShortcut(3),
             ComboShortcut(4),
             ComboShortcut(5),
-            ComboShortcut(6)
+            ComboShortcut(6),
+            CommandHelper()
         )
     }
 }

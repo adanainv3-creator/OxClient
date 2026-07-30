@@ -7,7 +7,7 @@ import com.nexoraclient.module.ModuleManager
 class ComboShortcut(index: Int) : BaseModule(
     name        = "ComboShortcut$index",
     category    = ModuleCategory.MISC,
-    description = "Birden fazla modülü tek kısayolla birlikte aç/kapat"
+    description = "Toggle multiple modules together with one shortcut"
 ) {
     val comboName = string("Name",    "Combo $index")
     val targets   = string("Modules", "")
