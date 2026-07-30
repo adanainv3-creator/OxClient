@@ -117,3 +117,27 @@
 -keepattributes !LocalVariableTable,!LocalVariableTypeTable
 
 -printmapping mapping.txt
+
+# ---------- Rastgele class/method/field isimleri ----------
+# Varsayilan R8 isimlendirmesi a, b, c... seklinde sirali/tahmin edilebilir.
+# Kelime listesinden rastgele isim atamak icin dictionary dosyalari.
+# Dosyayi app/ modulu icine koy (app/obfuscation-dictionary.txt).
+-obfuscationdictionary        obfuscation-dictionary.txt
+-classobfuscationdictionary   obfuscation-dictionary.txt
+-packageobfuscationdictionary obfuscation-dictionary.txt
+
+# Tum siniflari tek (rastgele isimli) pakette topla — boylece paket
+# hiyerarsisinden (com.nexoraclient.module.combat vb.) hicbir ipucu kalmaz.
+# NOT: Daha once -overloadaggressively ve -mergeinterfacesaggressively ile
+# birlikte kullanildiginda ServiceLoader / META-INF/services sorunlarina yol
+# acmisti. Asagidaki -adaptresourcefilecontents META-INF/services/** kurali
+# zaten var, bu yuzden -repackageclasses tek basina eklenip test edilebilir.
+# Sorun cikarsa once bunu, hala cikarsa digerlerini tek tek geri ekle.
+-repackageclasses ''
+
+# ---------- relay/ modulu (NBT + Protocol) — dokunma ----------
+# ~/NexoraClient/relay klasoru CloudburstMC'nin nbt ve bedrock-protocol
+# kaynak kodu (org.cloudburstmc.nbt.** / org.cloudburstmc.protocol.**).
+# Bu paket zaten yukarida "CloudburstMC Protocol / NBT" basligi altinda
+# -keep class org.cloudburstmc.** { *; } ile tamamen korunuyor —
+# isim/alan/metot hicbiri obfuscate/shrink edilmiyor. Ek kurala gerek yok.
