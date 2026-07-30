@@ -647,6 +647,8 @@ private fun CommandEntryButton(text: String, onDrag: (Float, Float) -> Unit, onT
         )
     }
 }
+
+private enum class MenuSection(val displayName: String) {
     COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), FRIENDS("Friends"), CONFIG("Config")
 }
 
