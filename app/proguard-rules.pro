@@ -61,6 +61,31 @@
     public static final ** CREATOR;
 }
 
+# ---------- AndroidX Activity / Lifecycle / SavedState / Startup ----------
+# Bunlar Class.forName / manifest meta-data / ViewTree tag mekanizmasi
+# ile reflection uzerinden bulunuyor. Repackage + obfuscation bunlari
+# kirarsa LocalLifecycleOwner set edilmeden Compose agacina ulasip
+# "CompositionLocal LocalLifecycleOwner not present" crash'ine yol acar.
+-keep class androidx.activity.** { *; }
+-keep interface androidx.activity.** { *; }
+-keep class androidx.lifecycle.** { *; }
+-keep interface androidx.lifecycle.** { *; }
+-keep class androidx.savedstate.** { *; }
+-keep interface androidx.savedstate.** { *; }
+-keep class androidx.startup.** { *; }
+-keep public class * extends androidx.startup.Initializer
+-dontwarn androidx.lifecycle.**
+-dontwarn androidx.activity.**
+-dontwarn androidx.savedstate.**
+-dontwarn androidx.startup.**
+
+# Compose runtime'in kendi CompositionLocal / recomposer kurulumu
+# icin de sinif adlarina reflection ile referans verebiliyor.
+-keep class androidx.compose.runtime.** { *; }
+-keep interface androidx.compose.runtime.** { *; }
+-keep class androidx.compose.ui.platform.** { *; }
+-dontwarn androidx.compose.**
+
 # ---------- OkHttp / Okio / Coroutines ----------
 -dontwarn okhttp3.**
 -dontwarn okio.**
@@ -133,7 +158,13 @@
 # acmisti. Asagidaki -adaptresourcefilecontents META-INF/services/** kurali
 # zaten var, bu yuzden -repackageclasses tek basina eklenip test edilebilir.
 # Sorun cikarsa once bunu, hala cikarsa digerlerini tek tek geri ekle.
--repackageclasses ''
+# GEÇICI OLARAK KAPATILDI: bu build'de eklenen -repackageclasses,
+# androidx.activity/lifecycle/compose'un reflection ile bulunan
+# siniflarini (yukarida artik keep edildi) etkilemiyor olsa da,
+# "CompositionLocal LocalLifecycleOwner not present" crash'i bu
+# obfuscation seviyesi eklendikten sonra ortaya cikti. Once yukaridaki
+# keep kurallariyla test et; hala cokerse bu satiri kapali birak.
+# -repackageclasses ''
 
 # ---------- relay/ modulu (NBT + Protocol) — dokunma ----------
 # ~/NexoraClient/relay klasoru CloudburstMC'nin nbt ve bedrock-protocol
