@@ -58,12 +58,22 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     @Volatile private var loggedCacheOverride = false
 
-    private fun handleClientCacheStatus(p: ClientCacheStatusPacket) {
+    // KRİTİK FIX: KillAura.kt'deki headlock fix'iyle birebir aynı kök sebep —
+    // event.cancelAndReplace(p) çağrılmadan yapılan mutation'lar hiçbir zaman
+    // server'a ulaşmıyor, relay ham (decode edilmemiş) wire byte'larını gönderiyor.
+    // Bu yüzden isSupported = false ataması burada yapılsa bile server hâlâ
+    // isSupported = true olarak görüyordu, blob-cache modunda kalmaya devam
+    // ediyordu ve LevelChunkPacket'ler cachingEnabled=true olarak gelmeye devam
+    // ediyordu — handleLevelChunkPacket bu durumda hiçbir şeyi decode etmeden
+    // return ediyor, yani sections HİÇBİR ZAMAN dolmuyordu (AutoMapArt "No chunk
+    // data" hatasının asıl kaynağı buydu).
+    private fun handleClientCacheStatus(event: PacketEvent, p: ClientCacheStatusPacket) {
         if (p.isSupported) {
             p.isSupported = false
             if (!loggedCacheOverride) {
                 loggedCacheOverride = true
             }
+            event.cancelAndReplace(p)
         }
     }
 
@@ -73,7 +83,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             is LevelChunkPacket -> handleLevelChunkPacket(p)
             is UpdateBlockPacket -> handleUpdateBlock(p)
             is UpdateSubChunkBlocksPacket -> handleUpdateSubChunkBlocks(p)
-            is ClientCacheStatusPacket -> handleClientCacheStatus(p)
+            is ClientCacheStatusPacket -> handleClientCacheStatus(event, p)
             is ChangeDimensionPacket -> reset()
             else -> {}
         }

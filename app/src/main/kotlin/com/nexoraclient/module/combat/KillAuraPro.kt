@@ -15,7 +15,6 @@ import com.nexoraclient.utils.RotationUtil
 import com.nexoraclient.utils.WorldBlockTracker
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
-import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import kotlinx.coroutines.*
 
 /**
@@ -50,7 +49,6 @@ class KillAuraPro : BaseModule(
     private val headLock       = bool ("Head Lock",        true)
     private val headLockSmooth = float("Head Lock Smooth", 1f, 0.01f, 1f)
     private val shortcut      = bool ("Shortcut",      false)
-    private val hurtNotify    = bool ("Hurt Notify",   true)
     private val autoWeapon    = bool ("AutoWeapon",    true)
 
     @Volatile private var lastAttackMs = 0L
@@ -199,14 +197,15 @@ class KillAuraPro : BaseModule(
         // ("havadayken") InventoryHelper'ın kılıç için ayırdığı slot kullanılır.
         val hotbarSlot = resolveWeaponSlot()
         PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
-
-        if (hurtNotify.value) sendHurtNotification(session, target)
     }
 
     // ---------- Silah slotu seçimi ----------
     // KillAura.kt ile birebir aynı mantık: AutoWeapon kapalıysa dokunulmaz;
     // yağmur/suda trident slotuna, aksi halde InventoryHelper'ın gerçek
     // konfigürasyonuna bakarak kılıcın olduğu slota geçilir.
+    // FIX: aynı kök sebep KillAura.kt'de düzeltildi — InventoryHelper cache'i
+    // boşken doğrudan seçili slota düşmek, elde kılıç yoksa yumruk saldırısına
+    // sebep oluyordu. Artık düşmeden önce hotbar canlı taranıyor.
     private fun resolveWeaponSlot(): Int {
         val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         if (!autoWeapon.value) return fallback
@@ -214,33 +213,15 @@ class KillAuraPro : BaseModule(
         val wet = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
         if (wet) {
             InventoryHelper.currentTridentSlot?.let { return it }
+            InventoryHelper.findTridentSlotInHotbar()?.let { return it }
+            InventoryHelper.currentSwordSlot?.let { return it }
+            InventoryHelper.findSwordSlotInHotbar()?.let { return it }
             return fallback
         }
 
         InventoryHelper.currentSwordSlot?.let { return it }
+        InventoryHelper.findSwordSlotInHotbar()?.let { return it }
         return fallback
-    }
-
-    // ---------- Sadece kendimize görünen "Hurted" bildirimi ----------
-    // Sunucuya gönderilmiyor; doğrudan client'a paket enjekte ediyoruz, bu yüzden
-    // başka hiçbir oyuncu bu mesajı göremiyor. KillAura.kt ile birebir aynı mantık.
-    private fun sendHurtNotification(session: NexoraRelaySession, target: EntityTracker.TrackedEntity) {
-        val targetName = target.name.takeIf { it.isNotEmpty() } ?: "Player"
-        val text = "§b§lNexoraClient §7§l>>> §c§lHurted §r§7($targetName)"
-
-        val packet = TextPacket().apply {
-            type               = TextPacket.Type.RAW
-            isNeedsTranslation = false
-            sourceName         = ""
-            xuid               = ""
-            platformChatId     = ""
-            setMessage(text)
-            setFilteredMessage("")
-        }
-
-        // NOT: KillAura.kt'deki ile aynı varsayım — client'a paket enjekte eden
-        // metodun adı projede "clientBound" değilse burayı da güncelle.
-        runCatching { session.clientBound(packet) }
     }
 
     // Criticals.kt'deki fix ile birebir aynı prensip: gerçek zaman aralıklı

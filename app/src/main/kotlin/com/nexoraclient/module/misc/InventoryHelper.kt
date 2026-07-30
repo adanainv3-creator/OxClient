@@ -33,6 +33,80 @@ class InventoryHelper : BaseModule(
 
         @Volatile var currentCrystalSlot: Int? = null
             private set
+
+        // FIX (KillAura/KillAuraPro "bazen yumruk atıyor" sorunu): yukarıdaki
+        // cache'ler yalnızca InventoryHelper modülü AÇIKKEN ve tick attığında
+        // güncelleniyor. Modül kapalıyken ya da henüz ilk taramasını yapmadan
+        // önce, kombat modülleri hâlâ "elde kılıç var mı" diye canlı bakabilsin
+        // diye buradan bağımsız, o anki envanter snapshot'ını taze şekilde
+        // tarayan yardımcılar sağlanıyor. Bunlar rule/plan'a değil, doğrudan
+        // gerçek envanterdeki item identifier'larına bakar.
+        fun findSwordSlotInHotbar(): Int? {
+            val snapshot = runCatching { EntityTracker.getInventorySnapshot() }.getOrNull() ?: return null
+            for (slot in 0 until HOTBAR_SIZE) {
+                val item = snapshot[slot] ?: continue
+                val id = resolveItemIdentifier(item) ?: continue
+                if (id.endsWith("_sword")) return slot
+            }
+            return null
+        }
+
+        fun findTridentSlotInHotbar(): Int? {
+            val snapshot = runCatching { EntityTracker.getInventorySnapshot() }.getOrNull() ?: return null
+            for (slot in 0 until HOTBAR_SIZE) {
+                val item = snapshot[slot] ?: continue
+                val id = resolveItemIdentifier(item) ?: continue
+                if (id == "minecraft:trident") return slot
+            }
+            return null
+        }
+
+        private val itemIdentifierCache = ConcurrentHashMap<Int, String>()
+
+        // KRİTİK FIX ("InventoryHelper hiç çalışmıyor" sorununun asıl kaynağı):
+        // WorldBlockTracker.resolveIdentifier() bloklar için nasıl bir "hashed
+        // network ID -> isim" fallback'ine ihtiyaç duyduysa (CrystalAura'daki
+        // palet fix'i), ItemData.definition?.identifier de aynı şekilde bazı
+        // protokol sürümlerinde/hashed item ID modunda null veya boş dönebiliyor.
+        // itemMatches() önceden doğrudan item!!.definition?.identifier'a
+        // güveniyordu — bu null geldiğinde itemMatches HER ZAMAN false dönüyor,
+        // yani rule hiçbir zaman "eşleşti" sayılmıyor VE findBestSource hiçbir
+        // zaman kaynak bulamıyordu (identifier okunamayan item'lar asla hedefle
+        // eşleşmiyordu) — sonuç: modül item'ları hiç algılamıyor/yenilemiyordu.
+        // Burada reflection ile definition üzerinden isim/identifier okumayı
+        // dener, olmazsa session'ın itemDefinitions registry'sinden runtimeId
+        // bazlı isim çözümlemesine düşer (blok tarafındaki fallback ile birebir
+        // aynı prensip).
+        internal fun resolveItemIdentifier(item: ItemData): String? {
+            val def = runCatching { item.definition }.getOrNull() ?: return null
+
+            runCatching { def.identifier }.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
+
+            for (methodName in listOf("getIdentifier", "getName")) {
+                runCatching {
+                    val m = def.javaClass.getMethod(methodName)
+                    (m.invoke(def) as? String)?.takeIf { it.isNotBlank() }
+                }.getOrNull()?.let { return it }
+            }
+
+            val runtimeId = runCatching {
+                val m = def.javaClass.getMethod("getRuntimeId")
+                m.invoke(def) as? Int
+            }.getOrNull() ?: return null
+
+            itemIdentifierCache[runtimeId]?.let { return it }
+
+            val session = PacketEventBus.currentSession ?: return null
+            val resolved = runCatching {
+                val itemDefs = session.clientSession.peer.codecHelper.itemDefinitions
+                val lookup = itemDefs?.javaClass?.getMethod("getDefinition", Int::class.javaPrimitiveType)
+                val itemDef = lookup?.invoke(itemDefs, runtimeId)
+                itemDef?.javaClass?.getMethod("getIdentifier")?.invoke(itemDef) as? String
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+
+            itemIdentifierCache[runtimeId] = resolved
+            return resolved
+        }
     }
 
     enum class HotbarItem(val identifier: String?, val meta: Int) {
@@ -68,37 +142,51 @@ class InventoryHelper : BaseModule(
         PotionWaterBreathingLong("minecraft:potion", 20)
     }
 
-    private data class ItemRule(
-        val item            : EnumSetting<HotbarItem>,
-        val customIdentifier: StringSetting,
-        val customMeta      : IntSetting,
-        val slotCount       : IntSetting,
-        val minCount        : IntSetting
-    )
-
     private data class SlotTarget(val identifier: String, val meta: Int, val minCount: Int)
 
-    private val defaultItems      = arrayOf(
-        HotbarItem.Trident, HotbarItem.DiamondSword, HotbarItem.DiamondPickaxe,
-        HotbarItem.PotionStrength, HotbarItem.EndCrystal, HotbarItem.GoldenApple,
-        HotbarItem.None, HotbarItem.None, HotbarItem.None
-    )
-    private val defaultSlotCounts = intArrayOf(1, 1, 1, 3, 2, 1, 0, 0, 0)
-    private val defaultMinCounts  = intArrayOf(1, 1, 1, 1, 20, 4, 1, 1, 1)
-
-    private val rules: List<ItemRule> = (0 until HOTBAR_SIZE).map { i ->
-        ItemRule(
-            item             = enum  ("Rule ${i + 1} Item",       defaultItems[i]),
-            customIdentifier = string("Rule ${i + 1} Custom Id",  ""),
-            customMeta       = int   ("Rule ${i + 1} Custom Meta", -1, -1, 40),
-            slotCount        = int   ("Rule ${i + 1} Slot Count",  defaultSlotCounts[i], 0, HOTBAR_SIZE),
-            minCount         = int   ("Rule ${i + 1} Min Count",   defaultMinCounts[i], 1, 64)
-        )
+    // ---------- Net isimlendirilmiş item grupları ----------
+    // Eskiden "Rule 1 Item", "Rule 2 Item"... diye kafa karıştıran, hangi
+    // slotun neye karşılık geldiği belli olmayan genel kurallar vardı.
+    // Artık her item türü kendi adıyla ayrı bir grup: Sword, Trident,
+    // Pickaxe, Gapple, End Crystal, Strength Potion — her biri kendi
+    // "Slot Count" (kaç hotbar slotu ayrılsın) ve "Min Count" (slot başına
+    // minimum adet) ayarına sahip. Dashboard'da artık "Sword Slot Count",
+    // "Gapple Slot Count", "Trident Slot Count", "Strength Potion Slot Count"
+    // gibi anlaşılır isimler görünür.
+    private data class ItemGroup(
+        val label     : String,
+        val tierChoice: EnumSetting<HotbarItem>?,
+        val fixedItem : HotbarItem?,
+        val slotCount : IntSetting,
+        val minCount  : IntSetting
+    ) {
+        val resolved: HotbarItem get() = fixedItem ?: tierChoice!!.value
     }
+
+    private val swordTier = enum("Sword Type", HotbarItem.DiamondSword)
+    private val pickaxeTier = enum("Pickaxe Type", HotbarItem.DiamondPickaxe)
+    private val gappleTier = enum("Gapple Type", HotbarItem.GoldenApple)
+    private val potionTier = enum("Strength Potion Type", HotbarItem.PotionStrength)
+
+    private val groups: List<ItemGroup> = listOf(
+        ItemGroup("Trident",        null,       HotbarItem.Trident,   int("Trident Slot Count", 1, 0, 5), int("Trident Min Count", 1, 1, 64)),
+        ItemGroup("Sword",          swordTier,  null,                 int("Sword Slot Count",   1, 0, 5), int("Sword Min Count",   1, 1, 64)),
+        ItemGroup("Pickaxe",        pickaxeTier,null,                 int("Pickaxe Slot Count", 1, 0, 5), int("Pickaxe Min Count", 1, 1, 64)),
+        ItemGroup("Strength Potion",potionTier, null,                 int("Strength Potion Slot Count", 3, 0, 5), int("Strength Potion Min Count", 1, 1, 64)),
+        ItemGroup("End Crystal",    null,       HotbarItem.EndCrystal,int("End Crystal Slot Count", 2, 0, 5), int("End Crystal Min Count", 16, 1, 64)),
+        ItemGroup("Gapple",         gappleTier, null,                 int("Gapple Slot Count",  1, 0, 5), int("Gapple Min Count",  4, 1, 64))
+    )
+
+    // ---------- Serbest ekstra slot için (opsiyonel) özel item ----------
+    private val customEnabled    = bool  ("Custom Item Enabled", false)
+    private val customIdentifier = string("Custom Item Id",      "")
+    private val customMeta       = int   ("Custom Item Meta",   -1, -1, 40)
+    private val customSlotCount  = int   ("Custom Item Slot Count", 0, 0, 5)
+    private val customMinCount   = int   ("Custom Item Min Count",  1, 1, 64)
 
     // ---------- Yağmur/Su durumunda trident önceliği ----------
     private val waterTridentEnabled = bool("Water/Rain Trident Priority", false)
-    private val tridentSlot         = int ("Trident Slot",               8, 0, HOTBAR_SIZE - 1)
+    private val tridentSlot         = int ("Trident Priority Slot",       8, 0, HOTBAR_SIZE - 1)
 
     private val lastSendMs = ConcurrentHashMap<Int, Long>()
     @Volatile private var tickJob: kotlinx.coroutines.Job? = null
@@ -123,20 +211,28 @@ class InventoryHelper : BaseModule(
     private fun buildSlotPlan(): Array<SlotTarget?> {
         val plan = arrayOfNulls<SlotTarget>(HOTBAR_SIZE)
         var slot = 0
-        for (rule in rules) {
+
+        for (group in groups) {
             if (slot >= HOTBAR_SIZE) break
-            val choice = rule.item.value
+            val choice = group.resolved
             if (choice == HotbarItem.None) continue
+            val targetId = choice.identifier ?: continue
 
-            val targetId = if (choice == HotbarItem.Custom) rule.customIdentifier.value.trim()
-                           else choice.identifier ?: continue
-            if (targetId.isEmpty()) continue
-            val targetMeta = if (choice == HotbarItem.Custom) rule.customMeta.value else choice.meta
-
-            val count = rule.slotCount.value.coerceAtMost(HOTBAR_SIZE - slot)
+            val count = group.slotCount.value.coerceAtMost(HOTBAR_SIZE - slot)
             repeat(count) {
-                plan[slot] = SlotTarget(targetId, targetMeta, rule.minCount.value)
+                plan[slot] = SlotTarget(targetId, choice.meta, group.minCount.value)
                 slot++
+            }
+        }
+
+        if (customEnabled.value && slot < HOTBAR_SIZE) {
+            val id = customIdentifier.value.trim()
+            if (id.isNotEmpty()) {
+                val count = customSlotCount.value.coerceAtMost(HOTBAR_SIZE - slot)
+                repeat(count) {
+                    plan[slot] = SlotTarget(id, customMeta.value, customMinCount.value)
+                    slot++
+                }
             }
         }
         return plan
@@ -220,9 +316,9 @@ class InventoryHelper : BaseModule(
 
     private fun itemMatches(item: ItemData?, targetId: String, meta: Int): Boolean {
         if (InventoryUtil.isEmpty(item)) return false
-        val identifier = runCatching { item!!.definition?.identifier }.getOrNull() ?: return false
+        val identifier = resolveItemIdentifier(item!!) ?: return false
         if (identifier != targetId) return false
-        if (meta >= 0 && item!!.damage != meta) return false
+        if (meta >= 0 && item.damage != meta) return false
         return true
     }
 

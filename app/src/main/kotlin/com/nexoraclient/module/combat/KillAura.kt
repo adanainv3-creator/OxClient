@@ -15,7 +15,6 @@ import com.nexoraclient.utils.RotationUtil
 import com.nexoraclient.utils.WorldBlockTracker
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
-import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 
 class KillAura : BaseModule(
     name        = "KillAura",
@@ -58,7 +57,6 @@ class KillAura : BaseModule(
     private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
-    private val hurtNotify      = bool ("Hurt Notify",      true)
     private val autoWeapon      = bool ("AutoWeapon",       true)
 
     @Volatile private var currentTargetId    = 0L
@@ -287,8 +285,6 @@ class KillAura : BaseModule(
         // AutoWeapon kapalıysa hiçbir slot zorlaması yapılmaz, seçili slot kullanılır.
         val hotbarSlot = resolveWeaponSlot()
         PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
-
-        if (hurtNotify.value) sendHurtNotification(session, e)
     }
 
     // ---------- Silah slotu seçimi ----------
@@ -296,10 +292,13 @@ class KillAura : BaseModule(
     // 2) Yağmur yağıyorsa VEYA WorldBlockTracker gerçekten suda olduğumuzu
     //    söylüyorsa: InventoryHelper'ın trident için ayırdığı sabit slot kullanılır.
     // 3) İkisi de yoksa ("havadayken"): InventoryHelper'ın kurallarına göre
-    //    kılıcın bulunduğu slot kullanılır (gerçek konfigürasyona bakan
-    //    "düzgün kontrol" — sadece o an seçili slota güvenmiyoruz).
-    // 4) InventoryHelper hiç aktif değilse veya ilgili slot bulunamadıysa,
-    //    en son çare olarak seçili hotbar slotuna düşülür.
+    //    kılıcın bulunduğu slot kullanılır.
+    // 4) FIX: InventoryHelper cache'i boşsa (modül kapalı/henüz taramadıysa)
+    //    artık doğrudan "seçili slota" düşülmüyor — bu, o an elde tutulan şey
+    //    kılıç değilse (ör. az önce potion/gapple yediysek) sunucuya yumruk
+    //    saldırısı olarak gidiyordu. Onun yerine hotbar CANLI olarak taranıp
+    //    gerçekten bir kılıç/trident var mı diye bakılıyor; ancak hiçbir yerde
+    //    kılıç yoksa en son çare olarak seçili slota düşülür.
     private fun resolveWeaponSlot(): Int {
         val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         if (!autoWeapon.value) return fallback
@@ -307,33 +306,15 @@ class KillAura : BaseModule(
         val wet = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
         if (wet) {
             InventoryHelper.currentTridentSlot?.let { return it }
+            InventoryHelper.findTridentSlotInHotbar()?.let { return it }
+            InventoryHelper.currentSwordSlot?.let { return it }
+            InventoryHelper.findSwordSlotInHotbar()?.let { return it }
             return fallback
         }
 
         InventoryHelper.currentSwordSlot?.let { return it }
+        InventoryHelper.findSwordSlotInHotbar()?.let { return it }
         return fallback
-    }
-
-    // ---------- Sadece kendimize görünen "Hurted" bildirimi ----------
-    // Sunucuya gönderilmiyor; doğrudan client'a paket enjekte ediyoruz, bu yüzden
-    // başka hiçbir oyuncu bu mesajı göremiyor.
-    private fun sendHurtNotification(session: NexoraRelaySession, target: EntityTracker.TrackedEntity) {
-        val targetName = target.name.takeIf { it.isNotEmpty() } ?: "Player"
-        val text = "§b§lNexoraClient §7§l>>> §c§lHurted §r§7($targetName)"
-
-        val packet = TextPacket().apply {
-            type               = TextPacket.Type.RAW
-            isNeedsTranslation = false
-            sourceName         = ""
-            xuid               = ""
-            platformChatId     = ""
-            setMessage(text)
-            setFilteredMessage("")
-        }
-
-        // NOT: Bu projede client'a paket enjekte eden metodun adı "clientBound"
-        // değilse (ör. sendToClient), burayı gerçek NexoraRelaySession API'sine göre güncelle.
-        runCatching { session.clientBound(packet) }
     }
 
     private suspend fun injectCrit(s: com.nexoraclient.core.relay.NexoraRelaySession) {

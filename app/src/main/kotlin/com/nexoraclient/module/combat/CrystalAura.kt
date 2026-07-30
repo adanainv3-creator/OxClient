@@ -1,547 +1,1 @@
-package com.nexoraclient.module.combat
-
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.Definitions
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.module.misc.InventoryHelper
-import com.nexoraclient.module.social.isFriendEntity
-import com.nexoraclient.utils.CritLock
-import com.nexoraclient.utils.InventoryUtil
-import com.nexoraclient.utils.MathUtil
-import com.nexoraclient.utils.PacketUtil
-import com.nexoraclient.utils.RotationUtil
-import com.nexoraclient.utils.WorldBlockTracker
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import org.cloudburstmc.math.vector.Vector3f
-import org.cloudburstmc.math.vector.Vector3i
-import org.cloudburstmc.protocol.bedrock.data.LevelEvent
-import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
-import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
-import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
-import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
-import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
-import org.cloudburstmc.protocol.bedrock.packet.*
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.abs
-import kotlin.math.floor
-import kotlin.math.max
-
-class CrystalAura : BaseModule(
-    name        = "CrystalAura",
-    category    = ModuleCategory.COMBAT,
-    description = "Çok hedefli otomatik kristal yerleştirme/kırma"
-) {
-    enum class CritMode { None, MovePacket, Vanilla }
-
-    companion object {
-        private const val SELF_EYE_HEIGHT      = 1.62f
-        private const val BLOCK_DEF_SCAN_CAP   = 20000
-        private const val BLOCK_DEF_MISS_LIMIT = 64
-        private const val CANDIDATE_CACHE_MS   = 100L
-        private const val PLACE_RETRY_MS       = 150L
-        private const val BURST_DURATION_MS    = 1500L
-        private const val SEARCH_Y_BELOW       = 3
-        private const val SEARCH_Y_ABOVE       = 2
-        private const val MAX_PLACE_PER_TICK   = 32
-        private const val MAX_BREAK_PER_TICK   = 20
-
-        private val NON_SOLID = setOf(
-            "minecraft:air", "minecraft:water", "minecraft:flowing_water",
-            "minecraft:lava", "minecraft:flowing_lava",
-            "minecraft:void_air", "minecraft:cave_air"
-        )
-
-        private val CORNER_OFFSETS = arrayOf(
-            intArrayOf(-1, 0), intArrayOf(1, 0), intArrayOf(0, -1), intArrayOf(0, 1),
-            intArrayOf(-1,-1), intArrayOf(1,-1), intArrayOf(-1, 1), intArrayOf(1, 1)
-        )
-    }
-
-    private val place             = bool("Place",            true)
-    private val breakCrystals     = bool("Break",            true)
-    private val multiTarget       = bool("Multi Target",     true)
-    private val tickIntervalMs    = int ("Speed (ms)",       5, 5, 100)
-
-    private val targetRange       = int ("Target Range",     14, 4, 30)
-    private val friendSkip        = bool("Friend Skip",      true)
-    private val predictMovement   = bool("Predict",          true)
-
-    private val placeRange        = int ("Place Range",      8, 2, 16)
-    private val searchRadius      = int ("Search Radius",    3, 1, 6)
-    private val maxPlacePerSec    = int ("Place/Sec",        80, 1, 200)
-    private val placeDelayMs      = int ("Place Delay",      5, 1, 500)
-
-    private val burstOnTotem      = bool("Burst on Totem",   true)
-    private val burstHealth       = int ("Burst HP",         8, 1, 20)
-
-    private val autoObsidian      = bool("Auto Obsidian",    true)
-    private val selfSurround      = bool("Self Surround",    true)
-
-    private val breakRange        = int ("Break Range",      10, 2, 20)
-    private val breakDelayMs      = int ("Break Delay",      5, 1, 300)
-    private val breakCrit         = enum("Break Crit",       CritMode.MovePacket)
-
-    private val noSwitch          = bool("No Switch",        true)
-    private val noParticles       = bool("No Particle",      true)
-    private val silentRotation    = bool("Silent Rotation",  true)
-    private val shortcut          = bool("Shortcut",         false)
-
-    private val pendingPositions  = ConcurrentHashMap<Long, Long>()
-    private val pendingObsidian   = ConcurrentHashMap<Long, Long>()
-    private val totemBurstUntil   = ConcurrentHashMap<Long, Long>()
-    private val lastPlaceMsMap    = ConcurrentHashMap<Long, Long>()
-    private val blockDefCache     = ConcurrentHashMap<String, BlockDefinition>()
-    private val candidateCache    = ConcurrentHashMap<Long, TargetCache>()
-
-    @Volatile private var lastBreakMs        = 0L
-    @Volatile private var lastSelfSurroundMs = 0L
-
-    private val placeTokens       = AtomicInteger(0)
-    @Volatile private var tokenWindowStart = 0L
-    @Volatile private var currentWindowCap = 0
-    @Volatile private var tickJob: kotlinx.coroutines.Job? = null
-
-    private data class SurfaceHit(val y: Int, val blockId: String)
-    private data class PlacePos(val x: Int, val y: Int, val z: Int, val blockId: String)
-    private data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val distSq: Float)
-    private data class TargetCache(val tx: Int, val ty: Int, val tz: Int, val candidates: List<Candidate>, val ts: Long)
-    private data class PreparedItem(val slot: Int, val item: ItemData, val revertTo: Int?)
-
-    private fun takePlaceToken(): Boolean {
-        val now = System.currentTimeMillis()
-        val cap = maxPlacePerSec.value
-        if (now - tokenWindowStart >= 1000L) {
-            tokenWindowStart = now; currentWindowCap = cap; placeTokens.set(cap)
-        } else if (cap > currentWindowCap) {
-            placeTokens.addAndGet(cap - currentWindowCap); currentWindowCap = cap
-        }
-        return placeTokens.getAndUpdate { if (it > 0) it - 1 else it } > 0
-    }
-
-    private fun isBurstTarget(target: EntityTracker.TrackedEntity): Boolean {
-        if (!burstOnTotem.value) return false
-        if (target.health <= burstHealth.value) return true
-        return System.currentTimeMillis() < (totemBurstUntil[target.runtimeId] ?: 0L)
-    }
-
-    override fun onEnable() {
-        super.onEnable()
-        pendingPositions.clear(); pendingObsidian.clear()
-        blockDefCache.clear(); lastPlaceMsMap.clear()
-        totemBurstUntil.clear(); candidateCache.clear()
-        placeTokens.set(0); tokenWindowStart = 0L
-        tickJob?.cancel()
-        tickJob = launchTickLoop(tickIntervalMs.value.toLong()) { tick() }
-    }
-
-    override fun onDisable() {
-        tickJob?.cancel(); tickJob = null
-        super.onDisable()
-        pendingPositions.clear(); pendingObsidian.clear()
-        lastPlaceMsMap.clear(); candidateCache.clear()
-    }
-
-    override fun onPacket(event: PacketEvent) {
-        if (!isEnabled) return
-        when (val pkt = event.packet) {
-            is AddEntityPacket -> {
-                if (pkt.identifier.contains("crystal", ignoreCase = true)) {
-                    pendingPositions.remove(posKey(
-                        floor(pkt.position.x - 0.5f).toInt(),
-                        floor(pkt.position.y - 1f).toInt(),
-                        floor(pkt.position.z - 0.5f).toInt()
-                    ))
-                }
-            }
-            is UpdateBlockPacket -> {
-                val id = runCatching { pkt.definition?.runtimeId }.getOrNull()
-                if (id != null) pendingObsidian.remove(posKey(pkt.blockPosition.x, pkt.blockPosition.y, pkt.blockPosition.z))
-            }
-            is LevelEventPacket -> {
-                if (noParticles.value &&
-                    (pkt.type == LevelEvent.PARTICLE_EXPLOSION || pkt.type == LevelEvent.PARTICLE_BLOCK_EXPLOSION)
-                ) event.cancel()
-            }
-            is LevelSoundEventPacket -> {
-                if (noParticles.value) {
-                    val name = runCatching { pkt.sound?.name }.getOrNull() ?: ""
-                    if (name.contains("EXPLODE", ignoreCase = true)) event.cancel()
-                }
-            }
-            is CameraShakePacket -> { if (noParticles.value) event.cancel() }
-            is EntityEventPacket -> {
-                if (burstOnTotem.value) {
-                    val typeName = runCatching { pkt.type?.toString()?.uppercase() }.getOrNull() ?: ""
-                    if (typeName.contains("TOTEM"))
-                        totemBurstUntil[pkt.runtimeEntityId] = System.currentTimeMillis() + BURST_DURATION_MS
-                }
-            }
-            else -> {}
-        }
-    }
-
-    private suspend fun tick() {
-        if (selfSurround.value) doSelfSurround()
-        if (breakCrystals.value) doBreakInRange()
-
-        val targets = selectTargets()
-        if (targets.isEmpty()) { candidateCache.clear(); return }
-
-        val liveIds = targets.mapTo(HashSet(targets.size)) { it.runtimeId }
-        candidateCache.keys.retainAll(liveIds)
-
-        if (place.value) {
-            if (multiTarget.value) doPlaceMulti(targets) else doPlace(targets.first())
-        }
-    }
-
-    private fun selectTargets(): List<EntityTracker.TrackedEntity> {
-        if (EntityTracker.selfRuntimeId <= 0L) return emptyList()
-        val sx = EntityTracker.selfX; val sy = EntityTracker.selfY; val sz = EntityTracker.selfZ
-        return EntityTracker.getPlayers(targetRange.value.toFloat())
-            .asSequence()
-            .filter { it.runtimeId != EntityTracker.selfRuntimeId }
-            .filter { !friendSkip.value || !it.isFriendEntity }
-            .filter { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) > 0.0225f }
-            .sortedWith(
-                compareByDescending<EntityTracker.TrackedEntity> { isBurstTarget(it) }
-                    .thenBy { it.health }
-                    .thenBy { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) }
-            )
-            .toList()
-    }
-
-    private fun predictedPos(target: EntityTracker.TrackedEntity): Triple<Float, Float, Float> {
-        if (!predictMovement.value) return Triple(target.x, target.y, target.z)
-        val vx = (target.x - target.prevX) * 3f
-        val vz = (target.z - target.prevZ) * 3f
-        return Triple(target.x + vx, target.y, target.z + vz)
-    }
-
-    private fun doPlaceMulti(targets: List<EntityTracker.TrackedEntity>) {
-        val session  = PacketEventBus.currentSession ?: return
-        val prepared = prepareItemForUse(session) ?: return
-        try {
-            for (t in targets) doPlace(t, session, prepared)
-        } finally {
-            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }
-        }
-    }
-
-    private fun buildCandidates(session: NexoraRelaySession, target: EntityTracker.TrackedEntity, px: Float, py: Float, pz: Float): List<Candidate> {
-        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()
-        val radius = searchRadius.value
-        val cap = CORNER_OFFSETS.size + (2 * radius + 1) * (2 * radius + 1)
-        val list = ArrayList<Candidate>(cap)
-        val seen = HashSet<Int>(cap * 2)
-
-        for (off in CORNER_OFFSETS) addCandidateAt(session, tx + off[0], ty, tz + off[1], target, list, seen)
-        for (dx in -radius..radius) for (dz in -radius..radius) addCandidateAt(session, tx + dx, ty, tz + dz, target, list, seen)
-
-        list.sortBy { it.distSq }
-        return list
-    }
-
-    private fun addCandidateAt(session: NexoraRelaySession, bx: Int, ty: Int, bz: Int, target: EntityTracker.TrackedEntity, list: MutableList<Candidate>, seen: HashSet<Int>) {
-        val key = bx * 100000 + bz
-        if (!seen.add(key)) return
-        val hit = findSurface(bx, ty, bz) ?: run {
-            if (autoObsidian.value) tryPlaceObsidianSupportAt(session, bx, ty, bz)
-            return
-        }
-        val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f
-        val ddx = cx - target.x; val ddy = cy - (target.y + 0.9f); val ddz = cz - target.z
-        list.add(Candidate(bx, bz, hit.y, hit.blockId, ddx * ddx + ddy * ddy + ddz * ddz))
-    }
-
-    private fun doPlace(target: EntityTracker.TrackedEntity, sharedSession: NexoraRelaySession? = null, sharedPrepared: PreparedItem? = null) {
-        val now = System.currentTimeMillis()
-        if (now - (lastPlaceMsMap[target.runtimeId] ?: 0L) < placeDelayMs.value) return
-        lastPlaceMsMap[target.runtimeId] = now
-
-        val session = sharedSession ?: PacketEventBus.currentSession ?: return
-        val (px, py, pz) = predictedPos(target)
-        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()
-
-        val cached = candidateCache[target.runtimeId]
-        val candidates: List<Candidate> = if (
-            cached != null && cached.tx == tx && cached.ty == ty && cached.tz == tz && now - cached.ts < CANDIDATE_CACHE_MS
-        ) cached.candidates else {
-            val built = buildCandidates(session, target, px, py, pz)
-            candidateCache[target.runtimeId] = TargetCache(tx, ty, tz, built, now)
-            built
-        }
-
-        if (candidates.isEmpty()) return
-
-        val crystalsSnapshot = EntityTracker.getCrystals(placeRange.value.toFloat() + 2f)
-        val prepared = sharedPrepared ?: prepareItemForUse(session) ?: return
-
-        var placed = 0
-        for (c in candidates) {
-            if (placed >= MAX_PLACE_PER_TICK || !takePlaceToken()) break
-            if (crystalExistsNearCached(crystalsSnapshot, c.bx + 0.5f, c.hitY + 1f, c.bz + 0.5f)) continue
-            if (tryPlaceCrystalAt(session, prepared, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) placed++
-        }
-
-        if (sharedPrepared == null)
-            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }
-    }
-
-    private fun tryPlaceCrystalAt(session: NexoraRelaySession, prepared: PreparedItem, pos: PlacePos): Boolean {
-        val now = System.currentTimeMillis()
-        val key = posKey(pos.x, pos.y, pos.z)
-        val pending = pendingPositions[key]
-        if (pending != null) {
-            if (now - pending < PLACE_RETRY_MS) return false
-            pendingPositions.remove(key)
-        }
-        val cx = pos.x + 0.5f; val cy = pos.y + 1f; val cz = pos.z + 0.5f
-        if (MathUtil.dist3(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ) > placeRange.value) return false
-        val ok = sendPlacementUseRaw(session, prepared, Vector3i.from(pos.x, pos.y, pos.z), pos.blockId)
-        if (ok) pendingPositions[key] = now
-        return ok
-    }
-
-    private fun tryPlaceObsidianSupportAt(session: NexoraRelaySession, bx: Int, ty: Int, bz: Int) {
-        val now = System.currentTimeMillis()
-        val key = posKey(bx, ty, bz)
-        if (now - (pendingObsidian[key] ?: 0L) < 100L) return
-        if (!WorldBlockTracker.hasAnyTerrainData()) return
-
-        var supportY: Int? = null
-        for (by in (ty - 3)..(ty + 1)) {
-            val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue
-            if (here in NON_SOLID) continue
-            val above = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)
-            if (above != null && above !in NON_SOLID) continue
-            supportY = by
-            break
-        }
-        val sy = supportY ?: return
-        if (MathUtil.dist3(bx + 0.5f, sy + 1.5f, bz + 0.5f, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ) > placeRange.value) return
-        if (sendPlacementUse(session, "minecraft:obsidian", Vector3i.from(bx, sy, bz), "minecraft:obsidian")) pendingObsidian[key] = now
-    }
-
-    private fun doSelfSurround() {
-        val now = System.currentTimeMillis()
-        if (now - lastSelfSurroundMs < 150L) return
-        val session = PacketEventBus.currentSession ?: return
-        lastSelfSurroundMs = now
-        val fx = floor(EntityTracker.selfX).toInt(); val fy = floor(EntityTracker.selfY).toInt() - 1; val fz = floor(EntityTracker.selfZ).toInt()
-        val hasData = WorldBlockTracker.hasAnyTerrainData()
-        for ((dx, dz) in listOf(1 to 1, 1 to -1, -1 to 1, -1 to -1)) {
-            val tx = fx + dx; val tz = fz + dz
-            val existing = if (hasData) WorldBlockTracker.getBlockIdentifier(tx, fy, tz) else null
-            if (existing != null && existing !in NON_SOLID) continue
-            val supportId = (if (hasData) WorldBlockTracker.getBlockIdentifier(tx, fy - 1, tz) else null) ?: "minecraft:obsidian"
-            if (supportId in NON_SOLID) continue
-            sendPlacementUse(session, "minecraft:obsidian", Vector3i.from(tx, fy - 1, tz), "minecraft:obsidian")
-        }
-    }
-
-    private fun doBreakInRange() {
-        val now = System.currentTimeMillis()
-        if (now - lastBreakMs < breakDelayMs.value) return
-        val session = PacketEventBus.currentSession ?: return
-        val sx = EntityTracker.selfX; val sy = EntityTracker.selfY; val sz = EntityTracker.selfZ
-        val crystals = EntityTracker.getCrystals(breakRange.value.toFloat())
-        if (crystals.isEmpty()) return
-        lastBreakMs = now
-        val toBreak = crystals
-            .sortedBy { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) }
-            .take(MAX_BREAK_PER_TICK)
-        scope.launch { for (c in toBreak) attackCrystal(c.runtimeId, session) }
-    }
-
-    private suspend fun attackCrystal(rid: Long, session: NexoraRelaySession) {
-        val target = EntityTracker.getById(rid) ?: return
-        val r = RotationUtil.toPoint(target.x, target.y + 0.5f, target.z)
-        CritLock.tryRun(name) { injectCrit(session) }
-        if (silentRotation.value) PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch, onGround = true)
-        PacketUtil.sendSwing(session)
-        PacketUtil.sendAttack(session, rid)
-    }
-
-    private suspend fun injectCrit(s: NexoraRelaySession) {
-        try {
-            when (breakCrit.value) {
-                CritMode.None       -> {}
-                CritMode.MovePacket -> {
-                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
-                    delay(15L)
-                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f, onGround = true)
-                }
-                CritMode.Vanilla -> {
-                    listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
-                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
-                        delay(25L)
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun findSurface(bx: Int, ty: Int, bz: Int): SurfaceHit? {
-        if (!WorldBlockTracker.hasAnyTerrainData()) return SurfaceHit(ty - 1, "minecraft:obsidian")
-        var sawData = false
-        for (by in (ty - SEARCH_Y_BELOW)..(ty + SEARCH_Y_ABOVE)) {
-            val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue
-            sawData = true
-            if (here in NON_SOLID) continue
-            val above  = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)
-            val above2 = WorldBlockTracker.getBlockIdentifier(bx, by + 2, bz)
-            if ((above != null && above !in NON_SOLID) || (above2 != null && above2 !in NON_SOLID)) continue
-            return SurfaceHit(by, here)
-        }
-        if (!sawData) return SurfaceHit(ty - 1, "minecraft:obsidian")
-        return null
-    }
-
-    private fun crystalExistsNearCached(crystals: List<EntityTracker.TrackedEntity>, cx: Float, cy: Float, cz: Float): Boolean =
-        crystals.any { abs(it.x - cx) < 0.9f && abs(it.y - cy) < 1.3f && abs(it.z - cz) < 0.9f }
-
-    private fun prepareItemForUse(session: NexoraRelaySession): PreparedItem? {
-        val identifier = "minecraft:end_crystal"
-
-        val knownSlot = InventoryHelper.currentCrystalSlot
-        if (knownSlot != null) {
-            val item = EntityTracker.getInventoryItem(knownSlot)
-            val itemId = runCatching { item?.definition?.identifier }.getOrNull()
-            if (item != null && item.count > 0 && itemId == identifier) {
-                return if (knownSlot == EntityTracker.selfHotbarSlot) {
-                    PreparedItem(knownSlot, item, null)
-                } else {
-                    val original = EntityTracker.selfHotbarSlot
-                    InventoryUtil.sendHotbarSelect(session, knownSlot)
-                    EntityTracker.selfHotbarSlot = knownSlot
-                    PreparedItem(knownSlot, item, if (noSwitch.value) original else null)
-                }
-            }
-        }
-
-        EntityTracker.getHeldItem()?.let { held ->
-            val id = runCatching { held.definition?.identifier }.getOrNull()
-            if (id == identifier && held.count > 0) return PreparedItem(EntityTracker.selfHotbarSlot, held, null)
-        }
-
-        for (slot in 0..8) {
-            val item = EntityTracker.getInventoryItem(slot) ?: continue
-            if (item.count <= 0) continue
-            if (runCatching { item.definition?.identifier }.getOrNull() != identifier) continue
-            val original = EntityTracker.selfHotbarSlot
-            InventoryUtil.sendHotbarSelect(session, slot)
-            EntityTracker.selfHotbarSlot = slot
-            return PreparedItem(slot, item, if (noSwitch.value) original else null)
-        }
-
-        for (slot in 9..35) {
-            val item = EntityTracker.getInventoryItem(slot) ?: continue
-            if (item.count <= 0 || runCatching { item.definition?.identifier }.getOrNull() != identifier) continue
-            val destSlot = findEmptyHotbarSlot() ?: continue
-            val destItem = EntityTracker.getInventoryItem(destSlot) ?: ItemData.AIR
-            try {
-                InventoryUtil.sendInventoryMove(
-                    session = session,
-                    sourceContainer = ContainerSlotType.HOTBAR_AND_INVENTORY,
-                    sourceContainerId = ContainerId.INVENTORY,
-                    sourceSlot = slot, sourceItem = item,
-                    destContainer = ContainerSlotType.HOTBAR_AND_INVENTORY,
-                    destContainerId = ContainerId.INVENTORY,
-                    destSlot = destSlot, destItem = destItem
-                )
-            } catch (_: Exception) { continue }
-            val original = EntityTracker.selfHotbarSlot
-            InventoryUtil.sendHotbarSelect(session, destSlot)
-            EntityTracker.selfHotbarSlot = destSlot
-            return PreparedItem(destSlot, item, if (noSwitch.value) original else null)
-        }
-        return null
-    }
-
-    private fun findEmptyHotbarSlot(): Int? {
-        for (slot in 0..8) {
-            val item = EntityTracker.getInventoryItem(slot)
-            if (item == null || item.count <= 0) return slot
-        }
-        return null
-    }
-
-    private fun sendPlacementUse(session: NexoraRelaySession, identifier: String, blockPos: Vector3i, blockId: String): Boolean {
-        val prepared = prepareItemForUse(session) ?: return false
-        val ok = sendPlacementUseRaw(session, prepared, blockPos, blockId)
-        prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }
-        return ok
-    }
-
-    private fun sendPlacementUseRaw(session: NexoraRelaySession, prepared: PreparedItem, blockPos: Vector3i, blockId: String): Boolean {
-        val blockDef  = getBlockDefinition(session, blockId) ?: return false
-        val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
-        return try {
-            session.serverBound(InventoryTransactionPacket().apply {
-                transactionType          = InventoryTransactionType.ITEM_USE
-                actionType               = 0
-                this.blockPosition       = blockPos
-                blockFace                = 1
-                hotbarSlot               = prepared.slot
-                itemInHand               = prepared.item
-                playerPosition           = playerPos
-                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
-                blockDefinition          = blockDef
-                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
-                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
-                clientCooldownState      = 0
-            })
-            true
-        } catch (_: Exception) { false }
-    }
-
-    private fun getBlockDefinition(session: NexoraRelaySession, targetId: String): BlockDefinition? {
-        blockDefCache[targetId]?.let { return it }
-        try {
-            val blockDefs = session.clientSession.peer.codecHelper.blockDefinitions
-            if (blockDefs != null) {
-                var i = 0; var misses = 0
-                while (i < BLOCK_DEF_SCAN_CAP && misses < BLOCK_DEF_MISS_LIMIT) {
-                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null }
-                    if (def == null) { misses++; i++; continue }
-                    misses = 0
-                    val id = when (def) {
-                        is SimpleBlockDefinition -> def.identifier
-                        is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
-                        else -> null
-                    }
-                    if (id == targetId) { blockDefCache[targetId] = def; return def }
-                    i++
-                }
-            }
-        } catch (_: Exception) {}
-        val fallbackId = when (targetId) {
-            "minecraft:obsidian"    -> 49
-            "minecraft:bedrock"     -> 7
-            "minecraft:end_crystal" -> 198
-            else                    -> return null
-        }
-        val fallback = SimpleBlockDefinition(
-            targetId, fallbackId,
-            org.cloudburstmc.nbt.NbtMap.builder()
-                .putString("name", targetId)
-                .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())
-                .build()
-        )
-        blockDefCache[targetId] = fallback
-        return fallback
-    }
-
-    private fun posKey(x: Int, y: Int, z: Int): Long =
-        ((x.toLong() and 0x3FFFFFFL) shl 38) or
-        ((y.toLong() and 0xFFFL)     shl 26) or
-        (z.toLong() and 0x3FFFFFFL)
-}
+package com.nexoraclient.module.combatimport com.nexoraclient.core.proxy.EntityTrackerimport com.nexoraclient.core.relay.Definitionsimport com.nexoraclient.core.relay.NexoraRelaySessionimport com.nexoraclient.events.PacketEventimport com.nexoraclient.events.PacketEventBusimport com.nexoraclient.module.*import com.nexoraclient.module.misc.InventoryHelperimport com.nexoraclient.module.social.isFriendEntityimport com.nexoraclient.utils.CritLockimport com.nexoraclient.utils.InventoryUtilimport com.nexoraclient.utils.MathUtilimport com.nexoraclient.utils.PacketUtilimport com.nexoraclient.utils.RotationUtilimport com.nexoraclient.utils.WorldBlockTrackerimport kotlinx.coroutines.delayimport kotlinx.coroutines.launchimport org.cloudburstmc.math.vector.Vector3fimport org.cloudburstmc.math.vector.Vector3iimport org.cloudburstmc.protocol.bedrock.data.LevelEventimport org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinitionimport org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinitionimport org.cloudburstmc.protocol.bedrock.data.inventory.ContainerIdimport org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotTypeimport org.cloudburstmc.protocol.bedrock.data.inventory.ItemDataimport org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionTypeimport org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransactionimport org.cloudburstmc.protocol.bedrock.packet.*import java.util.concurrent.ConcurrentHashMapimport java.util.concurrent.atomic.AtomicIntegerimport kotlin.math.absimport kotlin.math.floorimport kotlin.math.maxclass CrystalAura : BaseModule(    name        = "CrystalAura",    category    = ModuleCategory.COMBAT,    description = "Çok hedefli otomatik kristal yerleştirme/kırma") {    enum class CritMode { None, MovePacket, Vanilla }    companion object {        private const val SELF_EYE_HEIGHT      = 1.62f        private const val BLOCK_DEF_SCAN_CAP   = 20000        private const val BLOCK_DEF_MISS_LIMIT = 64        private const val CANDIDATE_CACHE_MS   = 100L        private const val PLACE_RETRY_MS       = 150L        private const val BURST_DURATION_MS    = 1500L        private const val SEARCH_Y_BELOW       = 3        private const val SEARCH_Y_ABOVE       = 2        private const val MAX_PLACE_PER_TICK   = 32        private const val MAX_BREAK_PER_TICK   = 20        // FIX: obsidian destek blokları hiçbir rate limit'e tabi değildi (bkz.        // tryPlaceObsidianSupportAt) — arama alanındaki her "yüzey yok" adayı        // için sınırsız paket gönderiliyordu, bu da "Too many packets" hatasının        // asıl kaynağıydı. Artık crystal placement'ta olduğu gibi hem tek tick        // başına sabit bir tavan hem de saniyelik token bucket var.        private const val MAX_OBSIDIAN_PER_TICK = 8        private val NON_SOLID = setOf(            "minecraft:air", "minecraft:water", "minecraft:flowing_water",            "minecraft:lava", "minecraft:flowing_lava",            "minecraft:void_air", "minecraft:cave_air"        )        private val CORNER_OFFSETS = arrayOf(            intArrayOf(-1, 0), intArrayOf(1, 0), intArrayOf(0, -1), intArrayOf(0, 1),            intArrayOf(-1,-1), intArrayOf(1,-1), intArrayOf(-1, 1), intArrayOf(1, 1)        )    }    private val place             = bool("Place",            true)    private val breakCrystals     = bool("Break",            true)    private val multiTarget       = bool("Multi Target",     true)    private val tickIntervalMs    = int ("Speed (ms)",       15, 10, 100)    private val targetRange       = int ("Target Range",     14, 4, 30)    private val friendSkip        = bool("Friend Skip",      true)    private val predictMovement   = bool("Predict",          true)    private val placeRange        = int ("Place Range",      8, 2, 16)    private val searchRadius      = int ("Search Radius",    3, 1, 6)    private val maxPlacePerSec    = int ("Place/Sec",        80, 1, 200)    private val placeDelayMs      = int ("Place Delay",      15, 10, 500)    private val burstOnTotem      = bool("Burst on Totem",   true)    private val burstHealth       = int ("Burst HP",         8, 1, 20)    private val autoObsidian      = bool("Auto Obsidian",    true)    private val obsidianPerSec    = int ("Obsidian/Sec",     20, 1, 60)    private val selfSurround      = bool("Self Surround",    true)    private val breakRange        = int ("Break Range",      10, 2, 20)    private val breakDelayMs      = int ("Break Delay",      15, 10, 300)    private val breakCrit         = enum("Break Crit",       CritMode.MovePacket)    private val noSwitch          = bool("No Switch",        true)    private val noParticles       = bool("No Particle",      true)    private val silentRotation    = bool("Silent Rotation",  true)    private val shortcut          = bool("Shortcut",         false)    private val pendingPositions  = ConcurrentHashMap<Long, Long>()    private val pendingObsidian   = ConcurrentHashMap<Long, Long>()    private val totemBurstUntil   = ConcurrentHashMap<Long, Long>()    private val lastPlaceMsMap    = ConcurrentHashMap<Long, Long>()    private val blockDefCache     = ConcurrentHashMap<String, BlockDefinition>()    private val candidateCache    = ConcurrentHashMap<Long, TargetCache>()    @Volatile private var lastBreakMs        = 0L    @Volatile private var lastSelfSurroundMs = 0L    private val placeTokens       = AtomicInteger(0)    @Volatile private var tokenWindowStart = 0L    @Volatile private var currentWindowCap = 0    @Volatile private var tickJob: kotlinx.coroutines.Job? = null    // Obsidian için ayrı token bucket (crystal token'larıyla paylaşılmıyor,    // çünkü obsidian daha önce hiçbir rate limit'e tabi değildi).    private val obsidianTokens       = AtomicInteger(0)    @Volatile private var obsidianTokenWindowStart = 0L    @Volatile private var obsidianCurrentWindowCap  = 0    // Bir tick() çağrısı boyunca (multiTarget açıkken TÜM hedefler için    // toplam) kaç obsidian denemesi yapıldığını sayar — MAX_OBSIDIAN_PER_TICK    // ile sınırlanır. tick() tek coroutine içinde sıralı çalıştığı için    // @Volatile gerekmiyor.    private var obsidianAttemptsThisTick = 0    // Aynı tick içinde birden fazla obsidian denemesi olacaksa, her seferinde    // yeniden inventory taratıp hotbar değiştirmek yerine (ekstra paket    // trafiği) hazırlanan item bir kez cache'lenip tick sonunda geri alınır.    private var obsidianPreparedThisTick: PreparedItem? = null    private data class SurfaceHit(val y: Int, val blockId: String)    private data class PlacePos(val x: Int, val y: Int, val z: Int, val blockId: String)    private data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val distSq: Float)    private data class TargetCache(val tx: Int, val ty: Int, val tz: Int, val candidates: List<Candidate>, val ts: Long)    private data class PreparedItem(val slot: Int, val item: ItemData, val revertTo: Int?)    private fun takePlaceToken(): Boolean {        val now = System.currentTimeMillis()        val cap = maxPlacePerSec.value        if (now - tokenWindowStart >= 1000L) {            tokenWindowStart = now; currentWindowCap = cap; placeTokens.set(cap)        } else if (cap > currentWindowCap) {            placeTokens.addAndGet(cap - currentWindowCap); currentWindowCap = cap        }        return placeTokens.getAndUpdate { if (it > 0) it - 1 else it } > 0    }    private fun takeObsidianToken(): Boolean {        val now = System.currentTimeMillis()        val cap = obsidianPerSec.value        if (now - obsidianTokenWindowStart >= 1000L) {            obsidianTokenWindowStart = now; obsidianCurrentWindowCap = cap; obsidianTokens.set(cap)        } else if (cap > obsidianCurrentWindowCap) {            obsidianTokens.addAndGet(cap - obsidianCurrentWindowCap); obsidianCurrentWindowCap = cap        }        return obsidianTokens.getAndUpdate { if (it > 0) it - 1 else it } > 0    }    private fun isBurstTarget(target: EntityTracker.TrackedEntity): Boolean {        if (!burstOnTotem.value) return false        if (target.health <= burstHealth.value) return true        return System.currentTimeMillis() < (totemBurstUntil[target.runtimeId] ?: 0L)    }    override fun onEnable() {        super.onEnable()        pendingPositions.clear(); pendingObsidian.clear()        blockDefCache.clear(); lastPlaceMsMap.clear()        totemBurstUntil.clear(); candidateCache.clear()        placeTokens.set(0); tokenWindowStart = 0L        obsidianTokens.set(0); obsidianTokenWindowStart = 0L        obsidianPreparedThisTick = null        tickJob?.cancel()        tickJob = launchTickLoop(tickIntervalMs.value.toLong()) { tick() }    }    override fun onDisable() {        tickJob?.cancel(); tickJob = null        super.onDisable()        pendingPositions.clear(); pendingObsidian.clear()        lastPlaceMsMap.clear(); candidateCache.clear()        obsidianPreparedThisTick = null    }    override fun onPacket(event: PacketEvent) {        if (!isEnabled) return        when (val pkt = event.packet) {            is AddEntityPacket -> {                if (pkt.identifier.contains("crystal", ignoreCase = true)) {                    pendingPositions.remove(posKey(                        floor(pkt.position.x - 0.5f).toInt(),                        floor(pkt.position.y - 1f).toInt(),                        floor(pkt.position.z - 0.5f).toInt()                    ))                }            }            is UpdateBlockPacket -> {                val id = runCatching { pkt.definition?.runtimeId }.getOrNull()                if (id != null) pendingObsidian.remove(posKey(pkt.blockPosition.x, pkt.blockPosition.y, pkt.blockPosition.z))            }            is LevelEventPacket -> {                if (noParticles.value &&                    (pkt.type == LevelEvent.PARTICLE_EXPLOSION || pkt.type == LevelEvent.PARTICLE_BLOCK_EXPLOSION)                ) event.cancel()            }            is LevelSoundEventPacket -> {                if (noParticles.value) {                    val name = runCatching { pkt.sound?.name }.getOrNull() ?: ""                    if (name.contains("EXPLODE", ignoreCase = true)) event.cancel()                }            }            is CameraShakePacket -> { if (noParticles.value) event.cancel() }            is EntityEventPacket -> {                if (burstOnTotem.value) {                    val typeName = runCatching { pkt.type?.toString()?.uppercase() }.getOrNull() ?: ""                    if (typeName.contains("TOTEM"))                        totemBurstUntil[pkt.runtimeEntityId] = System.currentTimeMillis() + BURST_DURATION_MS                }            }            else -> {}        }    }    private suspend fun tick() {        obsidianAttemptsThisTick = 0        try {            if (selfSurround.value) doSelfSurround()            if (breakCrystals.value) doBreakInRange()            val targets = selectTargets()            if (targets.isEmpty()) { candidateCache.clear(); return }            val liveIds = targets.mapTo(HashSet(targets.size)) { it.runtimeId }            candidateCache.keys.retainAll(liveIds)            if (place.value) {                if (multiTarget.value) doPlaceMulti(targets) else doPlace(targets.first())            }        } finally {            // Tick boyunca paylaşılan obsidian item'ı (varsa) geri seçili slota al —            // her obsidian denemesinde ayrı ayrı revert etmek yerine tek seferde.            obsidianPreparedThisTick?.revertTo?.let { revertSlot ->                PacketEventBus.currentSession?.let { s ->                    InventoryUtil.sendHotbarSelect(s, revertSlot)                    EntityTracker.selfHotbarSlot = revertSlot                }            }            obsidianPreparedThisTick = null        }    }    private fun selectTargets(): List<EntityTracker.TrackedEntity> {        if (EntityTracker.selfRuntimeId <= 0L) return emptyList()        val sx = EntityTracker.selfX; val sy = EntityTracker.selfY; val sz = EntityTracker.selfZ        return EntityTracker.getPlayers(targetRange.value.toFloat())            .asSequence()            .filter { it.runtimeId != EntityTracker.selfRuntimeId }            .filter { !friendSkip.value || !it.isFriendEntity }            .filter { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) > 0.0225f }            .sortedWith(                compareByDescending<EntityTracker.TrackedEntity> { isBurstTarget(it) }                    .thenBy { it.health }                    .thenBy { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) }            )            .toList()    }    private fun predictedPos(target: EntityTracker.TrackedEntity): Triple<Float, Float, Float> {        if (!predictMovement.value) return Triple(target.x, target.y, target.z)        val vx = (target.x - target.prevX) * 3f        val vz = (target.z - target.prevZ) * 3f        return Triple(target.x + vx, target.y, target.z + vz)    }    private fun doPlaceMulti(targets: List<EntityTracker.TrackedEntity>) {        val session  = PacketEventBus.currentSession ?: return        val prepared = prepareItemForUse(session) ?: return        try {            for (t in targets) doPlace(t, session, prepared)        } finally {            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }        }    }    private fun buildCandidates(session: NexoraRelaySession, target: EntityTracker.TrackedEntity, px: Float, py: Float, pz: Float): List<Candidate> {        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()        val radius = searchRadius.value        val cap = CORNER_OFFSETS.size + (2 * radius + 1) * (2 * radius + 1)        val list = ArrayList<Candidate>(cap)        val seen = HashSet<Int>(cap * 2)        for (off in CORNER_OFFSETS) addCandidateAt(session, tx + off[0], ty, tz + off[1], target, list, seen)        for (dx in -radius..radius) for (dz in -radius..radius) addCandidateAt(session, tx + dx, ty, tz + dz, target, list, seen)        list.sortBy { it.distSq }        return list    }    private fun addCandidateAt(session: NexoraRelaySession, bx: Int, ty: Int, bz: Int, target: EntityTracker.TrackedEntity, list: MutableList<Candidate>, seen: HashSet<Int>) {        val key = bx * 100000 + bz        if (!seen.add(key)) return        val hit = findSurface(bx, ty, bz) ?: run {            if (autoObsidian.value) tryPlaceObsidianSupportAt(session, bx, ty, bz)            return        }        val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f        val ddx = cx - target.x; val ddy = cy - (target.y + 0.9f); val ddz = cz - target.z        list.add(Candidate(bx, bz, hit.y, hit.blockId, ddx * ddx + ddy * ddy + ddz * ddz))    }    private fun doPlace(target: EntityTracker.TrackedEntity, sharedSession: NexoraRelaySession? = null, sharedPrepared: PreparedItem? = null) {        val now = System.currentTimeMillis()        if (now - (lastPlaceMsMap[target.runtimeId] ?: 0L) < placeDelayMs.value) return        lastPlaceMsMap[target.runtimeId] = now        val session = sharedSession ?: PacketEventBus.currentSession ?: return        val (px, py, pz) = predictedPos(target)        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()        val cached = candidateCache[target.runtimeId]        val candidates: List<Candidate> = if (            cached != null && cached.tx == tx && cached.ty == ty && cached.tz == tz && now - cached.ts < CANDIDATE_CACHE_MS        ) cached.candidates else {            val built = buildCandidates(session, target, px, py, pz)            candidateCache[target.runtimeId] = TargetCache(tx, ty, tz, built, now)            built        }        if (candidates.isEmpty()) return        val crystalsSnapshot = EntityTracker.getCrystals(placeRange.value.toFloat() + 2f)        val prepared = sharedPrepared ?: prepareItemForUse(session) ?: return        var placed = 0        for (c in candidates) {            if (placed >= MAX_PLACE_PER_TICK || !takePlaceToken()) break            if (crystalExistsNearCached(crystalsSnapshot, c.bx + 0.5f, c.hitY + 1f, c.bz + 0.5f)) continue            if (tryPlaceCrystalAt(session, prepared, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) placed++        }        if (sharedPrepared == null)            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }    }    private fun tryPlaceCrystalAt(session: NexoraRelaySession, prepared: PreparedItem, pos: PlacePos): Boolean {        val now = System.currentTimeMillis()        val key = posKey(pos.x, pos.y, pos.z)        val pending = pendingPositions[key]        if (pending != null) {            if (now - pending < PLACE_RETRY_MS) return false            pendingPositions.remove(key)        }        val cx = pos.x + 0.5f; val cy = pos.y + 1f; val cz = pos.z + 0.5f        if (MathUtil.dist3(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ) > placeRange.value) return false        val ok = sendPlacementUseRaw(session, prepared, Vector3i.from(pos.x, pos.y, pos.z), pos.blockId)        if (ok) pendingPositions[key] = now        return ok    }    private fun tryPlaceObsidianSupportAt(session: NexoraRelaySession, bx: Int, ty: Int, bz: Int) {        // FIX: bu fonksiyon daha önce hiçbir rate limit'e tabi değildi — arama        // alanındaki her "yüzey bulunamadı" adayı için sınırsızca paket        // gönderiyordu. Artık hem tick başına sabit tavan hem token bucket var.        if (obsidianAttemptsThisTick >= MAX_OBSIDIAN_PER_TICK) return        val now = System.currentTimeMillis()        val key = posKey(bx, ty, bz)        if (now - (pendingObsidian[key] ?: 0L) < 100L) return        if (!WorldBlockTracker.hasAnyTerrainData()) return        var supportY: Int? = null        for (by in (ty - 3)..(ty + 1)) {            val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue            if (here in NON_SOLID) continue            val above = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)            if (above != null && above !in NON_SOLID) continue            supportY = by            break        }        val sy = supportY ?: return        if (MathUtil.dist3(bx + 0.5f, sy + 1.5f, bz + 0.5f, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ) > placeRange.value) return        if (!takeObsidianToken()) return        val prepared = getOrPrepareObsidian(session) ?: return        val ok = sendPlacementUseRaw(session, prepared, Vector3i.from(bx, sy, bz), "minecraft:obsidian")        if (ok) { pendingObsidian[key] = now; obsidianAttemptsThisTick++ }    }    // Tick içinde ilk obsidian ihtiyacında item hazırlanır (slot bulunur/hotbar    // seçilir), sonraki denemeler aynı tick içinde bunu tekrar kullanır —    // her denemede ayrı ayrı inventory taratıp hotbar değiştirmenin (ekstra    // paket trafiği) önüne geçer. Revert işlemi tick() sonunda tek seferde yapılır.    private fun getOrPrepareObsidian(session: NexoraRelaySession): PreparedItem? {        obsidianPreparedThisTick?.let { return it }        val prepared = prepareItemForUse(session, "minecraft:obsidian") ?: return null        obsidianPreparedThisTick = prepared        return prepared    }    private fun doSelfSurround() {        val now = System.currentTimeMillis()        if (now - lastSelfSurroundMs < 150L) return        val session = PacketEventBus.currentSession ?: return        lastSelfSurroundMs = now        val fx = floor(EntityTracker.selfX).toInt(); val fy = floor(EntityTracker.selfY).toInt() - 1; val fz = floor(EntityTracker.selfZ).toInt()        val hasData = WorldBlockTracker.hasAnyTerrainData()        for ((dx, dz) in listOf(1 to 1, 1 to -1, -1 to 1, -1 to -1)) {            if (obsidianAttemptsThisTick >= MAX_OBSIDIAN_PER_TICK) return            val tx = fx + dx; val tz = fz + dz            val existing = if (hasData) WorldBlockTracker.getBlockIdentifier(tx, fy, tz) else null            if (existing != null && existing !in NON_SOLID) continue            val supportId = (if (hasData) WorldBlockTracker.getBlockIdentifier(tx, fy - 1, tz) else null) ?: "minecraft:obsidian"            if (supportId in NON_SOLID) continue            if (!takeObsidianToken()) return            val prepared = getOrPrepareObsidian(session) ?: return            if (sendPlacementUseRaw(session, prepared, Vector3i.from(tx, fy - 1, tz), "minecraft:obsidian")) obsidianAttemptsThisTick++        }    }    private fun doBreakInRange() {        val now = System.currentTimeMillis()        if (now - lastBreakMs < breakDelayMs.value) return        val session = PacketEventBus.currentSession ?: return        val sx = EntityTracker.selfX; val sy = EntityTracker.selfY; val sz = EntityTracker.selfZ        val crystals = EntityTracker.getCrystals(breakRange.value.toFloat())        if (crystals.isEmpty()) return        lastBreakMs = now        val toBreak = crystals            .sortedBy { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) }            .take(MAX_BREAK_PER_TICK)        scope.launch { for (c in toBreak) attackCrystal(c.runtimeId, session) }    }    private suspend fun attackCrystal(rid: Long, session: NexoraRelaySession) {        val target = EntityTracker.getById(rid) ?: return        val r = RotationUtil.toPoint(target.x, target.y + 0.5f, target.z)        CritLock.tryRun(name) { injectCrit(session) }        if (silentRotation.value) PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch, onGround = true)        PacketUtil.sendSwing(session)        PacketUtil.sendAttack(session, rid)    }    private suspend fun injectCrit(s: NexoraRelaySession) {        try {            when (breakCrit.value) {                CritMode.None       -> {}                CritMode.MovePacket -> {                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)                    delay(15L)                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f, onGround = true)                }                CritMode.Vanilla -> {                    listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)                        delay(25L)                    }                }            }        } catch (_: Exception) {}    }    private fun findSurface(bx: Int, ty: Int, bz: Int): SurfaceHit? {        if (!WorldBlockTracker.hasAnyTerrainData()) return SurfaceHit(ty - 1, "minecraft:obsidian")        var sawData = false        for (by in (ty - SEARCH_Y_BELOW)..(ty + SEARCH_Y_ABOVE)) {            val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue            sawData = true            if (here in NON_SOLID) continue            val above  = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)            val above2 = WorldBlockTracker.getBlockIdentifier(bx, by + 2, bz)            if ((above != null && above !in NON_SOLID) || (above2 != null && above2 !in NON_SOLID)) continue            return SurfaceHit(by, here)        }        if (!sawData) return SurfaceHit(ty - 1, "minecraft:obsidian")        return null    }    private fun crystalExistsNearCached(crystals: List<EntityTracker.TrackedEntity>, cx: Float, cy: Float, cz: Float): Boolean =        crystals.any { abs(it.x - cx) < 0.9f && abs(it.y - cy) < 1.3f && abs(it.z - cz) < 0.9f }    // KRİTİK FIX ("Too many packets" hatasının asıl kaynağı): bu fonksiyon    // parametre olarak identifier almıyordu, HER ZAMAN "minecraft:end_crystal"    // arıyordu — sendPlacementUse(session, "minecraft:obsidian", ...) çağrıldığında    // bile. Yani obsidian destek bloğu koyma denemeleri aslında crystal slotunu    // seçip crystal ile "obsidian" pozisyonuna ITEM_USE göndermeye çalışıyordu.    // Server bunu reddediyor (ya da beklenmedik şekilde davranıyor), pendingObsidian    // yine de set ediliyordu, 100ms sonra tekrar deneniyor ve arama alanındaki    // onlarca "yüzey yok" adayı için bu sonsuza kadar tekrarlanıyordu — rate    // limit'siz bu paket trafiğinin patlamasına sebep oluyordu.    private fun prepareItemForUse(session: NexoraRelaySession, identifier: String = "minecraft:end_crystal"): PreparedItem? {        if (identifier == "minecraft:end_crystal") {            val knownSlot = InventoryHelper.currentCrystalSlot            if (knownSlot != null) {                val item = EntityTracker.getInventoryItem(knownSlot)                val itemId = runCatching { item?.definition?.identifier }.getOrNull()                if (item != null && item.count > 0 && itemId == identifier) {                    return if (knownSlot == EntityTracker.selfHotbarSlot) {                        PreparedItem(knownSlot, item, null)                    } else {                        val original = EntityTracker.selfHotbarSlot                        InventoryUtil.sendHotbarSelect(session, knownSlot)                        EntityTracker.selfHotbarSlot = knownSlot                        PreparedItem(knownSlot, item, if (noSwitch.value) original else null)                    }                }            }        }        EntityTracker.getHeldItem()?.let { held ->            val id = runCatching { held.definition?.identifier }.getOrNull()            if (id == identifier && held.count > 0) return PreparedItem(EntityTracker.selfHotbarSlot, held, null)        }        for (slot in 0..8) {            val item = EntityTracker.getInventoryItem(slot) ?: continue            if (item.count <= 0) continue            if (runCatching { item.definition?.identifier }.getOrNull() != identifier) continue            val original = EntityTracker.selfHotbarSlot            InventoryUtil.sendHotbarSelect(session, slot)            EntityTracker.selfHotbarSlot = slot            return PreparedItem(slot, item, if (noSwitch.value) original else null)        }        for (slot in 9..35) {            val item = EntityTracker.getInventoryItem(slot) ?: continue            if (item.count <= 0 || runCatching { item.definition?.identifier }.getOrNull() != identifier) continue            val destSlot = findEmptyHotbarSlot() ?: continue            val destItem = EntityTracker.getInventoryItem(destSlot) ?: ItemData.AIR            try {                InventoryUtil.sendInventoryMove(                    session = session,                    sourceContainer = ContainerSlotType.HOTBAR_AND_INVENTORY,                    sourceContainerId = ContainerId.INVENTORY,                    sourceSlot = slot, sourceItem = item,                    destContainer = ContainerSlotType.HOTBAR_AND_INVENTORY,                    destContainerId = ContainerId.INVENTORY,                    destSlot = destSlot, destItem = destItem                )            } catch (_: Exception) { continue }            val original = EntityTracker.selfHotbarSlot            InventoryUtil.sendHotbarSelect(session, destSlot)            EntityTracker.selfHotbarSlot = destSlot            return PreparedItem(destSlot, item, if (noSwitch.value) original else null)        }        return null    }    private fun findEmptyHotbarSlot(): Int? {        for (slot in 0..8) {            val item = EntityTracker.getInventoryItem(slot)            if (item == null || item.count <= 0) return slot        }        return null    }    private fun sendPlacementUse(session: NexoraRelaySession, identifier: String, blockPos: Vector3i, blockId: String): Boolean {        val prepared = prepareItemForUse(session, identifier) ?: return false        val ok = sendPlacementUseRaw(session, prepared, blockPos, blockId)        prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }        return ok    }    private fun sendPlacementUseRaw(session: NexoraRelaySession, prepared: PreparedItem, blockPos: Vector3i, blockId: String): Boolean {        val blockDef  = getBlockDefinition(session, blockId) ?: return false        val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)        return try {            session.serverBound(InventoryTransactionPacket().apply {                transactionType          = InventoryTransactionType.ITEM_USE                actionType               = 0                this.blockPosition       = blockPos                blockFace                = 1                hotbarSlot               = prepared.slot                itemInHand               = prepared.item                playerPosition           = playerPos                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)                blockDefinition          = blockDef                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS                clientCooldownState      = 0            })            true        } catch (_: Exception) { false }    }    private fun getBlockDefinition(session: NexoraRelaySession, targetId: String): BlockDefinition? {        blockDefCache[targetId]?.let { return it }        try {            val blockDefs = session.clientSession.peer.codecHelper.blockDefinitions            if (blockDefs != null) {                var i = 0; var misses = 0                while (i < BLOCK_DEF_SCAN_CAP && misses < BLOCK_DEF_MISS_LIMIT) {                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null }                    if (def == null) { misses++; i++; continue }                    misses = 0                    val id = when (def) {                        is SimpleBlockDefinition -> def.identifier                        is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")                        else -> null                    }                    if (id == targetId) { blockDefCache[targetId] = def; return def }                    i++                }            }        } catch (_: Exception) {}        val fallbackId = when (targetId) {            "minecraft:obsidian"    -> 49            "minecraft:bedrock"     -> 7            "minecraft:end_crystal" -> 198            else                    -> return null        }        val fallback = SimpleBlockDefinition(            targetId, fallbackId,            org.cloudburstmc.nbt.NbtMap.builder()                .putString("name", targetId)                .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())                .build()        )        blockDefCache[targetId] = fallback        return fallback    }    private fun posKey(x: Int, y: Int, z: Int): Long =        ((x.toLong() and 0x3FFFFFFL) shl 38) or        ((y.toLong() and 0xFFFL)     shl 26) or        (z.toLong() and 0x3FFFFFFL)}
