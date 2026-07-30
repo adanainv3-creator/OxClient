@@ -28,7 +28,28 @@ class GamingPacketListener : NexoraPacketListener {
 
     @Volatile private var active = false
 
-    @Volatile private var itemComponentsApplied = false
+
+    // Item registry'yi StartGame / ItemComponent / CreativeContent paketlerinden
+    // biriktirerek kuruyoruz. Önceden her paket geleni tamamen SIFIRLAYIP yerine
+    // koyuyordu; ItemComponentPacket genelde sadece custom/component-based item'ları
+    // taşıdığı için StartGame'den gelen tam paleti eziyor, böylece daha önce doğru
+    // gelen bazı item'lar registry'den düşüp envanterde/yerde görünmez oluyordu.
+    // Artık ilk görülen tanım kazanıyor (putIfAbsent), yeni paketler sadece eksik
+    // olanları ekliyor.
+    private val itemDefMap = LinkedHashMap<Int, ItemDefinition>()
+
+    private fun mergeItemDefs(defs: Collection<ItemDefinition>, session: NexoraRelaySession) {
+        var added = false
+        for (def in defs) {
+            if (itemDefMap.putIfAbsent(def.runtimeId, def) == null) added = true
+        }
+        if (!added && itemDefMap.isNotEmpty()) return
+        val registry = SimpleDefinitionRegistry.builder<ItemDefinition>()
+            .addAll(itemDefMap.values)
+            .build()
+        session.clientSession.peer.codecHelper.itemDefinitions = registry
+        session.serverSession?.peer?.codecHelper?.itemDefinitions = registry
+    }
 
     // Chunk parse işlemi ağır olabiliyor (özellikle ışınlanma sonrası gelen chunk
     // patlamasında) — bunu ağ paket işleme thread'inden ayırıp arka planda yapıyoruz
@@ -37,7 +58,7 @@ class GamingPacketListener : NexoraPacketListener {
 
     override fun onSessionStart(session: NexoraRelaySession) {
         active = true
-        itemComponentsApplied = false
+        itemDefMap.clear()
     }
 
     override fun onSessionEnd(session: NexoraRelaySession) {
@@ -85,9 +106,7 @@ class GamingPacketListener : NexoraPacketListener {
             }
 
             is CreativeContentPacket -> {
-                if (!itemComponentsApplied) {
-                    applyCreativeItemDefinitions(packet, session)
-                }
+                applyCreativeItemDefinitions(packet, session)
             }
 
             is AddPlayerPacket          -> { }
@@ -174,12 +193,7 @@ class GamingPacketListener : NexoraPacketListener {
     private fun applyStartGameDefinitions(packet: StartGamePacket, session: NexoraRelaySession) {
         try {
             if (packet.itemDefinitions.isNotEmpty()) {
-                val itemRegistry = SimpleDefinitionRegistry.builder<ItemDefinition>()
-                    .addAll(packet.itemDefinitions)
-                    .build()
-
-                session.clientSession.peer.codecHelper.itemDefinitions = itemRegistry
-                session.serverSession?.peer?.codecHelper?.itemDefinitions = itemRegistry
+                mergeItemDefs(packet.itemDefinitions, session)
             }
         } catch (e: Exception) {
         }
@@ -207,13 +221,7 @@ class GamingPacketListener : NexoraPacketListener {
                 return
             }
 
-            val registry = SimpleDefinitionRegistry.builder<ItemDefinition>()
-                .addAll(items)
-                .build()
-
-            session.clientSession.peer.codecHelper.itemDefinitions = registry
-            session.serverSession?.peer?.codecHelper?.itemDefinitions = registry
-            itemComponentsApplied = true
+            mergeItemDefs(items, session)
         } catch (e: Exception) {
         }
     }
@@ -240,12 +248,7 @@ class GamingPacketListener : NexoraPacketListener {
                 return
             }
 
-            val itemRegistry = SimpleDefinitionRegistry.builder<ItemDefinition>()
-                .addAll(byRuntimeId.values)
-                .build()
-
-            session.clientSession.peer.codecHelper.itemDefinitions = itemRegistry
-            session.serverSession?.peer?.codecHelper?.itemDefinitions = itemRegistry
+            mergeItemDefs(byRuntimeId.values, session)
         } catch (e: Exception) {
         }
     }
