@@ -150,10 +150,6 @@ class NexoraClientApp : Application() {
             Disconnect(),
             ComboShortcut(1),
             ComboShortcut(2),
-            ComboShortcut(3),
-            ComboShortcut(4),
-            ComboShortcut(5),
-            ComboShortcut(6),
             CommandHelper()
         )
     }

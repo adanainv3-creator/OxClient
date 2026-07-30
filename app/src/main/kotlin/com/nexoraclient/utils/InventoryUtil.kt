@@ -220,7 +220,11 @@ object InventoryUtil {
         session.serverBound(ItemStackRequestPacket().apply { requests.add(request) })
     }
 
-    private fun resolveIdentifier(item: ItemData): String? {
+    // Artık public: InventoryHelper ve CrystalAura gibi diğer modüller de
+    // item.definition?.identifier'ın hashed network ID modunda null dönebildiği
+    // durumlarda aynı registry-fallback'e güvenebilsin diye (kod tekrarı ve
+    // farklı modüllerde birbirinden bağımsız/eksik fallback'lerin önüne geçer).
+    fun resolveIdentifier(item: ItemData): String? {
         val fromDefinition = runCatching { item.definition?.identifier }.getOrElse { null }
         if (!fromDefinition.isNullOrBlank()) return fromDefinition
 

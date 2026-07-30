@@ -1465,7 +1465,7 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
                 Text(
                     mod.name,
                     fontSize = 11.sp,
-                    color = if (isChecked) NexoraOnSurface else NexoraOnSurfaceDim,
+                    color = NexoraOnSurface.copy(alpha = if (isChecked) 1f else 0.7f),
                     modifier = Modifier.weight(1f)
                 )
             }

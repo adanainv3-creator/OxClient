@@ -45,7 +45,7 @@ class InventoryHelper : BaseModule(
             val snapshot = runCatching { EntityTracker.getInventorySnapshot() }.getOrNull() ?: return null
             for (slot in 0 until HOTBAR_SIZE) {
                 val item = snapshot[slot] ?: continue
-                val id = resolveItemIdentifier(item) ?: continue
+                val id = InventoryUtil.resolveIdentifier(item) ?: continue
                 if (id.endsWith("_sword")) return slot
             }
             return null
@@ -55,57 +55,10 @@ class InventoryHelper : BaseModule(
             val snapshot = runCatching { EntityTracker.getInventorySnapshot() }.getOrNull() ?: return null
             for (slot in 0 until HOTBAR_SIZE) {
                 val item = snapshot[slot] ?: continue
-                val id = resolveItemIdentifier(item) ?: continue
+                val id = InventoryUtil.resolveIdentifier(item) ?: continue
                 if (id == "minecraft:trident") return slot
             }
             return null
-        }
-
-        private val itemIdentifierCache = ConcurrentHashMap<Int, String>()
-
-        // KRİTİK FIX ("InventoryHelper hiç çalışmıyor" sorununun asıl kaynağı):
-        // WorldBlockTracker.resolveIdentifier() bloklar için nasıl bir "hashed
-        // network ID -> isim" fallback'ine ihtiyaç duyduysa (CrystalAura'daki
-        // palet fix'i), ItemData.definition?.identifier de aynı şekilde bazı
-        // protokol sürümlerinde/hashed item ID modunda null veya boş dönebiliyor.
-        // itemMatches() önceden doğrudan item!!.definition?.identifier'a
-        // güveniyordu — bu null geldiğinde itemMatches HER ZAMAN false dönüyor,
-        // yani rule hiçbir zaman "eşleşti" sayılmıyor VE findBestSource hiçbir
-        // zaman kaynak bulamıyordu (identifier okunamayan item'lar asla hedefle
-        // eşleşmiyordu) — sonuç: modül item'ları hiç algılamıyor/yenilemiyordu.
-        // Burada reflection ile definition üzerinden isim/identifier okumayı
-        // dener, olmazsa session'ın itemDefinitions registry'sinden runtimeId
-        // bazlı isim çözümlemesine düşer (blok tarafındaki fallback ile birebir
-        // aynı prensip).
-        internal fun resolveItemIdentifier(item: ItemData): String? {
-            val def = runCatching { item.definition }.getOrNull() ?: return null
-
-            runCatching { def.identifier }.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
-
-            for (methodName in listOf("getIdentifier", "getName")) {
-                runCatching {
-                    val m = def.javaClass.getMethod(methodName)
-                    (m.invoke(def) as? String)?.takeIf { it.isNotBlank() }
-                }.getOrNull()?.let { return it }
-            }
-
-            val runtimeId = runCatching {
-                val m = def.javaClass.getMethod("getRuntimeId")
-                m.invoke(def) as? Int
-            }.getOrNull() ?: return null
-
-            itemIdentifierCache[runtimeId]?.let { return it }
-
-            val session = PacketEventBus.currentSession ?: return null
-            val resolved = runCatching {
-                val itemDefs = session.clientSession.peer.codecHelper.itemDefinitions
-                val lookup = itemDefs?.javaClass?.getMethod("getDefinition", Int::class.javaPrimitiveType)
-                val itemDef = lookup?.invoke(itemDefs, runtimeId)
-                itemDef?.javaClass?.getMethod("getIdentifier")?.invoke(itemDef) as? String
-            }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
-
-            itemIdentifierCache[runtimeId] = resolved
-            return resolved
         }
     }
 
@@ -316,7 +269,7 @@ class InventoryHelper : BaseModule(
 
     private fun itemMatches(item: ItemData?, targetId: String, meta: Int): Boolean {
         if (InventoryUtil.isEmpty(item)) return false
-        val identifier = resolveItemIdentifier(item!!) ?: return false
+        val identifier = InventoryUtil.resolveIdentifier(item!!) ?: return false
         if (identifier != targetId) return false
         if (meta >= 0 && item.damage != meta) return false
         return true
