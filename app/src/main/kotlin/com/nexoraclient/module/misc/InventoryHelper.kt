@@ -30,6 +30,9 @@ class InventoryHelper : BaseModule(
         // gerçek konfigürasyona bakarak belirleyebilsin diye.
         @Volatile var currentSwordSlot: Int? = null
             private set
+
+        @Volatile var currentCrystalSlot: Int? = null
+            private set
     }
 
     enum class HotbarItem(val identifier: String?, val meta: Int) {
@@ -105,6 +108,7 @@ class InventoryHelper : BaseModule(
         lastSendMs.clear()
         currentTridentSlot = null
         currentSwordSlot = null
+        currentCrystalSlot = null
         tickJob = launchTickLoop(CHECK_INTERVAL_MS) { checkAndRefill() }
     }
 
@@ -112,6 +116,7 @@ class InventoryHelper : BaseModule(
         tickJob?.cancel(); tickJob = null
         currentTridentSlot = null
         currentSwordSlot = null
+        currentCrystalSlot = null
         super.onDisable()
     }
 
@@ -145,6 +150,9 @@ class InventoryHelper : BaseModule(
         // Kılıcın normal kurallara göre hangi slotta olduğunu belirle — bu,
         // yağmur/su yokken ("havada") combat modüllerinin döneceği slot.
         currentSwordSlot = plan.indexOfFirst { it != null && isSwordIdentifier(it.identifier) }
+            .takeIf { it >= 0 }
+
+        currentCrystalSlot = plan.indexOfFirst { it?.identifier == "minecraft:end_crystal" }
             .takeIf { it >= 0 }
 
         // Yağmur yağıyorsa VEYA gerçekten suya değiyorsak (WorldBlockTracker ile

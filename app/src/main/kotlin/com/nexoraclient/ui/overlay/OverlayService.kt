@@ -55,6 +55,7 @@ import com.nexoraclient.core.proxy.EntityTracker
 import com.nexoraclient.events.PacketEventBus
 import com.nexoraclient.module.*
 import com.nexoraclient.module.misc.AutoMapArt
+import com.nexoraclient.module.misc.ComboShortcut
 import com.nexoraclient.module.social.FriendManager
 import com.nexoraclient.module.social.isFriendEntity
 import com.nexoraclient.session.SessionManager
@@ -1008,11 +1009,14 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 module.settings.forEach { s ->
+                    if (module is ComboShortcut && s.name == "Modules") return@forEach
                     SettingRow(setting = s, onShortcutChanged = onShortcutChanged)
                 }
-                // AutoMapArt'a özel: envanter blok seçici panel
                 if (module is AutoMapArt) {
                     AutoMapArtBlockPanel(module = module)
+                }
+                if (module is ComboShortcut) {
+                    ComboShortcutPanel(module = module)
                 }
             }
         }
@@ -1348,6 +1352,96 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
 // ---------------------------------------------------------------------------
 
 @Composable
+private fun ComboShortcutPanel(module: ComboShortcut) {
+    var selected by remember(module) {
+        mutableStateOf(
+            module.targets.value.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        )
+    }
+
+    val allModules = remember(module) {
+        ModuleCategory.values()
+            .flatMap { ModuleManager.byCategory(it) }
+            .distinctBy { it.name }
+            .filter { it.name != module.name }
+    }
+
+    HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
+    Text("Choose Modules", fontSize = 11.sp, color = NexoraOnSurfaceDim)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 220.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        allModules.forEach { mod ->
+            val isChecked = mod.name in selected
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (isChecked) NexoraSurface else Color.Transparent)
+                    .clickable {
+                        selected = if (isChecked) selected - mod.name else selected + mod.name
+                        module.targets.value = selected.joinToString(", ")
+                    }
+                    .padding(horizontal = 6.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(if (isChecked) NexoraAccent else Color.Transparent)
+                        .border(
+                            1.dp,
+                            if (isChecked) NexoraAccent else NexoraOutlineStrong,
+                            RoundedCornerShape(3.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isChecked) {
+                        Text("✓", fontSize = 9.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(
+                    mod.name,
+                    fontSize = 11.sp,
+                    color = if (isChecked) NexoraOnSurface else NexoraOnSurfaceDim,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+
+    if (selected.isNotEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(NexoraAccent)
+                .clickable {
+                    selected.forEach { name ->
+                        ModuleManager.byName(name)?.let { ModuleManager.enable(it) }
+                    }
+                }
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                module.comboName.value.ifBlank { "Combo" },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = NexoraOnBackground
+            )
+        }
+    }
+}
+
+@Composable
 private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Box(
         modifier = Modifier
@@ -1361,7 +1455,7 @@ private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit)
         contentAlignment = Alignment.Center
     ) {
         Text(
-            if (checked) "Acik" else "Kapali",
+            if (checked) "Open" else "Closed",
             fontSize = 11.sp,
             color = if (checked) NexoraOnBackground else NexoraOnSurfaceDim,
             fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Normal
