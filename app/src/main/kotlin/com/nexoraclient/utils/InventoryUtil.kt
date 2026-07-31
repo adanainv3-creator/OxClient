@@ -11,6 +11,7 @@ import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequest
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.ItemStackRequestSlotData
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.ItemStackRequestAction
+import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.DropAction
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.PlaceAction
 import org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.request.action.SwapAction
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryActionData
@@ -190,6 +191,25 @@ object InventoryUtil {
             actions.add(InventoryActionData(InventorySource.fromContainerWindowId(destContainerId), destSlot, destItem, sourceItem))
         }
         session.serverBound(packet)
+    }
+
+    // Envanterdeki gereksiz/duplicate item'ları (ör. InventoryHelper'ın attığı
+    // düşük tier sword/pickaxe) dünyaya bırakmak için. Server-authoritative
+    // envanter (modern Bedrock, >=1.16) gerektirir — legacy (eski) inventory
+    // modeli için ayrı bir "drop" paket yolu burada uygulanmadı, çünkü
+    // günümüzde neredeyse tüm sunucular server-authoritative.
+    fun sendDropItem(session: RubidiumRelaySession, sourceSlot: Int, sourceItem: ItemData) {
+        if (!EntityTracker.inventoriesServerAuthoritative) return
+
+        val src = ItemStackRequestSlotData(
+            ContainerSlotType.HOTBAR_AND_INVENTORY,
+            sourceSlot,
+            sourceItem.netId,
+            FullContainerName(ContainerSlotType.HOTBAR_AND_INVENTORY, null)
+        )
+        val action: ItemStackRequestAction = DropAction(sourceItem.count, src, false)
+        val request = ItemStackRequest(nextStackRequestId(), arrayOf(action), arrayOf())
+        session.serverBound(ItemStackRequestPacket().apply { requests.add(request) })
     }
 
     fun sendSlotSwap(

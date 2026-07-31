@@ -95,23 +95,16 @@ class InventoryHelper : BaseModule(
         PotionWaterBreathingLong("minecraft:potion", 20)
     }
 
-    private data class SlotTarget(val identifier: String, val meta: Int, val minCount: Int)
+    private data class SlotTarget(val identifier: String, val meta: Int)
 
     // ---------- Net isimlendirilmiş item grupları ----------
-    // Eskiden "Rule 1 Item", "Rule 2 Item"... diye kafa karıştıran, hangi
-    // slotun neye karşılık geldiği belli olmayan genel kurallar vardı.
-    // Artık her item türü kendi adıyla ayrı bir grup: Sword, Trident,
-    // Pickaxe, Gapple, End Crystal, Strength Potion — her biri kendi
-    // "Slot Count" (kaç hotbar slotu ayrılsın) ve "Min Count" (slot başına
-    // minimum adet) ayarına sahip. Dashboard'da artık "Sword Slot Count",
-    // "Gapple Slot Count", "Trident Slot Count", "Strength Potion Slot Count"
-    // gibi anlaşılır isimler görünür.
+    // Her grup sadece "kaç slot ayrılsın" soruyor — minimum stack miktarı
+    // artık tek, ortak bir ayar (aşağıdaki "Min Stack Count").
     private data class ItemGroup(
         val label     : String,
         val tierChoice: EnumSetting<HotbarItem>?,
         val fixedItem : HotbarItem?,
-        val slotCount : IntSetting,
-        val minCount  : IntSetting
+        val slotCount : IntSetting
     ) {
         val resolved: HotbarItem get() = fixedItem ?: tierChoice!!.value
     }
@@ -121,25 +114,22 @@ class InventoryHelper : BaseModule(
     private val gappleTier = enum("Gapple Type", HotbarItem.GoldenApple)
     private val potionTier = enum("Strength Potion Type", HotbarItem.PotionStrength)
 
+    // Tüm gruplar için ortak minimum stack miktarı (eskiden her grubun kendi
+    // "Min Count" ayarı vardı — 6 ayrı ayar yerine tek bir tane).
+    private val minCount = int("Min Stack Count", 8, 1, 64)
+
     private val groups: List<ItemGroup> = listOf(
-        ItemGroup("Trident",        null,       HotbarItem.Trident,   int("Trident Slot Count", 1, 0, 5), int("Trident Min Count", 1, 1, 64)),
-        ItemGroup("Sword",          swordTier,  null,                 int("Sword Slot Count",   1, 0, 5), int("Sword Min Count",   1, 1, 64)),
-        ItemGroup("Pickaxe",        pickaxeTier,null,                 int("Pickaxe Slot Count", 1, 0, 5), int("Pickaxe Min Count", 1, 1, 64)),
-        ItemGroup("Strength Potion",potionTier, null,                 int("Strength Potion Slot Count", 3, 0, 5), int("Strength Potion Min Count", 1, 1, 64)),
-        ItemGroup("End Crystal",    null,       HotbarItem.EndCrystal,int("End Crystal Slot Count", 2, 0, 5), int("End Crystal Min Count", 16, 1, 64)),
-        ItemGroup("Gapple",         gappleTier, null,                 int("Gapple Slot Count",  1, 0, 5), int("Gapple Min Count",  4, 1, 64))
+        ItemGroup("Trident",        null,       HotbarItem.Trident,   int("Trident Slot Count", 1, 0, 5)),
+        ItemGroup("Sword",          swordTier,  null,                 int("Sword Slot Count",   1, 0, 5)),
+        ItemGroup("Pickaxe",        pickaxeTier,null,                 int("Pickaxe Slot Count", 1, 0, 5)),
+        ItemGroup("Strength Potion",potionTier, null,                 int("Strength Potion Slot Count", 3, 0, 5)),
+        ItemGroup("End Crystal",    null,       HotbarItem.EndCrystal,int("End Crystal Slot Count", 2, 0, 5)),
+        ItemGroup("Gapple",         gappleTier, null,                 int("Gapple Slot Count",  1, 0, 5))
     )
 
-    // ---------- Serbest ekstra slot için (opsiyonel) özel item ----------
-    private val customEnabled    = bool  ("Custom Item Enabled", false)
-    private val customIdentifier = string("Custom Item Id",      "")
-    private val customMeta       = int   ("Custom Item Meta",   -1, -1, 40)
-    private val customSlotCount  = int   ("Custom Item Slot Count", 0, 0, 5)
-    private val customMinCount   = int   ("Custom Item Min Count",  1, 1, 64)
-
     // ---------- Yağmur/Su durumunda trident önceliği ----------
+    // Slot artık sabit (son hotbar slotu) — ayrı bir "hangi slot" ayarına gerek yok.
     private val waterTridentEnabled = bool("Water/Rain Trident Priority", false)
-    private val tridentSlot         = int ("Trident Priority Slot",       8, 0, HOTBAR_SIZE - 1)
 
     private val lastSendMs = ConcurrentHashMap<Int, Long>()
     @Volatile private var tickJob: kotlinx.coroutines.Job? = null
@@ -173,19 +163,8 @@ class InventoryHelper : BaseModule(
 
             val count = group.slotCount.value.coerceAtMost(HOTBAR_SIZE - slot)
             repeat(count) {
-                plan[slot] = SlotTarget(targetId, choice.meta, group.minCount.value)
+                plan[slot] = SlotTarget(targetId, choice.meta)
                 slot++
-            }
-        }
-
-        if (customEnabled.value && slot < HOTBAR_SIZE) {
-            val id = customIdentifier.value.trim()
-            if (id.isNotEmpty()) {
-                val count = customSlotCount.value.coerceAtMost(HOTBAR_SIZE - slot)
-                repeat(count) {
-                    plan[slot] = SlotTarget(id, customMeta.value, customMinCount.value)
-                    slot++
-                }
             }
         }
         return plan
@@ -193,8 +172,23 @@ class InventoryHelper : BaseModule(
 
     private fun checkAndRefill() {
         val session = PacketEventBus.currentSession ?: return
-        val snapshot = EntityTracker.getInventorySnapshot()
         val plan = buildSlotPlan()
+
+        // FIX: eskiden tek bir 'snapshot' (sunucudan gelen son onaylanmış envanter
+        // durumu) tüm slotlar için kaynak arama sırasında değişmeden kullanılıyordu.
+        // Aynı tick içinde 2+ hedef slot AYNI item türünü istediğinde (ör. 2x End
+        // Crystal, 3x Strength Potion), her ikisi de snapshot'taki AYNI kaynak
+        // stack'i "en iyi kaynak" olarak buluyor ve ikisi için de ayrı hareket
+        // paketi gönderiyordu. Sunucu birinciyi işleyip o slotu boşaltınca,
+        // ikinci istek artık var olmayan/boş bir kaynağa referans veriyor ve
+        // sunucu tarafından sessizce reddediliyordu — "bazılarını koyuyor,
+        // bazılarını koymuyor" bug'ının sebebi buydu.
+        //
+        // Çözüm: sunucudan gelen anlık snapshot'ı bu tick içinde planladığımız
+        // her hareketten sonra LOKAL olarak güncelliyoruz (working), böylece
+        // aynı tick'teki sonraki slotlar zaten "kullanılmış" bir kaynağı bir
+        // daha seçmiyor.
+        val working = HashMap(EntityTracker.getInventorySnapshot())
 
         // Kılıcın normal kurallara göre hangi slotta olduğunu belirle — bu,
         // yağmur/su yokken ("havada") combat modüllerinin döneceği slot.
@@ -209,8 +203,8 @@ class InventoryHelper : BaseModule(
         // o slot için tanımlı normal kuralın önüne geçer.
         val wetActive = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
         if (waterTridentEnabled.value && wetActive) {
-            val slot = tridentSlot.value.coerceIn(0, HOTBAR_SIZE - 1)
-            plan[slot] = SlotTarget(HotbarItem.Trident.identifier!!, HotbarItem.Trident.meta, 1)
+            val slot = HOTBAR_SIZE - 1
+            plan[slot] = SlotTarget(HotbarItem.Trident.identifier!!, HotbarItem.Trident.meta)
             currentTridentSlot = slot
         } else {
             currentTridentSlot = null
@@ -219,19 +213,20 @@ class InventoryHelper : BaseModule(
         for (slot in 0 until HOTBAR_SIZE) {
             val target = plan[slot] ?: continue
 
-            val current = snapshot[slot]
+            val current = working[slot]
             val matches = itemMatches(current, target.identifier, target.meta)
             val count = current?.count ?: 0
 
-            if (matches && count >= target.minCount) continue
+            if (matches && count >= minCount.value) continue
 
             val now = System.currentTimeMillis()
             val last = lastSendMs[slot] ?: 0L
             if (now - last < RESEND_COOLDOWN_MS) continue
 
-            val source = findBestSource(snapshot, slot, target.identifier, target.meta) ?: continue
+            val source = findBestSource(working, slot, target.identifier, target.meta) ?: continue
 
             lastSendMs[slot] = now
+            val destItem = current ?: ItemData.AIR
             InventoryUtil.sendInventoryMove(
                 session           = session,
                 sourceContainer   = ContainerSlotType.HOTBAR_AND_INVENTORY,
@@ -241,8 +236,19 @@ class InventoryHelper : BaseModule(
                 destContainer     = ContainerSlotType.HOTBAR_AND_INVENTORY,
                 destContainerId   = 0,
                 destSlot          = slot,
-                destItem          = current ?: ItemData.AIR
+                destItem          = destItem
             )
+
+            // Lokal working snapshot'ı bu planlanan hareketi yansıtacak şekilde
+            // güncelle: hedef slot artık kaynak item'ı alıyor; kaynak slot ise
+            // (dest boştuysa) tamamen boşalıyor, (dest doluysa) swap sonucu
+            // hedefte duran eski item'ı alıyor.
+            working[slot] = source.second
+            if (InventoryUtil.isEmpty(destItem)) {
+                working.remove(source.first)
+            } else {
+                working[source.first] = destItem
+            }
         }
     }
 

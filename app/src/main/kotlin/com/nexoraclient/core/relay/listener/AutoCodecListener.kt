@@ -9,8 +9,8 @@ import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventoryContentS
 import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventorySlotSerializer_v729
 import org.cloudburstmc.protocol.bedrock.codec.v748.serializer.InventoryContentSerializer_v748
 import org.cloudburstmc.protocol.bedrock.codec.v748.serializer.InventorySlotSerializer_v748
-import org.cloudburstmc.protocol.bedrock.codec.v1001.serializer.InventoryContentSerializer_v1001
-import org.cloudburstmc.protocol.bedrock.codec.v1001.serializer.InventorySlotSerializer_v1001
+import org.cloudburstmc.protocol.bedrock.codec.v975.serializer.InventoryContentSerializer_v975
+import org.cloudburstmc.protocol.bedrock.codec.v975.serializer.InventorySlotSerializer_v975
 import org.cloudburstmc.protocol.bedrock.data.EncodingSettings
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
 import org.cloudburstmc.protocol.bedrock.packet.*
@@ -22,8 +22,8 @@ class AutoCodecListener(private val relay: RubidiumRelay? = null) : RubidiumPack
 
         // KRİTİK FIX: patchCodec eskiden 729'un üzerindeki HER protokol için
         // sonsuza kadar v729 serializer'ını zorluyordu. Inventory Content/Slot
-        // paket formatı 748 ve 1001'de tekrar değişti — bu yüzden üst
-        // sürümlerde (748+, 1001+) hâlâ eski v729 serializer'ıyla parse
+        // paket formatı 748 ve 975'te tekrar değişti — bu yüzden üst
+        // sürümlerde (748+, 975+) hâlâ eski v729 serializer'ıyla parse
         // edilen item'lar yanlış decode oluyor ve envanterde hiç görünmüyordu.
         // Artık her serializer, tanıtıldığı sürümden bir sonraki büyük format
         // değişikliğine kadar olan aralıkta kullanılıyor (en yüksek eşleşen
@@ -31,7 +31,7 @@ class AutoCodecListener(private val relay: RubidiumRelay? = null) : RubidiumPack
         private fun patchCodec(codec: BedrockCodec): BedrockCodec {
             val v = codec.protocolVersion
             val (contentSerializer, slotSerializer) = when {
-                v >= 1001 -> InventoryContentSerializer_v1001.INSTANCE to InventorySlotSerializer_v1001.INSTANCE
+                v >= 975  -> InventoryContentSerializer_v975.INSTANCE  to InventorySlotSerializer_v975.INSTANCE
                 v >= 748  -> InventoryContentSerializer_v748.INSTANCE  to InventorySlotSerializer_v748.INSTANCE
                 v > 729   -> InventoryContentSerializer_v729.INSTANCE  to InventorySlotSerializer_v729.INSTANCE
                 else      -> return codec
