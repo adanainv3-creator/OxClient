@@ -1,6 +1,6 @@
-package com.nexoraclient.events
+package com.rubidiumclient.events
 
-import com.nexoraclient.core.relay.NexoraRelaySession
+import com.rubidiumclient.core.relay.RubidiumRelaySession
 import java.util.concurrent.CopyOnWriteArrayList
 
 object PacketEventBus {
@@ -9,14 +9,14 @@ object PacketEventBus {
 
     private val listeners = CopyOnWriteArrayList<PacketListener>()
 
-    @Volatile var currentSession: NexoraRelaySession? = null
+    @Volatile var currentSession: RubidiumRelaySession? = null
         private set
 
     private val _stats = PublishStats()
 
     val stats: PublishStats get() = _stats
 
-    fun setSession(session: NexoraRelaySession?) {
+    fun setSession(session: RubidiumRelaySession?) {
         currentSession = session
     }
 

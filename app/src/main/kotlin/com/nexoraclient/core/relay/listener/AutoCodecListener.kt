@@ -1,9 +1,9 @@
-package com.nexoraclient.core.relay.listener
+package com.rubidiumclient.core.relay.listener
 
-import com.nexoraclient.core.relay.Definitions
-import com.nexoraclient.core.relay.NexoraRelay
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.core.relay.codec.CodecRegistry
+import com.rubidiumclient.core.relay.Definitions
+import com.rubidiumclient.core.relay.RubidiumRelay
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.core.relay.codec.CodecRegistry
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventoryContentSerializer_v729
 import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventorySlotSerializer_v729
@@ -11,7 +11,7 @@ import org.cloudburstmc.protocol.bedrock.data.EncodingSettings
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
 import org.cloudburstmc.protocol.bedrock.packet.*
 
-class AutoCodecListener(private val relay: NexoraRelay? = null) : NexoraPacketListener {
+class AutoCodecListener(private val relay: RubidiumRelay? = null) : RubidiumPacketListener {
 
     companion object {
         private const val TAG = "AutoCodecListener"
@@ -27,7 +27,7 @@ class AutoCodecListener(private val relay: NexoraRelay? = null) : NexoraPacketLi
 
         // ÖNEMLİ FIX: bu değerler eskiden Int.MAX_VALUE'ydi, yani kütüphanenin
         // kendi NBT/liste/byte-array boyut koruması pratikte tamamen devre
-        // dışıydı. Bu ayar hem clientSession'a hem de (NexoraRelaySession.
+        // dışıydı. Bu ayar hem clientSession'a hem de (RubidiumRelaySession.
         // connectToServer() içinde buradan kopyalandığı için) serverSession'a
         // uygulanıyor — yani gerçek sunucudan gelen kötü niyetli/aşırı büyük
         // item NBT'si (başka bir oyuncunun "NBT bomb" saldırısı) hiçbir sınıra
@@ -48,9 +48,9 @@ class AutoCodecListener(private val relay: NexoraRelay? = null) : NexoraPacketLi
 
     @Volatile private var done = false
 
-    override fun onSessionStart(session: NexoraRelaySession) { done = false }
+    override fun onSessionStart(session: RubidiumRelaySession) { done = false }
 
-    override fun onClientPacket(packet: BedrockPacket, session: NexoraRelaySession): Boolean {
+    override fun onClientPacket(packet: BedrockPacket, session: RubidiumRelaySession): Boolean {
         if (packet !is RequestNetworkSettingsPacket) return true
         if (done) return false
         done = true

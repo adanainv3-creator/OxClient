@@ -1,8 +1,8 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEventBus
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEventBus
 import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
@@ -32,7 +32,7 @@ object InventoryUtil {
     const val INV_END      = 35
 
     fun sendEquip(
-        session    : NexoraRelaySession,
+        session    : RubidiumRelaySession,
         runtimeId  : Long,
         containerId: Int,
         slot       : Int,
@@ -49,7 +49,7 @@ object InventoryUtil {
         session.serverBound(packet)
     }
 
-    fun sendOffhandEquip(session: NexoraRelaySession, fromSlot: Int, itemData: ItemData) {
+    fun sendOffhandEquip(session: RubidiumRelaySession, fromSlot: Int, itemData: ItemData) {
         sendEquip(
             session     = session,
             runtimeId   = EntityTracker.selfRuntimeId,
@@ -60,7 +60,7 @@ object InventoryUtil {
         )
     }
 
-    fun sendOffhandEquip(session: NexoraRelaySession, fromSlot: Int, netId: Int, definition: ItemDefinition) {
+    fun sendOffhandEquip(session: RubidiumRelaySession, fromSlot: Int, netId: Int, definition: ItemDefinition) {
         val item = ItemData.builder()
             .definition(definition)
             .netId(netId)
@@ -71,7 +71,7 @@ object InventoryUtil {
         sendOffhandEquip(session, fromSlot, item)
     }
 
-    fun sendHotbarSelect(session: NexoraRelaySession, slot: Int) {
+    fun sendHotbarSelect(session: RubidiumRelaySession, slot: Int) {
         session.serverBound(MobEquipmentPacket().apply {
             runtimeEntityId = EntityTracker.selfRuntimeId
             containerId     = ContainerId.INVENTORY
@@ -132,7 +132,7 @@ object InventoryUtil {
     fun nextStackRequestId(): Int = stackRequestIdCounter.decrementAndGet()
 
     fun sendInventoryMove(
-        session: NexoraRelaySession,
+        session: RubidiumRelaySession,
         sourceContainer: ContainerSlotType,
         sourceContainerId: Int,
         sourceSlot: Int,
@@ -150,7 +150,7 @@ object InventoryUtil {
     }
 
     private fun sendItemStackMove(
-        session: NexoraRelaySession,
+        session: RubidiumRelaySession,
         sourceContainer: ContainerSlotType,
         sourceSlot: Int,
         sourceItem: ItemData,
@@ -176,7 +176,7 @@ object InventoryUtil {
     }
 
     private fun sendLegacyMove(
-        session: NexoraRelaySession,
+        session: RubidiumRelaySession,
         sourceContainerId: Int,
         sourceSlot: Int,
         sourceItem: ItemData,
@@ -193,7 +193,7 @@ object InventoryUtil {
     }
 
     fun sendSlotSwap(
-        session: NexoraRelaySession,
+        session: RubidiumRelaySession,
         sourceSlot: Int,
         sourceNetId: Int,
         destContainer: ContainerSlotType,

@@ -1,4 +1,4 @@
-package com.nexoraclient.auth
+package com.rubidiumclient.auth
 
 import android.annotation.SuppressLint
 import android.os.Bundle

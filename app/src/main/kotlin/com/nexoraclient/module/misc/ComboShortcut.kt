@@ -1,8 +1,8 @@
-package com.nexoraclient.module.misc
+package com.rubidiumclient.module.misc
 
-import com.nexoraclient.module.BaseModule
-import com.nexoraclient.module.ModuleCategory
-import com.nexoraclient.module.ModuleManager
+import com.rubidiumclient.module.BaseModule
+import com.rubidiumclient.module.ModuleCategory
+import com.rubidiumclient.module.ModuleManager
 
 class ComboShortcut(index: Int) : BaseModule(
     name        = "ComboShortcut$index",

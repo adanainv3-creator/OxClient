@@ -1,6 +1,6 @@
-package com.nexoraclient.core.relay
+package com.rubidiumclient.core.relay
 
-import com.nexoraclient.core.relay.codec.CodecRegistry
+import com.rubidiumclient.core.relay.codec.CodecRegistry
 import io.netty.bootstrap.ServerBootstrap
 import io.netty.channel.Channel
 import io.netty.channel.nio.NioEventLoopGroup
@@ -15,13 +15,13 @@ import org.cloudburstmc.protocol.bedrock.netty.initializer.BedrockChannelInitial
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
-class NexoraRelay(
+class RubidiumRelay(
     private val localPort: Int = 19150
 ) {
     companion object {
-        private const val TAG           = "NexoraRelay"
-        private const val PONG_MOTD     = "nexora"
-        private const val PONG_SUB_MOTD = "NexoraClient"
+        private const val TAG           = "RubidiumRelay"
+        private const val PONG_MOTD     = "rubidium"
+        private const val PONG_SUB_MOTD = "RubidiumClient"
 
         val RELAY_CODEC: BedrockCodec by lazy { CodecRegistry.getLatestCodec() }
     }
@@ -31,7 +31,7 @@ class NexoraRelay(
     private var workerGroup  : NioEventLoopGroup? = null
     private var serverChannel: Channel?           = null
 
-    val sessions = CopyOnWriteArrayList<NexoraRelaySession>()
+    val sessions = CopyOnWriteArrayList<RubidiumRelaySession>()
 
     @Volatile var remoteHost: String = ""
         internal set
@@ -43,7 +43,7 @@ class NexoraRelay(
     fun capture(
         remoteHost       : String,
         remotePort       : Int = 19132,
-        onSessionCreated : ((NexoraRelaySession) -> Unit)? = null
+        onSessionCreated : ((RubidiumRelaySession) -> Unit)? = null
     ) {
         if (running) { return }
 
@@ -60,20 +60,20 @@ class NexoraRelay(
                 .channelFactory(RakChannelFactory.server(NioDatagramChannel::class.java))
                 .option(RakChannelOption.RAK_ADVERTISEMENT, pong.toByteBuf())
                 .group(bossGroup, workerGroup)
-                .childHandler(object : BedrockChannelInitializer<NexoraRelaySession.ServerSession>() {
+                .childHandler(object : BedrockChannelInitializer<RubidiumRelaySession.ServerSession>() {
 
-                    override fun createSession0(peer: BedrockPeer, subClientId: Int): NexoraRelaySession.ServerSession {
-                        val session = NexoraRelaySession(
+                    override fun createSession0(peer: BedrockPeer, subClientId: Int): RubidiumRelaySession.ServerSession {
+                        val session = RubidiumRelaySession(
                             peer        = peer,
                             subClientId = subClientId,
-                            remoteHost  = this@NexoraRelay.remoteHost,
-                            remotePort  = this@NexoraRelay.remotePort,
-                            relay       = this@NexoraRelay
+                            remoteHost  = this@RubidiumRelay.remoteHost,
+                            remotePort  = this@RubidiumRelay.remotePort,
+                            relay       = this@RubidiumRelay
                         )
 
                         sessions.add(session)
 
-                        ConnectionManager.setupSession(session, this@NexoraRelay)
+                        ConnectionManager.setupSession(session, this@RubidiumRelay)
 
                         session.init()
 
@@ -82,7 +82,7 @@ class NexoraRelay(
                         return session.clientSession
                     }
 
-                    override fun initSession(session: NexoraRelaySession.ServerSession) {
+                    override fun initSession(session: RubidiumRelaySession.ServerSession) {
                     }
 
                     override fun preInitChannel(channel: Channel) {
@@ -139,7 +139,7 @@ class NexoraRelay(
         shutdownGroups()
     }
 
-    internal fun removeSession(session: NexoraRelaySession) = sessions.remove(session)
+    internal fun removeSession(session: RubidiumRelaySession) = sessions.remove(session)
 
     private fun shutdownGroups() {
         // Fire-and-forget: shutdownGracefully() zaten arka planda kendi thread'inde

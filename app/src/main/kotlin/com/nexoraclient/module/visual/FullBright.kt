@@ -1,9 +1,9 @@
-package com.nexoraclient.module.visual
+package com.rubidiumclient.module.visual
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
 import kotlinx.coroutines.*
 import org.cloudburstmc.protocol.bedrock.packet.MobEffectPacket
 import org.cloudburstmc.protocol.bedrock.packet.SetTimePacket

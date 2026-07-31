@@ -1,8 +1,8 @@
-package com.nexoraclient.module.misc
+package com.rubidiumclient.module.misc
 
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.BaseModule
-import com.nexoraclient.module.ModuleCategory
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.BaseModule
+import com.rubidiumclient.module.ModuleCategory
 
 class Disconnect : BaseModule(
     name        = "Disconnect",

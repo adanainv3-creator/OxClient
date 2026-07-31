@@ -1,4 +1,4 @@
-package com.nexoraclient.auth
+package com.rubidiumclient.auth
 
 data class SavedAccount(
     val gamertag: String,

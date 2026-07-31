@@ -1,14 +1,14 @@
-package com.nexoraclient.module.movement
+package com.rubidiumclient.module.movement
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.BaseModule
-import com.nexoraclient.module.ModuleCategory
-import com.nexoraclient.utils.InventoryUtil
-import com.nexoraclient.utils.PacketUtil
-import com.nexoraclient.utils.RotationUtil
-import com.nexoraclient.utils.WorldBlockTracker
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.BaseModule
+import com.rubidiumclient.module.ModuleCategory
+import com.rubidiumclient.utils.InventoryUtil
+import com.rubidiumclient.utils.PacketUtil
+import com.rubidiumclient.utils.RotationUtil
+import com.rubidiumclient.utils.WorldBlockTracker
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.math.vector.Vector3i
@@ -72,7 +72,7 @@ class AutoScaffold : BaseModule(
         }
     }
 
-    private fun tryPlace(session: NexoraRelaySession) {
+    private fun tryPlace(session: RubidiumRelaySession) {
         val now = System.currentTimeMillis()
         if (now - lastPlaceMs < placeDelay.value) return
 

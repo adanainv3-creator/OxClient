@@ -1,18 +1,18 @@
-package com.nexoraclient.module.misc
+package com.rubidiumclient.module.misc
 
 import android.graphics.Canvas
 import android.graphics.Paint
-import com.nexoraclient.config.MapArtPlan
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.BaseModule
-import com.nexoraclient.module.ModuleCategory
-import com.nexoraclient.utils.BlockPalette
-import com.nexoraclient.utils.BlockTracker
-import com.nexoraclient.utils.InventoryUtil
-import com.nexoraclient.utils.WorldBlockTracker
+import com.rubidiumclient.config.MapArtPlan
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.BaseModule
+import com.rubidiumclient.module.ModuleCategory
+import com.rubidiumclient.utils.BlockPalette
+import com.rubidiumclient.utils.BlockTracker
+import com.rubidiumclient.utils.InventoryUtil
+import com.rubidiumclient.utils.WorldBlockTracker
 import kotlinx.coroutines.Job
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.math.vector.Vector3i
@@ -424,7 +424,7 @@ class AutoMapArt : BaseModule(
             .filter { it.isNotEmpty() }
             .toSet()
 
-    private fun collectMaterials(session: NexoraRelaySession) {
+    private fun collectMaterials(session: RubidiumRelaySession) {
         val type = collectingBlockType ?: run { stage = Stage.BUILDING; return }
 
         if (findBlockInHotbar(type) != null) {
@@ -559,7 +559,7 @@ class AutoMapArt : BaseModule(
         return dx * dx + dz * dz
     }
 
-    private fun sendOpenContainerInteract(session: NexoraRelaySession, pos: Vector3i) {
+    private fun sendOpenContainerInteract(session: RubidiumRelaySession, pos: Vector3i) {
         val hotbarSlot = EntityTracker.selfHotbarSlot
         val heldItem = EntityTracker.getInventoryItem(hotbarSlot) ?: ItemData.AIR
         try {
@@ -579,7 +579,7 @@ class AutoMapArt : BaseModule(
         } catch (_: Exception) {}
     }
 
-    private fun closeContainer(session: NexoraRelaySession) {
+    private fun closeContainer(session: RubidiumRelaySession) {
         if (!containerOpen) return
         try {
             session.serverBound(ContainerClosePacket().apply {
@@ -616,7 +616,7 @@ class AutoMapArt : BaseModule(
         return null
     }
 
-    private fun moveToFreeHotbarSlot(session: NexoraRelaySession, fromSlot: Int, identifier: String) {
+    private fun moveToFreeHotbarSlot(session: RubidiumRelaySession, fromSlot: Int, identifier: String) {
         if (fromSlot in InventoryUtil.HOTBAR_START..InventoryUtil.HOTBAR_END) return
         var destSlot = -1
         for (slot in InventoryUtil.HOTBAR_START..InventoryUtil.HOTBAR_END) {
@@ -650,7 +650,7 @@ class AutoMapArt : BaseModule(
         return null
     }
 
-    private fun faceBlock(session: NexoraRelaySession, dx: Float, dz: Float) {
+    private fun faceBlock(session: RubidiumRelaySession, dx: Float, dz: Float) {
         val yaw = Math.toDegrees(atan2(-dx.toDouble(), dz.toDouble())).toFloat()
         val pos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
 
@@ -674,7 +674,7 @@ class AutoMapArt : BaseModule(
     }
 
     private fun tryPlace(
-        session: NexoraRelaySession,
+        session: RubidiumRelaySession,
         x: Int, y: Int, z: Int,
         hotbarSlot: Int
     ): Boolean {
@@ -909,7 +909,7 @@ class AutoMapArt : BaseModule(
 
         fun getPath(): List<Vector3i>? = path
 
-        fun run(session: NexoraRelaySession): Boolean {
+        fun run(session: RubidiumRelaySession): Boolean {
             if (!active) return false
             val p = path ?: return false
             if (p.isEmpty()) return checkDone(session)
@@ -940,7 +940,7 @@ class AutoMapArt : BaseModule(
             return false
         }
 
-        private fun checkDone(session: NexoraRelaySession): Boolean {
+        private fun checkDone(session: RubidiumRelaySession): Boolean {
             val feet = currentFeet()
             if (feet.x == goal.x && feet.z == goal.z) return true
             path = generatePath(feet)
@@ -953,7 +953,7 @@ class AutoMapArt : BaseModule(
             floor(EntityTracker.selfZ).toInt()
         )
 
-        private fun moveTowardNode(session: NexoraRelaySession, node: Vector3i) {
+        private fun moveTowardNode(session: RubidiumRelaySession, node: Vector3i) {
             val curX = EntityTracker.selfX
             val curZ = EntityTracker.selfZ
             val dxRaw = (node.x + 0.5f) - curX

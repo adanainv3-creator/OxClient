@@ -1,4 +1,4 @@
-package com.nexoraclient.core.relay.codec
+package com.rubidiumclient.core.relay.codec
 
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
 

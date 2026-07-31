@@ -1,9 +1,9 @@
-package com.nexoraclient.module.misc
+package com.rubidiumclient.module.misc
 
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.module.BaseModule
-import com.nexoraclient.module.ModuleCategory
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.module.BaseModule
+import com.rubidiumclient.module.ModuleCategory
 import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginData
 import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginType
 import org.cloudburstmc.protocol.bedrock.packet.CommandRequestPacket
@@ -25,31 +25,31 @@ class ChatAdvertiser : BaseModule(
     private val shortcut          = bool("Shortcut", false)
 
     private val adsMessages = listOf(
-        "> @here Use Best Mobile Client discord.gg/At5VHua7ZP | %RANDOM% | Nexora Client"
+        "> @here Use Best Mobile Client discord.gg/At5VHua7ZP | %RANDOM% | Rubidium Client"
     )
 
     private val pvpMessages = listOf(
-        "> @here tpa pvp 1v1 little kiddos | %RANDOM% | Nexora Client",
-        "> @here 1v1 tpa pvp all ez | %RANDOM% | Nexora Client",
-        "> @here tpa to pvp nns | %RANDOM% | Nexora Client",
-        "> @here tpa for pvp all EZZ | %RANDOM% | Nexora Client",
-        "> @here tpa 1v1 im bored fr | %RANDOM% | Nexora Client",
-        "> @here anyone tpa pvp cant be that scared | %RANDOM% | Nexora Client",
-        "> @here tpa pvp free win here | %RANDOM% | Nexora Client",
-        "> @here tpa 1v1 no crystal easy | %RANDOM% | Nexora Client",
-        "> @here tpa pvp lets go who wants smoke | %RANDOM% | Nexora Client",
-        "> @here tpa all cracked pvpers welcome | %RANDOM% | Nexora Client",
-        "> @here tpa pvp best client wins obviously | %RANDOM% | Nexora Client",
-        "> @here tpa 1v1 quick fight nobody scared right | %RANDOM% | Nexora Client",
-        "> @here tpa pvp bring your best totem | %RANDOM% | Nexora Client",
-        "> @here tpa pvp all skill issue if you decline | %RANDOM% | Nexora Client"
+        "> @here tpa pvp 1v1 little kiddos | %RANDOM% | Rubidium Client",
+        "> @here 1v1 tpa pvp all ez | %RANDOM% | Rubidium Client",
+        "> @here tpa to pvp nns | %RANDOM% | Rubidium Client",
+        "> @here tpa for pvp all EZZ | %RANDOM% | Rubidium Client",
+        "> @here tpa 1v1 im bored fr | %RANDOM% | Rubidium Client",
+        "> @here anyone tpa pvp cant be that scared | %RANDOM% | Rubidium Client",
+        "> @here tpa pvp free win here | %RANDOM% | Rubidium Client",
+        "> @here tpa 1v1 no crystal easy | %RANDOM% | Rubidium Client",
+        "> @here tpa pvp lets go who wants smoke | %RANDOM% | Rubidium Client",
+        "> @here tpa all cracked pvpers welcome | %RANDOM% | Rubidium Client",
+        "> @here tpa pvp best client wins obviously | %RANDOM% | Rubidium Client",
+        "> @here tpa 1v1 quick fight nobody scared right | %RANDOM% | Rubidium Client",
+        "> @here tpa pvp bring your best totem | %RANDOM% | Rubidium Client",
+        "> @here tpa pvp all skill issue if you decline | %RANDOM% | Rubidium Client"
     )
 
     private val junkChars = "abcdefghjklmnopqrstuvwxyz0123456789"
     private var scheduler: ScheduledExecutorService? = null
     private var currentPvpMessageIndex = 0
     private var currentAdsMessageIndex = 0
-    private var activeSession: NexoraRelaySession? = null
+    private var activeSession: RubidiumRelaySession? = null
 
     override fun onEnable() {
         super.onEnable()

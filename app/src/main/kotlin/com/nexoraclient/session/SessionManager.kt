@@ -1,15 +1,15 @@
-package com.nexoraclient.session
+package com.rubidiumclient.session
 
-import com.nexoraclient.auth.AccountManager
-import com.nexoraclient.config.ServerConfig
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.ConnectionManager
-import com.nexoraclient.core.relay.LanBroadcaster
-import com.nexoraclient.core.relay.NexoraRelay
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.ModuleManager
-import com.nexoraclient.utils.BlockTracker
+import com.rubidiumclient.auth.AccountManager
+import com.rubidiumclient.config.ServerConfig
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.ConnectionManager
+import com.rubidiumclient.core.relay.LanBroadcaster
+import com.rubidiumclient.core.relay.RubidiumRelay
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.ModuleManager
+import com.rubidiumclient.utils.BlockTracker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,7 +46,7 @@ object SessionManager {
     val connectedHost: String get() = _connectedHost.value
     val connectedPort: Int    get() = _connectedPort.value
 
-    private var relay: NexoraRelay? = null
+    private var relay: RubidiumRelay? = null
 
     fun start() {
         if (_isActive.value) { return }
@@ -67,7 +67,7 @@ object SessionManager {
             EntityTracker.init()
             BlockTracker.clear()
 
-            val r = NexoraRelay(localPort = localPort)
+            val r = RubidiumRelay(localPort = localPort)
 
             r.capture(remoteHost = host, remotePort = port) { session ->
                 onSessionCreated(session)
@@ -114,20 +114,20 @@ object SessionManager {
         }
     }
 
-    private fun onSessionCreated(session: NexoraRelaySession) {
+    private fun onSessionCreated(session: RubidiumRelaySession) {
         _sessionCount.value++
         _statusMessage.value = "Session #${_sessionCount.value} — ${session.clientAddress}"
 
         LanBroadcaster.updateInfo(
-            protocolVersion = NexoraRelay.RELAY_CODEC.protocolVersion,
-            mcVersion       = NexoraRelay.RELAY_CODEC.minecraftVersion ?: "1.21.60",
+            protocolVersion = RubidiumRelay.RELAY_CODEC.protocolVersion,
+            mcVersion       = RubidiumRelay.RELAY_CODEC.minecraftVersion ?: "1.21.60",
             playerCount     = 0
         )
 
         installSessionCloseListener(session)
     }
 
-    private fun installSessionCloseListener(session: NexoraRelaySession) {
+    private fun installSessionCloseListener(session: RubidiumRelaySession) {
         try {
             session.clientSession.peer.channel
                 .closeFuture()
@@ -136,7 +136,7 @@ object SessionManager {
         }
     }
 
-    private fun onSessionEnded(session: NexoraRelaySession, reason: String) {
+    private fun onSessionEnded(session: RubidiumRelaySession, reason: String) {
         PacketEventBus.setSession(null)
         EntityTracker.reset()
         BlockTracker.clear()

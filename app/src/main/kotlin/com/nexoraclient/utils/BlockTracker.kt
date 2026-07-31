@@ -1,4 +1,4 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
 import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.packet.StartGamePacket

@@ -1,4 +1,4 @@
-package com.nexoraclient.config
+package com.rubidiumclient.config
 
 import android.content.Context
 import androidx.datastore.core.DataStore

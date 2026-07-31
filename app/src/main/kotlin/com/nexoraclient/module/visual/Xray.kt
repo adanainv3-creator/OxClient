@@ -1,14 +1,14 @@
-package com.nexoraclient.module.visual
+package com.rubidiumclient.module.visual
 
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.module.*
-import com.nexoraclient.utils.MathUtil
-import com.nexoraclient.utils.OreTracker
-import com.nexoraclient.utils.OreTracker.TrackedOreType
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.module.*
+import com.rubidiumclient.utils.MathUtil
+import com.rubidiumclient.utils.OreTracker
+import com.rubidiumclient.utils.OreTracker.TrackedOreType
 import kotlinx.coroutines.*
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentHashMap

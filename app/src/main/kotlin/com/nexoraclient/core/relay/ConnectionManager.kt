@@ -1,8 +1,8 @@
-package com.nexoraclient.core.relay
+package com.rubidiumclient.core.relay
 
-import com.nexoraclient.core.relay.listener.*
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.ModuleManager
+import com.rubidiumclient.core.relay.listener.*
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.ModuleManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,10 +25,10 @@ object ConnectionManager {
     private val _ping = MutableStateFlow(-1L)
     val ping: StateFlow<Long> = _ping.asStateFlow()
 
-    fun setupSession(session: NexoraRelaySession, relay: NexoraRelay? = null) {
+    fun setupSession(session: RubidiumRelaySession, relay: RubidiumRelay? = null) {
         PacketEventBus.setSession(session)
 
-        val listeners = listOf<NexoraPacketListener>(
+        val listeners = listOf<RubidiumPacketListener>(
             AutoCodecListener(relay),
             LoginPacketListener(),
             GamingPacketListener(),

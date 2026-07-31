@@ -1,4 +1,4 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock

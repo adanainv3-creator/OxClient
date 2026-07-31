@@ -1,18 +1,18 @@
 
-package com.nexoraclient.module.combat
+package com.rubidiumclient.module.combat
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.module.misc.InventoryHelper
-import com.nexoraclient.module.social.isFriendEntity
-import com.nexoraclient.utils.MathUtil
-import com.nexoraclient.utils.PacketUtil
-import com.nexoraclient.utils.CritLock
-import com.nexoraclient.utils.RotationUtil
-import com.nexoraclient.utils.WorldBlockTracker
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.module.misc.InventoryHelper
+import com.rubidiumclient.module.social.isFriendEntity
+import com.rubidiumclient.utils.MathUtil
+import com.rubidiumclient.utils.PacketUtil
+import com.rubidiumclient.utils.CritLock
+import com.rubidiumclient.utils.RotationUtil
+import com.rubidiumclient.utils.WorldBlockTracker
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
 
@@ -181,7 +181,7 @@ class KillAura : BaseModule(
         EntityTracker.selfYaw = newYaw
         EntityTracker.selfPitch = newPitch
 
-        // KRİTİK FIX: NexoraRelaySession.ServerSession.onPacket, event iptal/replace
+        // KRİTİK FIX: RubidiumRelaySession.ServerSession.onPacket, event iptal/replace
         // edilmediği sürece ham wire byte buffer'ını (decode edilmemiş orijinal paket)
         // server'a gönderiyor — yukarıdaki mutation'lar cancelAndReplace çağrılmadan
         // hiçbir zaman server'a ulaşmıyordu. Bu satır olmadan headlock görsel olarak
@@ -317,7 +317,7 @@ class KillAura : BaseModule(
         return fallback
     }
 
-    private suspend fun injectCrit(s: com.nexoraclient.core.relay.NexoraRelaySession) {
+    private suspend fun injectCrit(s: com.rubidiumclient.core.relay.RubidiumRelaySession) {
         try {
             when (critMode.value) {
                 CritMode.MovePacket -> {

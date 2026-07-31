@@ -1,4 +1,4 @@
-package com.nexoraclient.core.relay
+package com.rubidiumclient.core.relay
 
 import android.util.Base64
 import org.json.JSONObject

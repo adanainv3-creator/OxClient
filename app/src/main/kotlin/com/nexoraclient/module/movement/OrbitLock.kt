@@ -1,13 +1,13 @@
-package com.nexoraclient.module.movement
+package com.rubidiumclient.module.movement
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.module.social.isFriendEntity
-import com.nexoraclient.utils.MathUtil
-import com.nexoraclient.utils.RotationUtil
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.module.social.isFriendEntity
+import com.rubidiumclient.utils.MathUtil
+import com.rubidiumclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket
@@ -123,7 +123,7 @@ class OrbitLock : BaseModule(
         EntityTracker.selfYaw   = lockYaw
         EntityTracker.selfPitch = lockPitch
 
-        // NexoraRelaySession raw wire byte passthrough kullanıyor; cancelAndReplace
+        // RubidiumRelaySession raw wire byte passthrough kullanıyor; cancelAndReplace
         // çağrılmazsa bu mutation server'a hiç gitmez (bkz. KillAura.kt fix).
         event.cancelAndReplace(pkt)
     }

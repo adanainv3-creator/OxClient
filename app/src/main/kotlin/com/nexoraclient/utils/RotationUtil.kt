@@ -1,6 +1,6 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
-import com.nexoraclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.proxy.EntityTracker
 import org.cloudburstmc.math.vector.Vector3f
 import kotlin.math.*
 

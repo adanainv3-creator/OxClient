@@ -1,4 +1,5 @@
-package com.nexoraclient.ui.overlay
+
+package com.rubidiumclient.ui.overlay
 
 import androidx.compose.runtime.*
 

@@ -1,10 +1,10 @@
-package com.nexoraclient.core.relay.listener
+package com.rubidiumclient.core.relay.listener
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.ConnectionManager
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.utils.BlockTracker
-import com.nexoraclient.utils.ChunkParser
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.ConnectionManager
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.utils.BlockTracker
+import com.rubidiumclient.utils.ChunkParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,7 +18,7 @@ import org.cloudburstmc.protocol.bedrock.packet.*
 import org.cloudburstmc.protocol.common.NamedDefinition
 import org.cloudburstmc.protocol.common.SimpleDefinitionRegistry
 
-class GamingPacketListener : NexoraPacketListener {
+class GamingPacketListener : RubidiumPacketListener {
 
     companion object {
         private const val TAG = "GamingPacketListener"
@@ -38,7 +38,7 @@ class GamingPacketListener : NexoraPacketListener {
     // olanları ekliyor.
     private val itemDefMap = LinkedHashMap<Int, ItemDefinition>()
 
-    private fun mergeItemDefs(defs: Collection<ItemDefinition>, session: NexoraRelaySession) {
+    private fun mergeItemDefs(defs: Collection<ItemDefinition>, session: RubidiumRelaySession) {
         var added = false
         for (def in defs) {
             if (itemDefMap.putIfAbsent(def.runtimeId, def) == null) added = true
@@ -56,18 +56,18 @@ class GamingPacketListener : NexoraPacketListener {
     // ki relay paket akışını bloklamasın.
     private val parserScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    override fun onSessionStart(session: NexoraRelaySession) {
+    override fun onSessionStart(session: RubidiumRelaySession) {
         active = true
         itemDefMap.clear()
     }
 
-    override fun onSessionEnd(session: NexoraRelaySession) {
+    override fun onSessionEnd(session: RubidiumRelaySession) {
         active = false
         EntityTracker.reset()
         parserScope.coroutineContext[Job]?.cancelChildren()
     }
 
-    override fun onClientPacket(packet: BedrockPacket, session: NexoraRelaySession): Boolean {
+    override fun onClientPacket(packet: BedrockPacket, session: RubidiumRelaySession): Boolean {
         if (!active) return true
         when (packet) {
             is MovePlayerPacket          -> { }
@@ -83,7 +83,7 @@ class GamingPacketListener : NexoraPacketListener {
         return true
     }
 
-    override fun onServerPacket(packet: BedrockPacket, session: NexoraRelaySession): Boolean {
+    override fun onServerPacket(packet: BedrockPacket, session: RubidiumRelaySession): Boolean {
         if (!active) return true
         when (packet) {
 
@@ -190,7 +190,7 @@ class GamingPacketListener : NexoraPacketListener {
         }
     }
 
-    private fun applyStartGameDefinitions(packet: StartGamePacket, session: NexoraRelaySession) {
+    private fun applyStartGameDefinitions(packet: StartGamePacket, session: RubidiumRelaySession) {
         try {
             if (packet.itemDefinitions.isNotEmpty()) {
                 mergeItemDefs(packet.itemDefinitions, session)
@@ -214,7 +214,7 @@ class GamingPacketListener : NexoraPacketListener {
         }
     }
 
-    private fun applyItemComponents(packet: ItemComponentPacket, session: NexoraRelaySession) {
+    private fun applyItemComponents(packet: ItemComponentPacket, session: RubidiumRelaySession) {
         try {
             val items = packet.items
             if (items.isEmpty()) {
@@ -226,7 +226,7 @@ class GamingPacketListener : NexoraPacketListener {
         }
     }
 
-    private fun applyCreativeItemDefinitions(packet: CreativeContentPacket, session: NexoraRelaySession) {
+    private fun applyCreativeItemDefinitions(packet: CreativeContentPacket, session: RubidiumRelaySession) {
         try {
             val contents = packet.contents
             if (contents.isEmpty()) {
@@ -253,7 +253,7 @@ class GamingPacketListener : NexoraPacketListener {
         }
     }
 
-    private fun applyCameraDefinitions(packet: CameraPresetsPacket, session: NexoraRelaySession) {
+    private fun applyCameraDefinitions(packet: CameraPresetsPacket, session: RubidiumRelaySession) {
         try {
             val cameraDefs = SimpleDefinitionRegistry.builder<NamedDefinition>()
                 .addAll(

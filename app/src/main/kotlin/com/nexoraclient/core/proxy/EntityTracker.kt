@@ -1,10 +1,10 @@
 
-package com.nexoraclient.core.proxy
+package com.rubidiumclient.core.proxy
 
-import com.nexoraclient.auth.AccountManager
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.utils.MathUtil
+import com.rubidiumclient.auth.AccountManager
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.utils.MathUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

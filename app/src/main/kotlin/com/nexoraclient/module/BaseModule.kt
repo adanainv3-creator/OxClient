@@ -1,7 +1,7 @@
-package com.nexoraclient.module
+package com.rubidiumclient.module
 
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

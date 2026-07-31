@@ -1,4 +1,4 @@
-package com.nexoraclient.module.visual
+package com.rubidiumclient.module.visual
 
 import android.graphics.Canvas
 import android.graphics.Color
@@ -6,19 +6,19 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.module.*
-import com.nexoraclient.utils.BlockTracker
-import com.nexoraclient.utils.BlockTracker.TrackedBlockType
-import com.nexoraclient.utils.GameFov
-import com.nexoraclient.utils.MathUtil
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.module.*
+import com.rubidiumclient.utils.BlockTracker
+import com.rubidiumclient.utils.BlockTracker.TrackedBlockType
+import com.rubidiumclient.utils.GameFov
+import com.rubidiumclient.utils.MathUtil
 import kotlinx.coroutines.*
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.*
 
 class ESP : BaseModule(
-    name        = "ESP",
+    name        = "BaseFinderESP",
     category    = ModuleCategory.VISUAL,
     description = "Etraftaki sandık/shulker/spawner ve depolama bloklarını tracer ile gösterir"
 ) {

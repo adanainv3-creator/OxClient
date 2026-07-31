@@ -1,6 +1,6 @@
-package com.nexoraclient.module
+package com.rubidiumclient.module
 
-import com.nexoraclient.core.relay.NexoraRelaySession
+import com.rubidiumclient.core.relay.RubidiumRelaySession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,7 +27,7 @@ object ModuleManager {
 
     fun getAll(): List<BaseModule> = _modules
 
-    fun registerToSession(session: NexoraRelaySession) {
+    fun registerToSession(session: RubidiumRelaySession) {
     }
 
     fun shortcutModules(): List<BaseModule> =

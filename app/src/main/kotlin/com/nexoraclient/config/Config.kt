@@ -1,4 +1,4 @@
-package com.nexoraclient.config
+package com.rubidiumclient.config
 
 import android.content.Context
 import androidx.datastore.core.DataStore
@@ -6,13 +6,13 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.nexoraclient.module.BaseModule
-import com.nexoraclient.module.BoolSetting
-import com.nexoraclient.module.EnumSetting
-import com.nexoraclient.module.FloatSetting
-import com.nexoraclient.module.IntSetting
-import com.nexoraclient.module.ModuleManager
-import com.nexoraclient.module.StringSetting
+import com.rubidiumclient.module.BaseModule
+import com.rubidiumclient.module.BoolSetting
+import com.rubidiumclient.module.EnumSetting
+import com.rubidiumclient.module.FloatSetting
+import com.rubidiumclient.module.IntSetting
+import com.rubidiumclient.module.ModuleManager
+import com.rubidiumclient.module.StringSetting
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -219,7 +219,7 @@ object Config {
             val state = entry.optJSONObject("state") ?: return null
 
             val export = JSONObject()
-            export.put("nexoraclientConfig", true)
+            export.put("rubidiumclientConfig", true)
             export.put("name", name)
             export.put("exportedAt", System.currentTimeMillis())
             export.put("state", state)
@@ -238,7 +238,7 @@ object Config {
             // Hem bizim export formatımızı ("state" içinde) hem de doğrudan
             // ham state JSON'unu (modules en üst seviyede) kabul et.
             val state = if (parsed.has("state")) parsed.getJSONObject("state") else parsed
-            if (!state.has("modules")) return null // geçerli bir NexoraClient config'i değil
+            if (!state.has("modules")) return null // geçerli bir RubidiumClient config'i değil
 
             var name = (nameOverride?.trim()?.takeIf { it.isNotEmpty() })
                 ?: parsed.optString("name").trim()

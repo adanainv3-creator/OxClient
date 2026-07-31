@@ -1,4 +1,4 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
 object BlockPalette {
 

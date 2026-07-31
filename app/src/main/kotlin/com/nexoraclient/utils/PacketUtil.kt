@@ -1,7 +1,7 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
@@ -11,7 +11,7 @@ import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 
 object PacketUtil {
 
-    fun sendSwing(session: NexoraRelaySession) {
+    fun sendSwing(session: RubidiumRelaySession) {
         session.serverBound(AnimatePacket().apply {
             action          = AnimatePacket.Action.SWING_ARM
             runtimeEntityId = EntityTracker.selfRuntimeId
@@ -19,7 +19,7 @@ object PacketUtil {
     }
 
     fun sendAttack(
-        session: NexoraRelaySession,
+        session: RubidiumRelaySession,
         targetRid: Long,
         hotbarSlot: Int = EntityTracker.selfHotbarSlot,
         clickPos: Vector3f? = null
@@ -47,13 +47,13 @@ object PacketUtil {
         })
     }
 
-    fun sendSwingAndAttack(session: NexoraRelaySession, targetRid: Long, hotbarSlot: Int = EntityTracker.selfHotbarSlot) {
+    fun sendSwingAndAttack(session: RubidiumRelaySession, targetRid: Long, hotbarSlot: Int = EntityTracker.selfHotbarSlot) {
         sendSwing(session)
         sendAttack(session, targetRid, hotbarSlot)
     }
 
     fun sendMove(
-        session  : NexoraRelaySession,
+        session  : RubidiumRelaySession,
         x        : Float,
         y        : Float,
         z        : Float,
@@ -74,7 +74,7 @@ object PacketUtil {
     }
 
     fun sendMoveAtSelf(
-        session  : NexoraRelaySession,
+        session  : RubidiumRelaySession,
         yaw      : Float   = EntityTracker.selfYaw,
         pitch    : Float   = EntityTracker.selfPitch,
         dyOffset : Float   = 0f,

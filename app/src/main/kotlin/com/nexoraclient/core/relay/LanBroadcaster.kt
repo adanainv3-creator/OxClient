@@ -1,4 +1,4 @@
-package com.nexoraclient.core.relay
+package com.rubidiumclient.core.relay
 
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -119,7 +119,7 @@ object LanBroadcaster {
             } finally {
                 try { socket?.close() } catch (_: Exception) {}
             }
-        }, "NexoraLan-PingListener").apply {
+        }, "RubidiumLan-PingListener").apply {
             isDaemon = true
             start()
         }
@@ -145,7 +145,7 @@ object LanBroadcaster {
             } finally {
                 try { socket?.close() } catch (_: Exception) {}
             }
-        }, "NexoraLan-Broadcaster").apply {
+        }, "RubidiumLan-Broadcaster").apply {
             isDaemon = true
             start()
         }

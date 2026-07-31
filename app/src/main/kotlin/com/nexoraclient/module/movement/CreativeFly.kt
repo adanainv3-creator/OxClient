@@ -1,9 +1,9 @@
-package com.nexoraclient.module.movement
+package com.rubidiumclient.module.movement
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.module.*
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.module.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
@@ -23,7 +23,7 @@ class CreativeFly : BaseModule(
     private val flySpeed  = float("Fly Speed",  0.5f, 0.1f, 1.5f)
     private val walkSpeed = float("Walk Speed", 0.1f, 0.02f, 0.5f)
 
-    @Volatile private var lastSession: NexoraRelaySession? = null
+    @Volatile private var lastSession: RubidiumRelaySession? = null
     @Volatile private var canFly = false
 
     override fun onEnable() {
@@ -81,7 +81,7 @@ class CreativeFly : BaseModule(
         }
     }
 
-    private fun sendAbilities(session: NexoraRelaySession, enabled: Boolean) {
+    private fun sendAbilities(session: RubidiumRelaySession, enabled: Boolean) {
         val fs = if (enabled) flySpeed.value else 0.05f
         val ws = walkSpeed.value
 

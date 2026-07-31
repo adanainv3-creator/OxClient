@@ -1,4 +1,4 @@
-package com.nexoraclient.core.relay
+package com.rubidiumclient.core.relay
 
 import android.content.Context
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap

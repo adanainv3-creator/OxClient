@@ -1,5 +1,5 @@
 
-package com.nexoraclient.ui.overlay
+package com.rubidiumclient.ui.overlay
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -48,21 +48,21 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import com.nexoraclient.R
-import com.nexoraclient.config.Config
-import com.nexoraclient.config.MapArtPlan
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.module.misc.AutoMapArt
-import com.nexoraclient.module.misc.ComboShortcut
-import com.nexoraclient.module.misc.CommandHelper
-import com.nexoraclient.module.social.FriendManager
-import com.nexoraclient.module.social.isFriendEntity
-import com.nexoraclient.session.SessionManager
-import com.nexoraclient.ui.theme.*
-import com.nexoraclient.utils.BlockPalette
-import com.nexoraclient.utils.InventoryUtil
+import com.rubidiumclient.R
+import com.rubidiumclient.config.Config
+import com.rubidiumclient.config.MapArtPlan
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.module.misc.AutoMapArt
+import com.rubidiumclient.module.misc.ComboShortcut
+import com.rubidiumclient.module.misc.CommandHelper
+import com.rubidiumclient.module.social.FriendManager
+import com.rubidiumclient.module.social.isFriendEntity
+import com.rubidiumclient.session.SessionManager
+import com.rubidiumclient.ui.theme.*
+import com.rubidiumclient.utils.BlockPalette
+import com.rubidiumclient.utils.InventoryUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -405,7 +405,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             }
         }
 
-        mediaSession = android.support.v4.media.session.MediaSessionCompat(this, "NexoraOverlayVolume").apply {
+        mediaSession = android.support.v4.media.session.MediaSessionCompat(this, "RubidiumOverlayVolume").apply {
             setFlags(
                 android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
                 android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
@@ -426,14 +426,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CHANNEL_ID, "Nexora Client Overlay", NotificationManager.IMPORTANCE_MIN)
+            val ch = NotificationChannel(CHANNEL_ID, "Rubidium Client Overlay", NotificationManager.IMPORTANCE_MIN)
             getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
 
     private fun buildNotif() = NotificationCompat.Builder(this, CHANNEL_ID)
-        .setSmallIcon(R.mipmap.ic_nexora_logo)
-        .setContentTitle("Nexora Client Overlay")
+        .setSmallIcon(R.mipmap.ic_rubidium_logo)
+        .setContentTitle("Rubidium Client Overlay")
         .setContentText("HUD aktif")
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_MIN)
@@ -565,8 +565,8 @@ private fun MenuFab(onClick: () -> Unit, onDrag: (Float, Float) -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.foundation.Image(
-            painter            = painterResource(id = R.mipmap.ic_nexora_logo),
-            contentDescription = "Nexora",
+            painter            = painterResource(id = R.mipmap.ic_rubidium_logo),
+            contentDescription = "Rubidium",
             modifier           = Modifier
                 .size(30.dp)
                 .clip(CircleShape)
@@ -581,9 +581,9 @@ private fun ShortcutButton(module: BaseModule, onDrag: (Float, Float) -> Unit, o
     var isDragging by remember { mutableStateOf(false) }
     LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
 
-    val bgColor = if (enabled) NexoraSurfaceVar else NexoraSurface
-    val borderColor = if (enabled) NexoraAccentLight.copy(0.9f) else NexoraOutline.copy(0.5f)
-    val textColor   = if (enabled) Color.White else NexoraOnSurface.copy(0.6f)
+    val bgColor = if (enabled) RubidiumSurfaceVar else RubidiumSurface
+    val borderColor = if (enabled) RubidiumAccentLight.copy(0.9f) else RubidiumOutline.copy(0.5f)
+    val textColor   = if (enabled) Color.White else RubidiumOnSurface.copy(0.6f)
 
     Box(
         modifier = Modifier
@@ -623,8 +623,8 @@ private fun CommandEntryButton(text: String, onDrag: (Float, Float) -> Unit, onT
         modifier = Modifier
             .wrapContentSize()
             .clip(RoundedCornerShape(50.dp))
-            .background(NexoraSurfaceVar)
-            .border(1.5.dp, NexoraAccentLight.copy(0.9f), RoundedCornerShape(50.dp))
+            .background(RubidiumSurfaceVar)
+            .border(1.5.dp, RubidiumAccentLight.copy(0.9f), RoundedCornerShape(50.dp))
             .pointerInput(Unit) { detectTapGestures(onTap = { if (!isDragging) onTap() }) }
             .pointerInput(Unit) {
                 detectDragGestures(
@@ -680,10 +680,10 @@ private fun HileMenu(
             .width(300.dp)
             .background(
                 Brush.verticalGradient(
-                    listOf(NexoraBackground.copy(alpha = 0.72f), Color(0xFF141830).copy(alpha = 0.72f))
+                    listOf(RubidiumBackground.copy(alpha = 0.72f), Color(0xFF141830).copy(alpha = 0.72f))
                 )
             )
-            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
             .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
             .pointerInput(Unit) { detectTapGestures { } }
     ) {
@@ -692,27 +692,27 @@ private fun HileMenu(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(NexoraSurface)
+                    .background(RubidiumSurface)
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Nexora Client", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold,
-                        color = NexoraOnBackground)
+                    Text("Rubidium Client", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold,
+                        color = RubidiumOnBackground)
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(if (relayActive) NexoraSuccess.copy(0.2f) else NexoraError.copy(0.15f))
+                            .background(if (relayActive) RubidiumSuccess.copy(0.2f) else RubidiumError.copy(0.15f))
                             .border(1.dp,
-                                if (relayActive) NexoraSuccess.copy(0.5f) else NexoraError.copy(0.4f),
+                                if (relayActive) RubidiumSuccess.copy(0.5f) else RubidiumError.copy(0.4f),
                                 RoundedCornerShape(20.dp))
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
                         Text(if (relayActive) "Connected" else "Disconnected",
                             fontSize = 9.sp,
-                            color = if (relayActive) NexoraSuccess else NexoraError,
+                            color = if (relayActive) RubidiumSuccess else RubidiumError,
                             fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -720,21 +720,21 @@ private fun HileMenu(
                     modifier = Modifier
                         .size(28.dp)
                         .clip(CircleShape)
-                        .background(NexoraError.copy(0.15f))
-                        .border(1.dp, NexoraError.copy(0.4f), CircleShape)
+                        .background(RubidiumError.copy(0.15f))
+                        .border(1.dp, RubidiumError.copy(0.4f), CircleShape)
                         .clickable { onClose() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("x", color = NexoraError, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("x", color = RubidiumError, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
-            HorizontalDivider(color = NexoraOutlineStrong)
+            HorizontalDivider(color = RubidiumOutlineStrong)
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(NexoraSurface.copy(0.5f))
+                    .background(RubidiumSurface.copy(0.5f))
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -744,20 +744,20 @@ private fun HileMenu(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50.dp))
-                            .background(if (sel) NexoraSurfaceVar else Color.Transparent)
+                            .background(if (sel) RubidiumSurfaceVar else Color.Transparent)
                             .border(1.dp,
-                                if (sel) NexoraOutlineStrong else NexoraOutline,
+                                if (sel) RubidiumOutlineStrong else RubidiumOutline,
                                 RoundedCornerShape(50.dp))
                             .clickable { section = s }
                             .padding(horizontal = 14.dp, vertical = 6.dp)
                     ) {
                         Text(s.displayName, fontSize = 11.sp,
-                            color = if (sel) NexoraOnBackground else NexoraOnSurface,
+                            color = if (sel) RubidiumOnBackground else RubidiumOnSurface,
                             fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
                     }
                 }            }
 
-            HorizontalDivider(color = NexoraOutlineStrong)
+            HorizontalDivider(color = RubidiumOutlineStrong)
 
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 if (section == MenuSection.CONFIG) {
@@ -803,18 +803,18 @@ private fun ConfigSection() {
                 value = newName,
                 onValueChange = { newName = it },
                 singleLine = true,
-                placeholder = { Text("Profile name", fontSize = 11.sp, color = NexoraOnSurfaceDim) },
+                placeholder = { Text("Profile name", fontSize = 11.sp, color = RubidiumOnSurfaceDim) },
                 modifier = Modifier.weight(1f),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = NexoraOnSurface),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = RubidiumOnSurface),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor   = NexoraAccent,
-                    unfocusedBorderColor = NexoraOutline
+                    focusedBorderColor   = RubidiumAccent,
+                    unfocusedBorderColor = RubidiumOutline
                 )
             )
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(NexoraAccent)
+                    .background(RubidiumAccent)
                     .clickable {
                         val trimmed = newName.trim()
                         if (trimmed.isNotEmpty()) {
@@ -828,11 +828,11 @@ private fun ConfigSection() {
             }
         }
 
-        HorizontalDivider(color = NexoraOutlineStrong)
+        HorizontalDivider(color = RubidiumOutlineStrong)
 
         if (profiles.isEmpty()) {
             Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("No saved profiles yet.", fontSize = 12.sp, color = NexoraOnSurfaceDim)
+                Text("No saved profiles yet.", fontSize = 12.sp, color = RubidiumOnSurfaceDim)
             }
         } else {
             LazyColumn(
@@ -862,9 +862,9 @@ private fun ConfigProfileRow(
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(if (active) NexoraSurfaceVar else NexoraSurface)
+            .background(if (active) RubidiumSurfaceVar else RubidiumSurface)
             .border(1.dp,
-                if (active) NexoraAccentLight.copy(0.6f) else NexoraOutline,
+                if (active) RubidiumAccentLight.copy(0.6f) else RubidiumOutline,
                 RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -873,17 +873,17 @@ private fun ConfigProfileRow(
         Text(
             name,
             fontSize = 13.sp,
-            color = NexoraOnBackground,
+            color = RubidiumOnBackground,
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = onLoad, colors = ButtonDefaults.textButtonColors(contentColor = NexoraAccentLight)) {
+            TextButton(onClick = onLoad, colors = ButtonDefaults.textButtonColors(contentColor = RubidiumAccentLight)) {
                 Text("Load", fontSize = 11.sp)
             }
-            TextButton(onClick = onDelete, colors = ButtonDefaults.textButtonColors(contentColor = NexoraError)) {
+            TextButton(onClick = onDelete, colors = ButtonDefaults.textButtonColors(contentColor = RubidiumError)) {
                 Text("Del", fontSize = 11.sp)
             }
         }
@@ -911,18 +911,18 @@ private fun FriendsSection() {
                 value = newName,
                 onValueChange = { newName = it },
                 singleLine = true,
-                placeholder = { Text("Player name", fontSize = 11.sp, color = NexoraOnSurfaceDim) },
+                placeholder = { Text("Player name", fontSize = 11.sp, color = RubidiumOnSurfaceDim) },
                 modifier = Modifier.weight(1f),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = NexoraOnSurface),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = RubidiumOnSurface),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor   = NexoraAccent,
-                    unfocusedBorderColor = NexoraOutline
+                    focusedBorderColor   = RubidiumAccent,
+                    unfocusedBorderColor = RubidiumOutline
                 )
             )
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .background(NexoraAccent)
+                    .background(RubidiumAccent)
                     .clickable {
                         val trimmed = newName.trim()
                         if (trimmed.isNotEmpty()) {
@@ -945,23 +945,23 @@ private fun FriendsSection() {
             Text(
                 "${friends.size} friends • ignored by KillAura and TPAura",
                 fontSize = 10.sp,
-                color = NexoraOnSurfaceDim
+                color = RubidiumOnSurfaceDim
             )
             if (friends.isNotEmpty()) {
                 TextButton(
                     onClick = { FriendManager.clear(); refresh() },
-                    colors = ButtonDefaults.textButtonColors(contentColor = NexoraError)
+                    colors = ButtonDefaults.textButtonColors(contentColor = RubidiumError)
                 ) {
                     Text("Clear all", fontSize = 11.sp)
                 }
             }
         }
 
-        HorizontalDivider(color = NexoraOutlineStrong)
+        HorizontalDivider(color = RubidiumOutlineStrong)
 
         if (friends.isEmpty()) {
             Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("No friends added yet.", fontSize = 12.sp, color = NexoraOnSurfaceDim)
+                Text("No friends added yet.", fontSize = 12.sp, color = RubidiumOnSurfaceDim)
             }
         } else {
             LazyColumn(
@@ -984,8 +984,8 @@ private fun FriendRow(name: String, onRemove: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(NexoraSurface)
-            .border(1.dp, NexoraOutline, RoundedCornerShape(10.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutline, RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -993,13 +993,13 @@ private fun FriendRow(name: String, onRemove: () -> Unit) {
         Text(
             name,
             fontSize = 13.sp,
-            color = NexoraOnBackground,
+            color = RubidiumOnBackground,
             fontWeight = FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = NexoraError)) {
+        TextButton(onClick = onRemove, colors = ButtonDefaults.textButtonColors(contentColor = RubidiumError)) {
             Text("Remove", fontSize = 11.sp)
         }
     }
@@ -1013,15 +1013,15 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
     LaunchedEffect(module) { module.enabledFlow.collect { enabled = it } }
 
     val cardBg = when {
-        expanded -> NexoraModuleExpanded
-        enabled  -> NexoraModuleActive
-        else     -> NexoraSurface
+        expanded -> RubidiumModuleExpanded
+        enabled  -> RubidiumModuleActive
+        else     -> RubidiumSurface
     }
     val borderColor = when {
-        enabled -> NexoraModuleActiveBorder
-        else    -> NexoraOutline.copy(0.6f)
+        enabled -> RubidiumModuleActiveBorder
+        else    -> RubidiumOutline.copy(0.6f)
     }
-    val textColor = if (enabled) NexoraModuleActiveText else NexoraOnSurface
+    val textColor = if (enabled) RubidiumModuleActiveText else RubidiumOnSurface
 
     Column(
         modifier = Modifier
@@ -1053,10 +1053,10 @@ private fun ModuleCard(module: BaseModule, onShortcutChanged: () -> Unit) {
                 checked = enabled,
                 onCheckedChange = { ModuleManager.toggle(module); onShortcutChanged() },
                 colors = SwitchDefaults.colors(
-                    checkedTrackColor   = NexoraModuleActiveBorder,
+                    checkedTrackColor   = RubidiumModuleActiveBorder,
                     checkedThumbColor   = Color.White,
-                    uncheckedTrackColor = NexoraOutlineStrong,
-                    uncheckedThumbColor = NexoraOnSurfaceDim
+                    uncheckedTrackColor = RubidiumOutlineStrong,
+                    uncheckedThumbColor = RubidiumOnSurfaceDim
                 ),
                 modifier = Modifier
                     .scale(0.8f)
@@ -1108,8 +1108,8 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
             var v by remember { mutableFloatStateOf(setting.value) }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface)
-                    Text("%.2f".format(v), fontSize = 12.sp, color = NexoraAccentLight,
+                    Text(setting.name, fontSize = 12.sp, color = RubidiumOnSurface)
+                    Text("%.2f".format(v), fontSize = 12.sp, color = RubidiumAccentLight,
                         fontWeight = FontWeight.SemiBold)
                 }
                 Slider(
@@ -1118,9 +1118,9 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
                     valueRange = setting.min..setting.max,
                     modifier = Modifier.height(24.dp),
                     colors = SliderDefaults.colors(
-                        thumbColor         = NexoraAccentLight,
-                        activeTrackColor   = NexoraAccent,
-                        inactiveTrackColor = NexoraOutlineStrong
+                        thumbColor         = RubidiumAccentLight,
+                        activeTrackColor   = RubidiumAccent,
+                        inactiveTrackColor = RubidiumOutlineStrong
                     )
                 )
             }
@@ -1129,8 +1129,8 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
             var v by remember { mutableFloatStateOf(setting.value.toFloat()) }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface)
-                    Text(v.roundToInt().toString(), fontSize = 12.sp, color = NexoraAccentLight,
+                    Text(setting.name, fontSize = 12.sp, color = RubidiumOnSurface)
+                    Text(v.roundToInt().toString(), fontSize = 12.sp, color = RubidiumAccentLight,
                         fontWeight = FontWeight.SemiBold)
                 }
                 Slider(
@@ -1140,9 +1140,9 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
                     steps = (setting.max - setting.min - 1).coerceAtLeast(0),
                     modifier = Modifier.height(24.dp),
                     colors = SliderDefaults.colors(
-                        thumbColor         = NexoraAccentLight,
-                        activeTrackColor   = NexoraAccent,
-                        inactiveTrackColor = NexoraOutlineStrong
+                        thumbColor         = RubidiumAccentLight,
+                        activeTrackColor   = RubidiumAccent,
+                        inactiveTrackColor = RubidiumOutlineStrong
                     )
                 )
             }
@@ -1155,7 +1155,7 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface)
+                Text(setting.name, fontSize = 12.sp, color = RubidiumOnSurface)
                 if (isShortcut) {
                     ShortcutToggle(checked = v) {
                         v = it; setting.value = it; onShortcutChanged()
@@ -1165,10 +1165,10 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
                         checked = v,
                         onCheckedChange = { v = it; setting.value = it },
                         colors = SwitchDefaults.colors(
-                            checkedTrackColor   = NexoraAccent,
+                            checkedTrackColor   = RubidiumAccent,
                             checkedThumbColor   = Color.White,
-                            uncheckedTrackColor = NexoraOutlineStrong,
-                            uncheckedThumbColor = NexoraOnSurfaceDim
+                            uncheckedTrackColor = RubidiumOutlineStrong,
+                            uncheckedThumbColor = RubidiumOnSurfaceDim
                         )
                     )
                 }
@@ -1179,7 +1179,7 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
             val es = setting as EnumSetting<Enum<*>>
             var sel by remember { mutableStateOf(es.value) }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(es.name, fontSize = 12.sp, color = NexoraOnSurface)
+                Text(es.name, fontSize = 12.sp, color = RubidiumOnSurface)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.horizontalScroll(rememberScrollState())
@@ -1189,9 +1189,9 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50.dp))
-                                .background(if (isSel) NexoraSurfaceRaised else NexoraSurface)
+                                .background(if (isSel) RubidiumSurfaceRaised else RubidiumSurface)
                                 .border(1.dp,
-                                    if (isSel) NexoraOutlineStrong else NexoraOutline,
+                                    if (isSel) RubidiumOutlineStrong else RubidiumOutline,
                                     RoundedCornerShape(50.dp))
                                 .clickable { sel = opt; es.value = opt }
                                 .padding(horizontal = 14.dp, vertical = 6.dp)
@@ -1199,7 +1199,7 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
                             Text(
                                 opt.name.lowercase().replaceFirstChar { it.uppercase() },
                                 fontSize = 11.sp,
-                                color = if (isSel) NexoraOnBackground else NexoraOnSurface,
+                                color = if (isSel) RubidiumOnBackground else RubidiumOnSurface,
                                 fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal
                             )
                         }
@@ -1214,17 +1214,17 @@ private fun SettingRow(setting: ModuleSetting<*>, onShortcutChanged: () -> Unit)
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(setting.name, fontSize = 12.sp, color = NexoraOnSurface,
+                Text(setting.name, fontSize = 12.sp, color = RubidiumOnSurface,
                     modifier = Modifier.weight(0.4f))
                 OutlinedTextField(
                     value = v,
                     onValueChange = { v = it; setting.value = it },
                     singleLine = true,
                     modifier = Modifier.weight(0.6f).height(40.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = NexoraOnSurface),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = RubidiumOnSurface),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor   = NexoraAccent,
-                        unfocusedBorderColor = NexoraOutline
+                        focusedBorderColor   = RubidiumAccent,
+                        unfocusedBorderColor = RubidiumOutline
                     )
                 )
             }
@@ -1260,14 +1260,14 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                 "Available Blocks",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = NexoraOnSurface
+                color = RubidiumOnSurface
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .background(NexoraSurfaceRaised)
-                        .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(6.dp))
+                        .background(RubidiumSurfaceRaised)
+                        .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(6.dp))
                         .clickable {
                             val found = module.scanInventoryBlocks()
                             scanned = found
@@ -1277,13 +1277,13 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                         }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text("Scan Inv", fontSize = 10.sp, color = NexoraAccentLight)
+                    Text("Scan Inv", fontSize = 10.sp, color = RubidiumAccentLight)
                 }
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .background(NexoraSurfaceRaised)
-                        .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(6.dp))
+                        .background(RubidiumSurfaceRaised)
+                        .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(6.dp))
                         .clickable {
                             selected = emptySet()
                             scanned = emptySet()
@@ -1292,7 +1292,7 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                         }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text("All", fontSize = 10.sp, color = NexoraOnSurfaceDim)
+                    Text("All", fontSize = 10.sp, color = RubidiumOnSurfaceDim)
                 }
             }
         }
@@ -1301,7 +1301,7 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
             if (selected.isEmpty()) "Using full palette"
             else "${selected.size} blocks selected — grid recalculated",
             fontSize = 10.sp,
-            color = if (selected.isEmpty()) NexoraOnSurfaceDim else NexoraAccentLight
+            color = if (selected.isEmpty()) RubidiumOnSurfaceDim else RubidiumAccentLight
         )
 
         if (displayList.isNotEmpty()) {
@@ -1325,7 +1325,7 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(6.dp))
                             .background(
-                                if (isChecked && selected.isNotEmpty()) NexoraSurface
+                                if (isChecked && selected.isNotEmpty()) RubidiumSurface
                                 else Color.Transparent
                             )
                             .clickable {
@@ -1350,8 +1350,8 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                         Text(
                             BlockPalette.displayName(blockId),
                             fontSize = 11.sp,
-                            color = if (isChecked && selected.isNotEmpty()) NexoraOnSurface
-                                    else NexoraOnSurfaceDim,
+                            color = if (isChecked && selected.isNotEmpty()) RubidiumOnSurface
+                                    else RubidiumOnSurfaceDim,
                             modifier = Modifier.weight(1f)
                         )
                         if (selected.isNotEmpty()) {
@@ -1360,11 +1360,11 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                                     .size(14.dp)
                                     .clip(RoundedCornerShape(3.dp))
                                     .background(
-                                        if (isChecked) NexoraAccent else Color.Transparent
+                                        if (isChecked) RubidiumAccent else Color.Transparent
                                     )
                                     .border(
                                         1.dp,
-                                        if (isChecked) NexoraAccent else NexoraOutlineStrong,
+                                        if (isChecked) RubidiumAccent else RubidiumOutlineStrong,
                                         RoundedCornerShape(3.dp)
                                     ),
                                 contentAlignment = Alignment.Center
@@ -1382,8 +1382,8 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
 
         val requiredCounts by MapArtPlan.requiredCounts.collectAsState()
         if (requiredCounts.isNotEmpty() && selected.isNotEmpty()) {
-            HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
-            Text("Grid summary:", fontSize = 10.sp, color = NexoraOnSurfaceDim)
+            HorizontalDivider(color = RubidiumOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
+            Text("Grid summary:", fontSize = 10.sp, color = RubidiumOnSurfaceDim)
             Column(
                 modifier = Modifier.heightIn(max = 100.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(1.dp)
@@ -1393,13 +1393,13 @@ private fun AutoMapArtBlockPanel(module: AutoMapArt) {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(BlockPalette.displayName(id), fontSize = 10.sp, color = NexoraOnSurface)
-                        Text("$count", fontSize = 10.sp, color = NexoraAccentLight,
+                        Text(BlockPalette.displayName(id), fontSize = 10.sp, color = RubidiumOnSurface)
+                        Text("$count", fontSize = 10.sp, color = RubidiumAccentLight,
                             fontWeight = FontWeight.SemiBold)
                     }
                 }
                 if (requiredCounts.size > 10) {
-                    Text("... +${requiredCounts.size - 10} more", fontSize = 9.sp, color = NexoraOnSurfaceDim)
+                    Text("... +${requiredCounts.size - 10} more", fontSize = 9.sp, color = RubidiumOnSurfaceDim)
                 }
             }
         }
@@ -1421,8 +1421,8 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
             .filter { it.name != module.name }
     }
 
-    HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
-    Text("Select modules", fontSize = 11.sp, color = NexoraOnSurfaceDim)
+    HorizontalDivider(color = RubidiumOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
+    Text("Select modules", fontSize = 11.sp, color = RubidiumOnSurfaceDim)
 
     Column(
         modifier = Modifier
@@ -1437,7 +1437,7 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))
-                    .background(if (isChecked) NexoraSurface else Color.Transparent)
+                    .background(if (isChecked) RubidiumSurface else Color.Transparent)
                     .clickable {
                         selected = if (isChecked) selected - mod.name else selected + mod.name
                         module.targets.value = selected.joinToString(", ")
@@ -1450,10 +1450,10 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
                     modifier = Modifier
                         .size(14.dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(if (isChecked) NexoraAccent else Color.Transparent)
+                        .background(if (isChecked) RubidiumAccent else Color.Transparent)
                         .border(
                             1.dp,
-                            if (isChecked) NexoraAccent else NexoraOutlineStrong,
+                            if (isChecked) RubidiumAccent else RubidiumOutlineStrong,
                             RoundedCornerShape(3.dp)
                         ),
                     contentAlignment = Alignment.Center
@@ -1465,7 +1465,7 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
                 Text(
                     mod.name,
                     fontSize = 11.sp,
-                    color = NexoraOnSurface.copy(alpha = if (isChecked) 1f else 0.7f),
+                    color = RubidiumOnSurface.copy(alpha = if (isChecked) 1f else 0.7f),
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -1477,7 +1477,7 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
-                .background(NexoraAccent)
+                .background(RubidiumAccent)
                 .clickable {
                     selected.forEach { name ->
                         ModuleManager.byName(name)?.let { ModuleManager.enable(it) }
@@ -1490,7 +1490,7 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
                 module.comboName.value.ifBlank { "Combo" },
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = NexoraOnBackground
+                color = RubidiumOnBackground
             )
         }
     }
@@ -1502,26 +1502,26 @@ private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> U
     var adding by remember(module) { mutableStateOf(false) }
     var newEntry by remember(module) { mutableStateOf("") }
 
-    HorizontalDivider(color = NexoraOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
+    HorizontalDivider(color = RubidiumOutline.copy(0.5f), modifier = Modifier.padding(vertical = 2.dp))
 
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("Saved commands", fontSize = 11.sp, color = NexoraOnSurfaceDim)
+        Text("Saved commands", fontSize = 11.sp, color = RubidiumOnSurfaceDim)
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .background(NexoraSurfaceRaised)
-                .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(6.dp))
+                .background(RubidiumSurfaceRaised)
+                .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(6.dp))
                 .clickable { adding = !adding }
                 .padding(horizontal = 10.dp, vertical = 4.dp)
         ) {
             Text(
                 if (adding) "×" else "+",
                 fontSize = 13.sp,
-                color = NexoraAccentLight,
+                color = RubidiumAccentLight,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -1539,16 +1539,16 @@ private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> U
                 singleLine = true,
                 placeholder = { Text("/gamemode creative or a chat message", fontSize = 10.sp) },
                 modifier = Modifier.weight(1f).height(40.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = NexoraOnSurface),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = RubidiumOnSurface),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor   = NexoraAccent,
-                    unfocusedBorderColor = NexoraOutline
+                    focusedBorderColor   = RubidiumAccent,
+                    unfocusedBorderColor = RubidiumOutline
                 )
             )
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .background(NexoraAccent)
+                    .background(RubidiumAccent)
                     .clickable {
                         if (newEntry.isNotBlank()) {
                             module.addEntry(newEntry)
@@ -1560,7 +1560,7 @@ private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> U
                     }
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
-                Text("Ekle", fontSize = 11.sp, color = NexoraOnBackground, fontWeight = FontWeight.SemiBold)
+                Text("Ekle", fontSize = 11.sp, color = RubidiumOnBackground, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -1578,7 +1578,7 @@ private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> U
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(6.dp))
-                        .background(NexoraSurface)
+                        .background(RubidiumSurface)
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -1586,7 +1586,7 @@ private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> U
                     Text(
                         entry,
                         fontSize = 11.sp,
-                        color = NexoraOnSurface,
+                        color = RubidiumOnSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
@@ -1596,7 +1596,7 @@ private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> U
                     Text(
                         "×",
                         fontSize = 13.sp,
-                        color = NexoraOnSurfaceDim,
+                        color = RubidiumOnSurfaceDim,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
                             .clickable {
@@ -1610,7 +1610,7 @@ private fun CommandHelperPanel(module: CommandHelper, onShortcutChanged: () -> U
             }
         }
     } else if (!adding) {
-        Text("No saved commands yet", fontSize = 10.sp, color = NexoraOnSurfaceDim)
+        Text("No saved commands yet", fontSize = 10.sp, color = RubidiumOnSurfaceDim)
     }
 }
 
@@ -1619,9 +1619,9 @@ private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit)
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(50.dp))
-            .background(if (checked) NexoraSurfaceRaised else Color.Transparent)
+            .background(if (checked) RubidiumSurfaceRaised else Color.Transparent)
             .border(1.5.dp,
-                if (checked) NexoraOutlineStrong else NexoraOutline,
+                if (checked) RubidiumOutlineStrong else RubidiumOutline,
                 RoundedCornerShape(50.dp))
             .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 14.dp, vertical = 6.dp),
@@ -1630,7 +1630,7 @@ private fun ShortcutToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit)
         Text(
             if (checked) "On" else "Off",
             fontSize = 11.sp,
-            color = if (checked) NexoraOnBackground else NexoraOnSurfaceDim,
+            color = if (checked) RubidiumOnBackground else RubidiumOnSurfaceDim,
             fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Normal
         )
     }

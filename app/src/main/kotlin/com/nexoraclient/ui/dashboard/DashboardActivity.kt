@@ -1,4 +1,4 @@
-package com.nexoraclient.ui.dashboard
+package com.rubidiumclient.ui.dashboard
 
 import android.content.Context
 import android.content.Intent
@@ -71,20 +71,20 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import com.nexoraclient.auth.AccountManager
-import com.nexoraclient.auth.AuthState
-import com.nexoraclient.auth.DeviceCodeLoginActivity
-import com.nexoraclient.auth.MicrosoftAuthManager
-import com.nexoraclient.auth.SavedAccount
-import com.nexoraclient.config.ServerConfig
-import com.nexoraclient.config.Config
-import com.nexoraclient.config.MapArtPlan
-import com.nexoraclient.utils.BlockPalette
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.session.SessionManager
-import com.nexoraclient.ui.overlay.OverlayService
-import com.nexoraclient.ui.theme.*
+import com.rubidiumclient.auth.AccountManager
+import com.rubidiumclient.auth.AuthState
+import com.rubidiumclient.auth.DeviceCodeLoginActivity
+import com.rubidiumclient.auth.MicrosoftAuthManager
+import com.rubidiumclient.auth.SavedAccount
+import com.rubidiumclient.config.ServerConfig
+import com.rubidiumclient.config.Config
+import com.rubidiumclient.config.MapArtPlan
+import com.rubidiumclient.utils.BlockPalette
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.session.SessionManager
+import com.rubidiumclient.ui.overlay.OverlayService
+import com.rubidiumclient.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -103,7 +103,7 @@ data class InstalledAppInfo(
 
 /** Remembers which app the relay should target, across app restarts. */
 private object SelectedAppStore {
-    private const val PREFS_NAME = "nexoraclient_prefs"
+    private const val PREFS_NAME = "rubidiumclient_prefs"
     private const val KEY_SELECTED_PACKAGE = "selected_package"
 
     fun get(context: Context): String? =
@@ -118,7 +118,7 @@ private object SelectedAppStore {
 
 /** Caches a successful password unlock so the user isn't asked again for a while. */
 private object UnlockSessionStore {
-    private const val PREFS_NAME = "nexoraclient_prefs"
+    private const val PREFS_NAME = "rubidiumclient_prefs"
     private const val KEY_UNLOCKED_UNTIL = "unlocked_until"
     private const val SESSION_DURATION_MS = 3 * 60 * 60 * 1000L // 3 saat
 
@@ -177,7 +177,7 @@ class DashboardActivity : ComponentActivity() {
         }
 
         setContent {
-            NexoraClientTheme {
+            RubidiumClientTheme {
                 var unlocked by remember { mutableStateOf(UnlockSessionStore.isUnlocked(this@DashboardActivity)) }
 
                 if (!unlocked) {
@@ -347,7 +347,7 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
     }
 
     Box(
-        modifier = Modifier.fillMaxSize().background(NexoraBackground),
+        modifier = Modifier.fillMaxSize().background(RubidiumBackground),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -356,22 +356,22 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                "Nexora Client",
+                "Rubidium Client",
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
-                color = NexoraOnBackground,
+                color = RubidiumOnBackground,
                 fontFamily = FontFamily.Monospace
             )
             Text(
                 "Made by Oxygen8315 && KillJoy739860",
                 fontSize = 11.sp,
-                color = NexoraOnSurfaceDim,
+                color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace
             )
             Text(
                 "Enter password",
                 fontSize = 13.sp,
-                color = NexoraOnSurfaceDim,
+                color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace
             )
             OutlinedTextField(
@@ -392,20 +392,20 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                             if (passwordVisible) "HIDE" else "SHOW",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = NexoraOnSurfaceDim
+                            color = RubidiumOnSurfaceDim
                         )
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NexoraAccent,
-                    unfocusedBorderColor = NexoraOutlineStrong,
-                    cursorColor = NexoraAccentLight
+                    focusedBorderColor = RubidiumAccent,
+                    unfocusedBorderColor = RubidiumOutlineStrong,
+                    cursorColor = RubidiumAccentLight
                 ),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = NexoraOnBackground),
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = RubidiumOnBackground),
                 supportingText = errorMessage?.let { msg ->
-                    { Text(msg, color = NexoraError, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                    { Text(msg, color = RubidiumError, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
                 }
             )
             Button(
@@ -413,7 +413,7 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
                 enabled = canSubmit,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent)
+                colors = ButtonDefaults.buttonColors(containerColor = RubidiumAccent)
             ) {
                 Text(
                     if (isChecking) "CHECKING..." else "UNLOCK",
@@ -476,9 +476,9 @@ fun DashboardScreen(
         )
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(NexoraBackground)) {
+    Box(modifier = Modifier.fillMaxSize().background(RubidiumBackground)) {
         Box(modifier = Modifier.fillMaxWidth().height(280.dp)
-            .background(Brush.verticalGradient(listOf(NexoraAccentDark.copy(0.30f), Color.Transparent))))
+            .background(Brush.verticalGradient(listOf(RubidiumAccentDark.copy(0.30f), Color.Transparent))))
 
         Column(modifier = Modifier.fillMaxSize()) {
             Column(
@@ -567,7 +567,7 @@ private fun ScreenHeader(
         title,
         fontSize = 28.sp,
         fontWeight = FontWeight.Bold,
-        color = NexoraOnBackground,
+        color = RubidiumOnBackground,
         fontFamily = FontFamily.Monospace
     )
     if (subtitle != null) {
@@ -575,7 +575,7 @@ private fun ScreenHeader(
         Text(
             subtitle,
             fontSize = 12.sp,
-            color = NexoraOnSurfaceDim,
+            color = RubidiumOnSurfaceDim,
             fontFamily = FontFamily.Monospace
         )
     }
@@ -586,12 +586,12 @@ private fun ScreenHeader(
 private fun AddIconButton(onClick: () -> Unit) {
     Box(
         modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
-            .background(NexoraSurface)
-            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(8.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(8.dp))
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
-        Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = NexoraAccentLight)
+        Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = RubidiumAccentLight)
     }
 }
 
@@ -616,11 +616,11 @@ private fun DashboardTab(
     onRequestAccountLogin : () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(title = "Nexora Client V1.1", subtitle = "Made by Oxygen8315 && KillJoy739860") {
+        ScreenHeader(title = "Rubidium Client V1.1", subtitle = "Made by Oxygen8315 && KillJoy739860") {
             val context = LocalContext.current
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
-                    MoreVertGlyph(tint = if (showServerPanel) NexoraAccentLight else NexoraOnSurfaceDim)
+                    MoreVertGlyph(tint = if (showServerPanel) RubidiumAccentLight else RubidiumOnSurfaceDim)
                 }
                 IconButton(
                     onClick = {
@@ -630,17 +630,17 @@ private fun DashboardTab(
                     },
                     modifier = Modifier.size(32.dp)
                 ) {
-                    DiscordGlyph(tint = NexoraOnSurfaceDim)
+                    DiscordGlyph(tint = RubidiumOnSurfaceDim)
                 }
                 IconButton(
                     onClick = {
                         context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/@NexoraClientss"))
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/@RubidiumClientss"))
                         )
                     },
                     modifier = Modifier.size(32.dp)
                 ) {
-                    YoutubeGlyph(tint = NexoraOnSurfaceDim)
+                    YoutubeGlyph(tint = RubidiumOnSurfaceDim)
                 }
             }
         }
@@ -751,8 +751,8 @@ private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(NexoraSurface)
-            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(12.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
             .clickable { onClick() }
             .padding(16.dp)
     ) {
@@ -760,13 +760,13 @@ private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
             "Selected Application",
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            color = NexoraOnSurfaceDim,
+            color = RubidiumOnSurfaceDim,
             fontFamily = FontFamily.Monospace
         )
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(NexoraBackground),
+                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
                 contentAlignment = Alignment.Center
             ) {
                 if (icon != null) {
@@ -781,7 +781,7 @@ private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
                     label,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
-                    color = NexoraOnSurface,
+                    color = RubidiumOnSurface,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -789,20 +789,20 @@ private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
                 Text(
                     packageName,
                     fontSize = 11.sp,
-                    color = NexoraOnSurfaceDim,
+                    color = RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Text("Change ›", fontSize = 12.sp, color = NexoraAccentLight, fontFamily = FontFamily.Monospace)
+            Text("Change ›", fontSize = 12.sp, color = RubidiumAccentLight, fontFamily = FontFamily.Monospace)
         }
         if (version != null) {
             Spacer(Modifier.height(8.dp))
             Text(
                 "Current: v$version",
                 fontSize = 12.sp,
-                color = NexoraOnSurfaceDim,
+                color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace
             )
         }
@@ -823,18 +823,18 @@ private fun AppPickerScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(NexoraBackground).padding(horizontal = 24.dp)) {
+    Column(modifier = Modifier.fillMaxSize().background(RubidiumBackground).padding(horizontal = 24.dp)) {
         Spacer(Modifier.height(28.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                Text("‹", fontSize = 24.sp, color = NexoraOnBackground)
+                Text("‹", fontSize = 24.sp, color = RubidiumOnBackground)
             }
             Spacer(Modifier.width(8.dp))
             Text(
                 "Select an Application",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                color = NexoraOnBackground,
+                color = RubidiumOnBackground,
                 fontFamily = FontFamily.Monospace
             )
         }
@@ -848,11 +848,11 @@ private fun AppPickerScreen(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(999.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = NexoraAccent,
-                unfocusedBorderColor = NexoraOutlineStrong,
-                cursorColor = NexoraAccentLight
+                focusedBorderColor = RubidiumAccent,
+                unfocusedBorderColor = RubidiumOutlineStrong,
+                cursorColor = RubidiumAccentLight
             ),
-            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = NexoraOnBackground)
+            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = RubidiumOnBackground)
         )
         Spacer(Modifier.height(16.dp))
 
@@ -877,7 +877,7 @@ private fun AppPickerRow(app: InstalledAppInfo, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(NexoraSurface),
+            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(RubidiumSurface),
             contentAlignment = Alignment.Center
         ) {
             if (icon != null) {
@@ -892,7 +892,7 @@ private fun AppPickerRow(app: InstalledAppInfo, onClick: () -> Unit) {
                 app.label,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = NexoraOnBackground,
+                color = RubidiumOnBackground,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -900,7 +900,7 @@ private fun AppPickerRow(app: InstalledAppInfo, onClick: () -> Unit) {
             Text(
                 app.packageName,
                 fontSize = 12.sp,
-                color = NexoraOnSurfaceDim,
+                color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -914,8 +914,8 @@ private fun DashboardWarningBanner(message: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(NexoraSurface)
-            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(12.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
             .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -926,7 +926,7 @@ private fun DashboardWarningBanner(message: String, onClick: () -> Unit) {
             message,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            color = NexoraOnSurface,
+            color = RubidiumOnSurface,
             fontFamily = FontFamily.Monospace,
             modifier = Modifier.weight(1f)
         )
@@ -946,7 +946,7 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
         modifier = Modifier.fillMaxWidth()
             .drawBehind {
                 drawRect(
-                    color   = NexoraSurfaceRaised,
+                    color   = RubidiumSurfaceRaised,
                     topLeft = Offset(-24.dp.toPx(), 0f),
                     size    = Size(size.width + 48.dp.toPx(), size.height)
                 )
@@ -958,7 +958,7 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
         Text(
             "Connected to MITM proxy",
             fontSize = 15.sp,
-            color = NexoraOnSurface,
+            color = RubidiumOnSurface,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -973,7 +973,7 @@ private fun ConnectedBanner(onLaunchApp: () -> Unit) {
                 "Launch App",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                color = NexoraAccent,
+                color = RubidiumAccent,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
                 softWrap = false,
@@ -1002,7 +1002,7 @@ private fun AccountsTab(
             Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Text(
                     "No accounts yet.\nTap + to sign in with Microsoft.",
-                    color = NexoraOnSurfaceDim,
+                    color = RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center
@@ -1034,8 +1034,8 @@ private fun AccountRow(
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) NexoraAccentDark else NexoraSurface)
-            .border(1.dp, if (selected) NexoraAccent else NexoraOutline, RoundedCornerShape(10.dp))
+            .background(if (selected) RubidiumAccentDark else RubidiumSurface)
+            .border(1.dp, if (selected) RubidiumAccent else RubidiumOutline, RoundedCornerShape(10.dp))
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1044,16 +1044,16 @@ private fun AccountRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier.size(34.dp).clip(RoundedCornerShape(6.dp))
-                    .background(if (selected) NexoraAccent.copy(alpha = 0.25f) else NexoraSurfaceVar),
+                    .background(if (selected) RubidiumAccent.copy(alpha = 0.25f) else RubidiumSurfaceVar),
                 contentAlignment = Alignment.Center
             ) {
-                PersonGlyph(tint = if (selected) NexoraAccentLight else NexoraOnSurfaceDim)
+                PersonGlyph(tint = if (selected) RubidiumAccentLight else RubidiumOnSurfaceDim)
             }
             Spacer(Modifier.width(12.dp))
             Column {
                 Text(
                     account.gamertag,
-                    color = NexoraOnBackground,
+                    color = RubidiumOnBackground,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -1062,14 +1062,14 @@ private fun AccountRow(
                 )
                 Text(
                     if (account.isExpired()) "Token expired — will refresh" else "Signed in",
-                    color = if (account.isExpired()) NexoraWarning else NexoraOnSurfaceDim,
+                    color = if (account.isExpired()) RubidiumWarning else RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp
                 )
             }
         }
         if (selected) {
-            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(NexoraSuccess))
+            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(RubidiumSuccess))
         }
     }
 }
@@ -1141,11 +1141,11 @@ private fun ConfigTab() {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Configs") {
             TextButton(onClick = { showMapArtDialog = true }) {
-                Text("AutoMapArt Configs", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Text("AutoMapArt Configs", color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
             Spacer(Modifier.width(8.dp))
             TextButton(onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) }) {
-                Text("Import", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Text("Import", color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
             Spacer(Modifier.width(8.dp))
             AddIconButton(onClick = { showSaveDialog = true })
@@ -1158,7 +1158,7 @@ private fun ConfigTab() {
             ) {
                 Text(
                     "No saved profiles.\nTap + to save current settings.",
-                    color = NexoraOnSurfaceDim,
+                    color = RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center
@@ -1178,7 +1178,7 @@ private fun ConfigTab() {
                         onDelete = { scope.launch { Config.delete(profile.name) } },
                         onExport = {
                             pendingExportName = profile.name
-                            exportLauncher.launch("${profile.name}.nexoracfg.json")
+                            exportLauncher.launch("${profile.name}.rubidiumcfg.json")
                         }
                     )
                 }
@@ -1199,14 +1199,14 @@ private fun ConfigTab() {
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(6.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = NexoraAccent,
-                        unfocusedBorderColor = NexoraOutlineStrong,
-                        focusedLabelColor = NexoraAccentLight,
-                        cursorColor = NexoraAccentLight
+                        focusedBorderColor = RubidiumAccent,
+                        unfocusedBorderColor = RubidiumOutlineStrong,
+                        focusedLabelColor = RubidiumAccentLight,
+                        cursorColor = RubidiumAccentLight
                     ),
                     textStyle = LocalTextStyle.current.copy(
                         fontFamily = FontFamily.Monospace,
-                        color = NexoraOnBackground
+                        color = RubidiumOnBackground
                     )
                 )
             },
@@ -1221,17 +1221,17 @@ private fun ConfigTab() {
                         }
                     },
                     shape = RoundedCornerShape(6.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent)
+                    colors = ButtonDefaults.buttonColors(containerColor = RubidiumAccent)
                 ) {
                     Text("Save", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showSaveDialog = false; newProfileName = "" }) {
-                    Text("Cancel", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace)
+                    Text("Cancel", color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
                 }
             },
-            containerColor = NexoraSurface,
+            containerColor = RubidiumSurface,
             shape = RoundedCornerShape(10.dp)
         )
     }
@@ -1241,7 +1241,7 @@ private fun ConfigTab() {
             Column(
                 modifier = Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
-                    .background(NexoraBackground)
+                    .background(RubidiumBackground)
                     .padding(16.dp)
             ) {
                 AutoMapArtSection(
@@ -1254,7 +1254,7 @@ private fun ConfigTab() {
                     onClick = { showMapArtDialog = false },
                     modifier = Modifier.align(Alignment.End)
                 ) {
-                    Text("Close", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                    Text("Close", color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                 }
             }
         }
@@ -1273,15 +1273,15 @@ private fun AutoMapArtSection(
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(NexoraSurface)
-            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(12.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
             .padding(16.dp)
     ) {
         Text(
             "Auto Map Art",
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            color = NexoraOnSurfaceDim,
+            color = RubidiumOnSurfaceDim,
             fontFamily = FontFamily.Monospace
         )
         Spacer(Modifier.height(10.dp))
@@ -1292,8 +1292,8 @@ private fun AutoMapArtSection(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (active) NexoraAccent else NexoraBackground)
-                        .border(1.dp, if (active) NexoraAccent else NexoraOutlineStrong, RoundedCornerShape(8.dp))
+                        .background(if (active) RubidiumAccent else RubidiumBackground)
+                        .border(1.dp, if (active) RubidiumAccent else RubidiumOutlineStrong, RoundedCornerShape(8.dp))
                         .clickable { onSelectSize(size) }
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
@@ -1302,7 +1302,7 @@ private fun AutoMapArtSection(
                         fontSize = 13.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (active) Color.White else NexoraOnSurface
+                        color = if (active) Color.White else RubidiumOnSurface
                     )
                 }
             }
@@ -1312,8 +1312,8 @@ private fun AutoMapArtSection(
 
         Box(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .background(NexoraBackground)
-                .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(8.dp))
+                .background(RubidiumBackground)
+                .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(8.dp))
                 .clickable { onPickImage() }
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             contentAlignment = Alignment.Center
@@ -1323,7 +1323,7 @@ private fun AutoMapArtSection(
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace,
-                color = NexoraOnSurface
+                color = RubidiumOnSurface
             )
         }
 
@@ -1333,7 +1333,7 @@ private fun AutoMapArtSection(
                 "Required Blocks (${gridSize}x${gridSize})",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = NexoraOnSurfaceDim,
+                color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace
             )
             Spacer(Modifier.height(8.dp))
@@ -1350,14 +1350,14 @@ private fun AutoMapArtSection(
                             BlockPalette.displayName(blockId),
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
-                            color = NexoraOnSurface
+                            color = RubidiumOnSurface
                         )
                         Text(
                             "$count",
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.SemiBold,
-                            color = NexoraOnSurfaceDim
+                            color = RubidiumOnSurfaceDim
                         )
                     }
                 }
@@ -1377,15 +1377,15 @@ private fun ProfileRow(
     Row(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(if (active) NexoraAccentDark else NexoraSurface)
-            .border(1.dp, if (active) NexoraAccent else NexoraOutline, RoundedCornerShape(10.dp))
+            .background(if (active) RubidiumAccentDark else RubidiumSurface)
+            .border(1.dp, if (active) RubidiumAccent else RubidiumOutline, RoundedCornerShape(10.dp))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
             name,
-            color = NexoraOnBackground,
+            color = RubidiumOnBackground,
             fontFamily = FontFamily.Monospace,
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
@@ -1397,21 +1397,21 @@ private fun ProfileRow(
             TextButton(
                 onClick = onLoad,
                 shape = RoundedCornerShape(6.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = NexoraAccentLight)
+                colors = ButtonDefaults.textButtonColors(contentColor = RubidiumAccentLight)
             ) {
                 Text("Load", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
             TextButton(
                 onClick = onExport,
                 shape = RoundedCornerShape(6.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = NexoraOnSurfaceDim)
+                colors = ButtonDefaults.textButtonColors(contentColor = RubidiumOnSurfaceDim)
             ) {
                 Text("Export", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
             TextButton(
                 onClick = onDelete,
                 shape = RoundedCornerShape(6.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = NexoraError)
+                colors = ButtonDefaults.textButtonColors(contentColor = RubidiumError)
             ) {
                 Text("Delete", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
@@ -1422,12 +1422,12 @@ private fun ProfileRow(
 @Composable
 private fun InactiveNotice() {
     Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-        .background(NexoraSurfaceVar)
-        .border(1.dp, NexoraOutline, RoundedCornerShape(8.dp))
+        .background(RubidiumSurfaceVar)
+        .border(1.dp, RubidiumOutline, RoundedCornerShape(8.dp))
         .padding(14.dp)
     ) {
         Text("This section is not active yet.", fontSize = 11.sp,
-            color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace)
+            color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
     }
 }
 
@@ -1435,7 +1435,7 @@ private fun InactiveNotice() {
 @Composable
 private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
     Column {
-        HorizontalDivider(color = NexoraOutline)
+        HorizontalDivider(color = RubidiumOutline)
         Row(
             modifier = Modifier.fillMaxWidth().background(Color.Black)
                 .navigationBarsPadding()
@@ -1479,17 +1479,17 @@ private fun TabItem(
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(50))
-                .background(if (selected) NexoraSurfaceVar else Color.Transparent)
+                .background(if (selected) RubidiumSurfaceVar else Color.Transparent)
                 .padding(horizontal = if (selected) 18.dp else 10.dp, vertical = 8.dp),
             contentAlignment = Alignment.Center
         ) {
-            icon(if (selected) NexoraAccentLight else NexoraOnSurfaceDim)
+            icon(if (selected) RubidiumAccentLight else RubidiumOnSurfaceDim)
         }
         if (selected) {
             Spacer(Modifier.height(4.dp))
             Text(
                 label, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold, color = NexoraAccentLight
+                fontWeight = FontWeight.SemiBold, color = RubidiumAccentLight
             )
         }
     }
@@ -1498,10 +1498,10 @@ private fun TabItem(
 @Composable
 private fun ConnectButton(running: Boolean, onToggle: () -> Unit) {
     val bgColor by animateColorAsState(
-        targetValue   = if (running) NexoraAccent else NexoraConnectIdle,
+        targetValue   = if (running) RubidiumAccent else RubidiumConnectIdle,
         animationSpec = tween(300), label = "btnColor"
     )
-    val contentColor = if (running) Color.White else NexoraOnBackground
+    val contentColor = if (running) Color.White else RubidiumOnBackground
     Button(
         onClick        = onToggle,
         shape          = RoundedCornerShape(50),
@@ -1536,8 +1536,8 @@ private fun ServerSettingsPanel(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape    = RoundedCornerShape(12.dp),
-        colors   = CardDefaults.cardColors(containerColor = NexoraSurface.copy(alpha = 0.90f)),
-        border   = BorderStroke(1.dp, NexoraOutlineStrong)
+        colors   = CardDefaults.cardColors(containerColor = RubidiumSurface.copy(alpha = 0.90f)),
+        border   = BorderStroke(1.dp, RubidiumOutlineStrong)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -1549,21 +1549,21 @@ private fun ServerSettingsPanel(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("TARGET SERVER", fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    color = NexoraOnBackground, fontFamily = FontFamily.Monospace)
-                Text("CLOSE", fontSize = 10.sp, color = NexoraOnSurfaceDim,
+                    color = RubidiumOnBackground, fontFamily = FontFamily.Monospace)
+                Text("CLOSE", fontSize = 10.sp, color = RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier.clickable { onDismiss() })
             }
-            HorizontalDivider(color = NexoraOutline)
+            HorizontalDivider(color = RubidiumOutline)
             OutlinedTextField(
                 value = hostInput, onValueChange = { hostInput = it },
                 label = { Text("Server Address", fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NexoraAccent, unfocusedBorderColor = NexoraOutlineStrong,
-                    focusedLabelColor = NexoraAccentLight, cursorColor = NexoraAccentLight),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = NexoraOnBackground)
+                    focusedBorderColor = RubidiumAccent, unfocusedBorderColor = RubidiumOutlineStrong,
+                    focusedLabelColor = RubidiumAccentLight, cursorColor = RubidiumAccentLight),
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = RubidiumOnBackground)
             )
             OutlinedTextField(
                 value = portInput,
@@ -1574,27 +1574,27 @@ private fun ServerSettingsPanel(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(6.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NexoraAccent, unfocusedBorderColor = NexoraOutlineStrong,
-                    focusedLabelColor = NexoraAccentLight, cursorColor = NexoraAccentLight),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = NexoraOnBackground),
+                    focusedBorderColor = RubidiumAccent, unfocusedBorderColor = RubidiumOutlineStrong,
+                    focusedLabelColor = RubidiumAccentLight, cursorColor = RubidiumAccentLight),
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, color = RubidiumOnBackground),
                 supportingText = if (portError) {
-                    { Text("Valid port range is 1-65535", color = NexoraError, fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
+                    { Text("Valid port range is 1-65535", color = RubidiumError, fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
                 } else null
             )
             if (recentServers.isNotEmpty()) {
                 Text("RECENT SERVERS", fontSize = 10.sp,
-                    color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace)
+                    color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
                 Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     recentServers.forEach { (h, p) ->
                         Box(modifier = Modifier.clip(RoundedCornerShape(6.dp))
-                            .background(NexoraSurfaceVar)
-                            .border(1.dp, NexoraOutlineStrong, RoundedCornerShape(6.dp))
+                            .background(RubidiumSurfaceVar)
+                            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(6.dp))
                             .clickable { hostInput = h; portInput = p.toString(); portError = false }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text("$h:$p", fontSize = 9.sp,
-                                color = NexoraAccentLight, fontFamily = FontFamily.Monospace)
+                                color = RubidiumAccentLight, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
@@ -1602,8 +1602,8 @@ private fun ServerSettingsPanel(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onReset, modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(6.dp),
-                    border = BorderStroke(1.dp, NexoraOutlineStrong),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NexoraOnSurface)
+                    border = BorderStroke(1.dp, RubidiumOutlineStrong),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = RubidiumOnSurface)
                 ) { Text("DEFAULT", fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
                 Button(
                     onClick = {
@@ -1612,7 +1612,7 @@ private fun ServerSettingsPanel(
                         onSave(hostInput.trim(), p)
                     },
                     modifier = Modifier.weight(1f), shape = RoundedCornerShape(6.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent)
+                    colors = ButtonDefaults.buttonColors(containerColor = RubidiumAccent)
                 ) { Text("SAVE", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
             }
         }
@@ -1630,70 +1630,70 @@ private fun AuthDialog(
     val canDismiss = authState !is AuthState.Loading && authState !is AuthState.WaitingForWebView
     Dialog(onDismissRequest = { if (canDismiss) onDismiss() }) {
         Card(shape = RoundedCornerShape(10.dp),
-            colors = CardDefaults.cardColors(containerColor = NexoraSurface),
-            border = BorderStroke(1.dp, NexoraOutline)
+            colors = CardDefaults.cardColors(containerColor = RubidiumSurface),
+            border = BorderStroke(1.dp, RubidiumOutline)
         ) {
             Column(modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text("MICROSOFT ACCOUNT", fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                    color = NexoraOnBackground, fontFamily = FontFamily.Monospace)
-                HorizontalDivider(color = NexoraOutline)
+                    color = RubidiumOnBackground, fontFamily = FontFamily.Monospace)
+                HorizontalDivider(color = RubidiumOutline)
                 when (authState) {
                     is AuthState.Success -> {
-                        Text("SIGNED IN", color = NexoraSuccess, fontFamily = FontFamily.Monospace,
+                        Text("SIGNED IN", color = RubidiumSuccess, fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         Text(authState.gamertag, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                            color = NexoraOnBackground, fontFamily = FontFamily.Monospace)
+                            color = RubidiumOnBackground, fontFamily = FontFamily.Monospace)
                         Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent),
+                            colors = ButtonDefaults.buttonColors(containerColor = RubidiumAccent),
                             shape = RoundedCornerShape(6.dp)
                         ) { Text("SIGN IN WITH ANOTHER ACCOUNT", fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold, fontSize = 12.sp, textAlign = TextAlign.Center) }
                         Button(onClick = onSignOut, modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = NexoraError),
+                            colors = ButtonDefaults.buttonColors(containerColor = RubidiumError),
                             shape = RoundedCornerShape(6.dp)
                         ) { Text("SIGN OUT", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                         TextButton(onClick = onDismiss) {
-                            Text("CLOSE", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace)
+                            Text("CLOSE", color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
                         }
                     }
                     is AuthState.WaitingForWebView, is AuthState.Loading -> {
-                        CircularProgressIndicator(color = NexoraAccentLight, strokeWidth = 2.dp)
+                        CircularProgressIndicator(color = RubidiumAccentLight, strokeWidth = 2.dp)
                         Text(
                             if (authState is AuthState.WaitingForWebView)
                                 "Opening Microsoft sign-in window..."
                             else
                                 "Verifying account...",
-                            color = NexoraOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                            color = RubidiumOnSurface, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
                             textAlign = TextAlign.Center
                         )
                         TextButton(onClick = onCancel) {
-                            Text("CANCEL", color = NexoraError, fontFamily = FontFamily.Monospace)
+                            Text("CANCEL", color = RubidiumError, fontFamily = FontFamily.Monospace)
                         }
                     }
                     is AuthState.Error -> {
-                        Text("ERROR: ${authState.message}", color = NexoraError,
+                        Text("ERROR: ${authState.message}", color = RubidiumError,
                             fontFamily = FontFamily.Monospace, fontSize = 12.sp, textAlign = TextAlign.Center)
                         Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent),
+                            colors = ButtonDefaults.buttonColors(containerColor = RubidiumAccent),
                             shape = RoundedCornerShape(6.dp)
                         ) { Text("RETRY", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                         TextButton(onClick = onDismiss) {
-                            Text("CLOSE", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace)
+                            Text("CLOSE", color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
                         }
                     }
                     else -> {
                         Text("Sign in with your Xbox/Microsoft account.\nThe sign-in page will open inside the app.",
-                            color = NexoraOnSurface, fontFamily = FontFamily.Monospace,
+                            color = RubidiumOnSurface, fontFamily = FontFamily.Monospace,
                             textAlign = TextAlign.Center, fontSize = 13.sp)
                         Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = NexoraAccent),
+                            colors = ButtonDefaults.buttonColors(containerColor = RubidiumAccent),
                             shape = RoundedCornerShape(6.dp)
                         ) { Text("SIGN IN", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                         TextButton(onClick = onDismiss) {
-                            Text("CLOSE", color = NexoraOnSurfaceDim, fontFamily = FontFamily.Monospace)
+                            Text("CLOSE", color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
@@ -1734,7 +1734,7 @@ private fun RouterGlyph(modifier: Modifier = Modifier, tint: Color = Color.White
         val dotY = bodyTop + bodyHeight / 2f
         val dotR = bodyHeight * 0.14f
         listOf(0.30f, 0.5f, 0.70f).forEach { fx ->
-            drawCircle(color = NexoraBackground, radius = dotR, center = Offset(w * fx, dotY))
+            drawCircle(color = RubidiumBackground, radius = dotR, center = Offset(w * fx, dotY))
         }
     }
 }

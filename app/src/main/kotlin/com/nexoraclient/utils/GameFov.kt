@@ -1,4 +1,4 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
 /**
  * Oyuncunun o an EKRANDA GERÇEKTEN gördüğü FOV değerini modüller arasında

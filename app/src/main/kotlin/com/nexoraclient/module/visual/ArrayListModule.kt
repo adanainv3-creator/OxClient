@@ -1,4 +1,4 @@
-package com.nexoraclient.module.visual
+package com.rubidiumclient.module.visual
 
 import android.graphics.Canvas
 import android.graphics.Color
@@ -7,13 +7,13 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
-import com.nexoraclient.module.BaseModule
-import com.nexoraclient.module.ModuleCategory
-import com.nexoraclient.module.ModuleManager
+import com.rubidiumclient.module.BaseModule
+import com.rubidiumclient.module.ModuleCategory
+import com.rubidiumclient.module.ModuleManager
 import kotlin.math.min
 
 class ArrayListModule : BaseModule(
-    name = "Mod List",
+    name = "ArrayList",
     category = ModuleCategory.VISUAL,
     description = "Aktif modülleri sağ üst köşede renkli liste halinde gösterir"
 ) {

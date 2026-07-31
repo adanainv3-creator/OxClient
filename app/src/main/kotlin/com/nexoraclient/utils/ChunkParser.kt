@@ -1,4 +1,4 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufInputStream

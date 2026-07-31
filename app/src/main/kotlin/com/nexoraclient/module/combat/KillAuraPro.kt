@@ -1,18 +1,18 @@
 
-package com.nexoraclient.module.combat
+package com.rubidiumclient.module.combat
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.module.misc.InventoryHelper
-import com.nexoraclient.module.social.isFriendEntity
-import com.nexoraclient.utils.MathUtil
-import com.nexoraclient.utils.PacketUtil
-import com.nexoraclient.utils.CritLock
-import com.nexoraclient.utils.RotationUtil
-import com.nexoraclient.utils.WorldBlockTracker
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.module.misc.InventoryHelper
+import com.rubidiumclient.module.social.isFriendEntity
+import com.rubidiumclient.utils.MathUtil
+import com.rubidiumclient.utils.PacketUtil
+import com.rubidiumclient.utils.CritLock
+import com.rubidiumclient.utils.RotationUtil
+import com.rubidiumclient.utils.WorldBlockTracker
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import kotlinx.coroutines.*
@@ -185,7 +185,7 @@ class KillAuraPro : BaseModule(
             .toList()
     }
 
-    private suspend fun burstAttack(session: NexoraRelaySession, target: EntityTracker.TrackedEntity) {
+    private suspend fun burstAttack(session: RubidiumRelaySession, target: EntityTracker.TrackedEntity) {
         if (alwaysCrit.value) CritLock.tryRun { injectCritTimed(session) }
 
         val predPos = target.predictedPosition(predictDelay.value)
@@ -227,7 +227,7 @@ class KillAuraPro : BaseModule(
     // Criticals.kt'deki fix ile birebir aynı prensip: gerçek zaman aralıklı
     // düşüş paketleri. 0ms arayla göndermek sunucunun "düşüyor" durumunu hiç
     // kaydetmemesine sebep oluyordu — burada delay'ler bilinçli olarak var.
-    private suspend fun injectCritTimed(s: NexoraRelaySession) {
+    private suspend fun injectCritTimed(s: RubidiumRelaySession) {
         try {
             PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
             delay(10L)

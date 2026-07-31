@@ -1,4 +1,4 @@
-package com.nexoraclient.ui.overlay
+package com.rubidiumclient.ui.overlay
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

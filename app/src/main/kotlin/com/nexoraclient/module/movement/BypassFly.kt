@@ -1,9 +1,9 @@
-package com.nexoraclient.module.movement
+package com.rubidiumclient.module.movement
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.module.*
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.module.*
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
 import org.cloudburstmc.protocol.bedrock.data.PlayerAuthInputData
@@ -42,7 +42,7 @@ class BypassFly : BaseModule(
     @Volatile private var lastMotionMs = 0L
     @Volatile private var jitterState  = false
     @Volatile private var abilitiesOn  = false
-    @Volatile private var lastSession  : NexoraRelaySession? = null
+    @Volatile private var lastSession  : RubidiumRelaySession? = null
 
     override fun onEnable() {
         super.onEnable()
@@ -116,7 +116,7 @@ class BypassFly : BaseModule(
         return if (jitterState) 1f else -1f
     }
 
-    private fun applyAbilities(session: NexoraRelaySession, enabled: Boolean) {
+    private fun applyAbilities(session: RubidiumRelaySession, enabled: Boolean) {
         val packet = UpdateAbilitiesPacket().apply {
             playerPermission  = if (enabled) PlayerPermission.OPERATOR else PlayerPermission.VISITOR
             commandPermission = if (enabled) CommandPermission.OWNER  else CommandPermission.ANY

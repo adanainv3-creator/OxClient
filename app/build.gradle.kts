@@ -7,15 +7,15 @@ plugins {
 }
 
 android {
-    namespace  = "com.nexoraclient"
+    namespace  = "com.rubidiumclient"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.nexoraclient"
+        applicationId = "com.rubidiumclient"
         minSdk        = 26
         targetSdk     = 35
-        versionCode   = 1
-        versionName   = "1.0.0"
+        versionCode   = 2
+        versionName   = "1.2.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -25,9 +25,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile     = System.getenv("KEYSTORE_PATH")?.takeIf { it.isNotBlank() }?.let { file(it) } ?: file("debug.jks")
-            storePassword = System.getenv("KEYSTORE_PASS") ?: "nexoraclient"
-            keyAlias      = System.getenv("KEY_ALIAS")     ?: "nexoraclient"
-            keyPassword   = System.getenv("KEY_PASS")      ?: "nexoraclient"
+            storePassword = System.getenv("KEYSTORE_PASS") ?: "rubidiumclient"
+            keyAlias      = System.getenv("KEY_ALIAS")     ?: "rubidiumclient"
+            keyPassword   = System.getenv("KEY_PASS")      ?: "rubidiumclient"
         }
     }
 

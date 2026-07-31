@@ -1,4 +1,4 @@
-package com.nexoraclient.auth
+package com.rubidiumclient.auth
 
 import android.content.Context
 import android.util.Base64
@@ -470,9 +470,9 @@ object MicrosoftAuthManager {
                     }
                 }
             }
-            "NexoraPlayer"
+            "RubidiumPlayer"
         } catch (e: Exception) {
-            "NexoraPlayer"
+            "RubidiumPlayer"
         }
     }
 

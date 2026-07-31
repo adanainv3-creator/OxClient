@@ -1,12 +1,12 @@
-package com.nexoraclient.events
+package com.rubidiumclient.events
 
-import com.nexoraclient.core.relay.NexoraRelaySession
+import com.rubidiumclient.core.relay.RubidiumRelaySession
 import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
 
 class PacketEvent(
     val packet   : BedrockPacket,
     val direction: Direction,
-    val session  : NexoraRelaySession
+    val session  : RubidiumRelaySession
 ) {
     enum class Direction {
         CLIENT_TO_SERVER,

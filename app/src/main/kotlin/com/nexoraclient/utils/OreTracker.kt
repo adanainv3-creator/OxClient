@@ -1,8 +1,8 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
 import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.packet.ChangeDimensionPacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelChunkPacket

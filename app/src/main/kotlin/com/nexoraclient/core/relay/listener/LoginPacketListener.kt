@@ -1,9 +1,9 @@
-package com.nexoraclient.core.relay.listener
+package com.rubidiumclient.core.relay.listener
 import android.util.Base64
-import com.nexoraclient.auth.MicrosoftAuthManager
-import com.nexoraclient.core.relay.ClientIdentification
-import com.nexoraclient.core.relay.ConnectionManager
-import com.nexoraclient.core.relay.NexoraRelaySession
+import com.rubidiumclient.auth.MicrosoftAuthManager
+import com.rubidiumclient.core.relay.ClientIdentification
+import com.rubidiumclient.core.relay.ConnectionManager
+import com.rubidiumclient.core.relay.RubidiumRelaySession
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
 import org.cloudburstmc.protocol.bedrock.data.auth.AuthPayload
 import org.cloudburstmc.protocol.bedrock.data.auth.AuthType
@@ -18,7 +18,7 @@ import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 
-class LoginPacketListener : NexoraPacketListener {
+class LoginPacketListener : RubidiumPacketListener {
 
     companion object {
         private const val TAG = "LoginPacketListener"
@@ -35,17 +35,17 @@ class LoginPacketListener : NexoraPacketListener {
 
     private val resignClientJwtEnabled = true
 
-    override fun onSessionStart(session: NexoraRelaySession) {
+    override fun onSessionStart(session: RubidiumRelaySession) {
         ConnectionManager.onHandshaking()
     }
 
-    override fun onSessionEnd(session: NexoraRelaySession) {
+    override fun onSessionEnd(session: RubidiumRelaySession) {
         pendingLogin = null
         loginSentAtMs = 0L
         ConnectionManager.onDisconnected()
     }
 
-    override fun onClientPacket(packet: BedrockPacket, session: NexoraRelaySession): Boolean {
+    override fun onClientPacket(packet: BedrockPacket, session: RubidiumRelaySession): Boolean {
         when (packet) {
             is RequestNetworkSettingsPacket -> {
             }
@@ -83,7 +83,7 @@ class LoginPacketListener : NexoraPacketListener {
         return true
     }
 
-    override fun onServerPacket(packet: BedrockPacket, session: NexoraRelaySession): Boolean {
+    override fun onServerPacket(packet: BedrockPacket, session: RubidiumRelaySession): Boolean {
         when (packet) {
             is NetworkSettingsPacket -> {
                 try {
@@ -141,7 +141,7 @@ class LoginPacketListener : NexoraPacketListener {
         return true
     }
 
-    private fun enableEncryption(packet: ServerToClientHandshakePacket, session: NexoraRelaySession) {
+    private fun enableEncryption(packet: ServerToClientHandshakePacket, session: RubidiumRelaySession) {
         val jwt    = packet.jwt ?: throw IllegalStateException("JWT null")
         val parts  = jwt.split(".")
         require(parts.size == 3) { "Geçersiz JWT format" }
@@ -165,7 +165,7 @@ class LoginPacketListener : NexoraPacketListener {
         session.sendToServer(ClientToServerHandshakePacket())
     }
 
-    private fun injectAuthChain(packet: LoginPacket, session: NexoraRelaySession) {
+    private fun injectAuthChain(packet: LoginPacket, session: RubidiumRelaySession) {
         val savedChain = MicrosoftAuthManager.getActiveChainForRelay()
         if (savedChain.isNullOrBlank()) {
             return
@@ -256,7 +256,7 @@ class LoginPacketListener : NexoraPacketListener {
         else         -> ByteArray(48 - b.size) + b
     }
 
-    private fun resignClientJwt(originalClientJwt: String, privKeyB64: String, pubKeyB64: String, session: NexoraRelaySession): String? {
+    private fun resignClientJwt(originalClientJwt: String, privKeyB64: String, pubKeyB64: String, session: RubidiumRelaySession): String? {
         try {
             val parts = originalClientJwt.split(".")
             if (parts.size != 3) {

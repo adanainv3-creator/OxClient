@@ -1,9 +1,9 @@
-package com.nexoraclient.utils
+package com.rubidiumclient.utils
 
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
 import io.netty.buffer.ByteBuf
-import com.nexoraclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.proxy.EntityTracker
 import org.cloudburstmc.protocol.bedrock.packet.ChangeDimensionPacket
 import org.cloudburstmc.protocol.bedrock.packet.ClientCacheStatusPacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelChunkPacket
@@ -349,7 +349,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
         fun extract(def: Any?): String? = when (def) {
             is org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition -> def.identifier
-            is com.nexoraclient.core.relay.Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
+            is com.rubidiumclient.core.relay.Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")
             else -> null
         }
 
@@ -367,7 +367,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         // session registry'si boş/uyumsuzsa en yakın protokol tanımına düş
         val fallback = runCatching {
             extract(
-                com.nexoraclient.core.relay.Definitions
+                com.rubidiumclient.core.relay.Definitions
                     .getClosestDefinitions(session.activeCodec.protocolVersion)
                     .blockDefinitions
                     ?.getDefinition(runtimeId)

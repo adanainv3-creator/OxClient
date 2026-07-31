@@ -1,10 +1,10 @@
-package com.nexoraclient.module.combat
+package com.rubidiumclient.module.combat
 
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.utils.PacketUtil
-import com.nexoraclient.utils.CritLock
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.utils.PacketUtil
+import com.rubidiumclient.utils.CritLock
 import kotlinx.coroutines.*
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
@@ -12,12 +12,12 @@ import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 class Criticals : BaseModule(
     name        = "Criticals",
     category    = ModuleCategory.COMBAT,
-    description = "Her vuruu kritik hale getirir (ULTRA HIZLI)"
+    description = "Her vuruÅŸu kritik hale getirir (ULTRA HIZLI)"
 ) {
     enum class CritMode { 
         Vanilla,      // Standart 7-packet
-        Fast,         // 3-packet hzl (ÖNERLEN)
-        UltraFast,    // 2-packet çok hzl
+        Fast,         // 3-packet hÄ±zlÄ± (Ã–NERÄ°LEN)
+        UltraFast,    // 2-packet Ã§ok hÄ±zlÄ±
         Packet        // Minimal packet
     }
 
@@ -48,7 +48,7 @@ class Criticals : BaseModule(
             CritLock.tryRun {
                 when (mode.value) {
                     CritMode.Vanilla    -> injectVanilla(session)
-                    CritMode.Fast       -> injectFast(session)      // ÖNERLEN
+                    CritMode.Fast       -> injectFast(session)      // Ã–NERÄ°LEN
                     CritMode.UltraFast  -> injectUltraFast(session)
                     CritMode.Packet     -> injectPacket(session)
                 }
@@ -57,24 +57,24 @@ class Criticals : BaseModule(
         }
     }
 
-    //  FAST: Sadece 3 packet, minimal gecikme
-    private suspend fun injectFast(s: com.nexoraclient.core.relay.NexoraRelaySession) {
+    // FAST: Sadece 3 packet, minimal gecikme
+    private suspend fun injectFast(s: com.rubidiumclient.core.relay.RubidiumRelaySession) {
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
-        delay(10L)  // 25ms  10ms
+        delay(10L)  // 25ms -> 10ms
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = false)
-        delay(5L)   // Ekstra küçük delay
+        delay(5L)   // Ekstra kÃ¼Ã§Ã¼k delay
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)
     }
 
-    //  ULTRA FAST: 2 packet, max hz
-    private suspend fun injectUltraFast(s: com.nexoraclient.core.relay.NexoraRelaySession) {
+    // ULTRA FAST: 2 packet, max hÄ±z
+    private suspend fun injectUltraFast(s: com.rubidiumclient.core.relay.RubidiumRelaySession) {
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
         delay(5L)
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)
     }
 
-    private suspend fun injectVanilla(s: com.nexoraclient.core.relay.NexoraRelaySession) {
-        // Opsiyonel: sadece 3 packet'e düürüldü
+    private suspend fun injectVanilla(s: com.rubidiumclient.core.relay.RubidiumRelaySession) {
+        // Opsiyonel: sadece 3 packet'e dÃ¼ÅŸÃ¼rÃ¼ldÃ¼
         listOf(0.42f, 0.1f, 0.0f).forEach { dy ->
             PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
             delay(8L)
@@ -82,7 +82,7 @@ class Criticals : BaseModule(
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)
     }
 
-    private suspend fun injectPacket(s: com.nexoraclient.core.relay.NexoraRelaySession) {
+    private suspend fun injectPacket(s: com.rubidiumclient.core.relay.RubidiumRelaySession) {
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.001f, onGround = false)
         delay(2L)
         PacketUtil.sendMoveAtSelf(s, dyOffset = 0.0f, onGround = true)

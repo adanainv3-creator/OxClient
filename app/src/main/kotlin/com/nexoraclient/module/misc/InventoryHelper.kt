@@ -1,10 +1,10 @@
-package com.nexoraclient.module.misc
+package com.rubidiumclient.module.misc
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.utils.InventoryUtil
-import com.nexoraclient.utils.WorldBlockTracker
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.utils.InventoryUtil
+import com.rubidiumclient.utils.WorldBlockTracker
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import java.util.concurrent.ConcurrentHashMap

@@ -1,4 +1,4 @@
-package com.nexoraclient
+package com.rubidiumclient
 
 import android.app.Application
 import android.content.ContentValues
@@ -7,52 +7,50 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import java.io.File
-import com.nexoraclient.auth.AccountManager
-import com.nexoraclient.auth.MicrosoftAuthManager
-import com.nexoraclient.config.Config
-import com.nexoraclient.config.ServerConfig
-import com.nexoraclient.core.relay.Definitions
-import com.nexoraclient.module.ModuleManager
-import com.nexoraclient.module.social.FriendManager
-import com.nexoraclient.module.combat.AutoArmor
-import com.nexoraclient.module.movement.AutoScaffold
-import com.nexoraclient.module.misc.AutoMapArt
-import com.nexoraclient.module.combat.AutoTotem
-import com.nexoraclient.module.combat.Criticals
-import com.nexoraclient.module.misc.InventoryHelper
-import com.nexoraclient.module.combat.CrystalAura
-import com.nexoraclient.module.movement.BypassFly
-import com.nexoraclient.module.combat.KillAura
-import com.nexoraclient.module.combat.KillAuraPro
-import com.nexoraclient.module.combat.PcAura
-import com.nexoraclient.module.misc.ChatSpammer
-import com.nexoraclient.module.misc.ChatAdvertiser
-import com.nexoraclient.module.misc.ComboShortcut
-import com.nexoraclient.module.misc.CommandHelper
-import com.nexoraclient.module.misc.Disconnect
-import com.nexoraclient.module.movement.AntiKnockback
-import com.nexoraclient.module.movement.CreativeFly
-import com.nexoraclient.module.movement.Jetpack
-import com.nexoraclient.module.movement.MotionFly
-import com.nexoraclient.module.movement.OrbitLock
-import com.nexoraclient.module.movement.Speed
-import com.nexoraclient.module.movement.TPAura
-import com.nexoraclient.module.movement.TPAuraPC
-import com.nexoraclient.module.visual.ArrayListModule
-import com.nexoraclient.module.visual.ESP
-import com.nexoraclient.module.visual.FOVChanger
-import com.nexoraclient.module.visual.FullBright
-import com.nexoraclient.module.visual.EnemyESP
-import com.nexoraclient.module.visual.Xray
-import com.nexoraclient.module.combat.HeadTrack
-import com.nexoraclient.utils.WorldBlockTracker
-import com.nexoraclient.utils.OreTracker
+import com.rubidiumclient.auth.AccountManager
+import com.rubidiumclient.auth.MicrosoftAuthManager
+import com.rubidiumclient.config.Config
+import com.rubidiumclient.config.ServerConfig
+import com.rubidiumclient.core.relay.Definitions
+import com.rubidiumclient.module.ModuleManager
+import com.rubidiumclient.module.social.FriendManager
+import com.rubidiumclient.module.combat.AutoArmor
+import com.rubidiumclient.module.movement.AutoScaffold
+import com.rubidiumclient.module.misc.AutoMapArt
+import com.rubidiumclient.module.combat.AutoTotem
+import com.rubidiumclient.module.combat.Criticals
+import com.rubidiumclient.module.misc.InventoryHelper
+import com.rubidiumclient.module.combat.CrystalAura
+import com.rubidiumclient.module.movement.BypassFly
+import com.rubidiumclient.module.combat.KillAura
+import com.rubidiumclient.module.combat.KillAuraPro
+import com.rubidiumclient.module.misc.ChatSpammer
+import com.rubidiumclient.module.misc.ChatAdvertiser
+import com.rubidiumclient.module.misc.ComboShortcut
+import com.rubidiumclient.module.misc.CommandHelper
+import com.rubidiumclient.module.misc.Disconnect
+import com.rubidiumclient.module.movement.AntiKnockback
+import com.rubidiumclient.module.movement.CreativeFly
+import com.rubidiumclient.module.movement.Jetpack
+import com.rubidiumclient.module.movement.MotionFly
+import com.rubidiumclient.module.movement.OrbitLock
+import com.rubidiumclient.module.movement.Speed
+import com.rubidiumclient.module.combat.TPAura
+import com.rubidiumclient.module.visual.ArrayListModule
+import com.rubidiumclient.module.visual.ESP
+import com.rubidiumclient.module.visual.FOVChanger
+import com.rubidiumclient.module.visual.FullBright
+import com.rubidiumclient.module.visual.EnemyESP
+import com.rubidiumclient.module.visual.Xray
+import com.rubidiumclient.module.combat.HeadTrack
+import com.rubidiumclient.utils.WorldBlockTracker
+import com.rubidiumclient.utils.OreTracker
 
-class NexoraClientApp : Application() {
+class RubidiumClientApp : Application() {
 
     companion object {
-        private const val TAG = "NexoraClientApp"
-        lateinit var instance: NexoraClientApp
+        private const val TAG = "RubidiumClientApp"
+        lateinit var instance: RubidiumClientApp
             private set
     }
 
@@ -74,7 +72,7 @@ class NexoraClientApp : Application() {
             } catch (e: Exception) {
                 Log.e(TAG, "Definitions load error: ${e.message}", e)
             }
-        }, "NexoraDefinitionsLoader").apply {
+        }, "RubidiumDefinitionsLoader").apply {
             isDaemon = true
             start()
         }
@@ -121,7 +119,6 @@ class NexoraClientApp : Application() {
         ModuleManager.registerAll(
             KillAura(),
             KillAuraPro(),
-            PcAura(),
             CrystalAura(),
             AutoTotem(),
             Criticals(),
@@ -141,7 +138,6 @@ class NexoraClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
-            TPAuraPC(),
             AutoScaffold(), 
             AutoMapArt(),
             BypassFly(),

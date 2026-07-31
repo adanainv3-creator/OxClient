@@ -1,8 +1,8 @@
-package com.nexoraclient.module.social
+package com.rubidiumclient.module.social
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.nexoraclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.proxy.EntityTracker
 
 /**
  * Arkadaş listesi yönetimi.

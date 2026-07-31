@@ -1,11 +1,11 @@
-package com.nexoraclient.module.combat
+package com.rubidiumclient.module.combat
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.utils.PacketUtil
-import com.nexoraclient.utils.RotationUtil
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.utils.PacketUtil
+import com.rubidiumclient.utils.RotationUtil
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 
 class HeadTrack : BaseModule(

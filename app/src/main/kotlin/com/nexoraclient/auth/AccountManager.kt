@@ -1,4 +1,4 @@
-package com.nexoraclient.auth
+package com.rubidiumclient.auth
 
 import android.content.Context
 import androidx.datastore.core.DataStore

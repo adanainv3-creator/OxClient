@@ -1,10 +1,10 @@
 
-package com.nexoraclient.module.movement
+package com.rubidiumclient.module.movement
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.core.relay.NexoraRelaySession
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.module.*
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.module.*
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
@@ -31,7 +31,7 @@ class MotionFly : BaseModule(
     @Volatile private var lastMotionTime = 0L
     @Volatile private var jitterState    = false
     @Volatile private var canFly         = false
-    @Volatile private var lastSession    : NexoraRelaySession? = null
+    @Volatile private var lastSession    : RubidiumRelaySession? = null
 
     private val flyPacket = UpdateAbilitiesPacket().apply {
         playerPermission  = PlayerPermission.OPERATOR
@@ -140,7 +140,7 @@ class MotionFly : BaseModule(
         lastMotionTime = System.currentTimeMillis()
     }
 
-    private fun applyFlyAbilities(enabled: Boolean, session: NexoraRelaySession) {
+    private fun applyFlyAbilities(enabled: Boolean, session: RubidiumRelaySession) {
         if (canFly == enabled) return
         val id = EntityTracker.selfUniqueId
         flyPacket.uniqueEntityId = id

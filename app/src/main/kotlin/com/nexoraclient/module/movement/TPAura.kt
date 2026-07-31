@@ -1,12 +1,12 @@
-package com.nexoraclient.module.movement
+package com.rubidiumclient.module.combat
 
-import com.nexoraclient.core.proxy.EntityTracker
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
-import com.nexoraclient.module.*
-import com.nexoraclient.module.social.isFriendEntity
-import com.nexoraclient.utils.MathUtil
-import com.nexoraclient.utils.RotationUtil
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.module.social.isFriendEntity
+import com.rubidiumclient.utils.MathUtil
+import com.rubidiumclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket

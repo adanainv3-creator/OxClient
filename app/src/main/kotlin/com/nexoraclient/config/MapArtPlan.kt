@@ -1,7 +1,7 @@
-package com.nexoraclient.config
+package com.rubidiumclient.config
 
 import android.graphics.Bitmap
-import com.nexoraclient.utils.BlockPalette
+import com.rubidiumclient.utils.BlockPalette
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

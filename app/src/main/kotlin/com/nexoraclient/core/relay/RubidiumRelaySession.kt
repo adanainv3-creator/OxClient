@@ -1,8 +1,8 @@
-package com.nexoraclient.core.relay
+package com.rubidiumclient.core.relay
 
-import com.nexoraclient.core.relay.listener.NexoraPacketListener
-import com.nexoraclient.events.PacketEvent
-import com.nexoraclient.events.PacketEventBus
+import com.rubidiumclient.core.relay.listener.RubidiumPacketListener
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
 import io.netty.buffer.Unpooled
 import io.netty.bootstrap.Bootstrap
 import io.netty.channel.Channel
@@ -27,15 +27,15 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
-class NexoraRelaySession internal constructor(
+class RubidiumRelaySession internal constructor(
     peer: BedrockPeer,
     subClientId: Int,
     val remoteHost: String,
     val remotePort: Int,
-    internal val relay: NexoraRelay
+    internal val relay: RubidiumRelay
 ) {
     companion object {
-        private const val TAG       = "NexoraRelaySession"
+        private const val TAG       = "RubidiumRelaySession"
         private const val MAX_QUEUE = 1024
 
         private fun minecraftUnconnectedMagic() = Unpooled.wrappedBuffer(
@@ -59,10 +59,10 @@ class NexoraRelaySession internal constructor(
     @Volatile var serverSession: ClientSession? = null
         internal set
 
-    @Volatile var activeCodec: BedrockCodec = NexoraRelay.RELAY_CODEC
+    @Volatile var activeCodec: BedrockCodec = RubidiumRelay.RELAY_CODEC
         internal set
 
-    val listeners = CopyOnWriteArrayList<NexoraPacketListener>()
+    val listeners = CopyOnWriteArrayList<RubidiumPacketListener>()
 
     private val closed           = AtomicBoolean(false)
     private val serverConnecting = AtomicBoolean(false)
@@ -97,7 +97,7 @@ class NexoraRelaySession internal constructor(
             .handler(object : BedrockChannelInitializer<ClientSession>() {
 
                 override fun createSession0(peer: BedrockPeer, subClientId: Int): ClientSession {
-                    return this@NexoraRelaySession.ClientSession(peer, subClientId)
+                    return this@RubidiumRelaySession.ClientSession(peer, subClientId)
                 }
 
                 override fun initSession(session: ClientSession) {
@@ -114,7 +114,7 @@ class NexoraRelaySession internal constructor(
                     serverConnected.set(true)
 
                     listeners.forEach { l ->
-                        try { l.onSessionStart(this@NexoraRelaySession) }
+                        try { l.onSessionStart(this@RubidiumRelaySession) }
                         catch (e: Exception) { }
                     }
 
@@ -252,8 +252,8 @@ class NexoraRelaySession internal constructor(
                         if (closed.compareAndSet(false, true)) {
                             pendingQueue.clear()
                             closeServerConnection()
-                            relay.removeSession(this@NexoraRelaySession)
-                            listeners.forEach { try { it.onSessionEnd(this@NexoraRelaySession) } catch (_: Exception) {} }
+                            relay.removeSession(this@RubidiumRelaySession)
+                            listeners.forEach { try { it.onSessionEnd(this@RubidiumRelaySession) } catch (_: Exception) {} }
                             listeners.clear()
                         }
                         ctx.fireChannelInactive()
