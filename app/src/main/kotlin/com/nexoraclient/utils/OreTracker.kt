@@ -11,6 +11,23 @@ import java.util.concurrent.ConcurrentHashMap
 
 object OreTracker : PacketEventBus.PacketListener {
 
+    // KRİTİK FIX (Xray'in hiç çalışmamasının asıl sebebi): WorldBlockTracker'daki
+    // ile birebir aynı savunma. Önceden sadece dışarıdan çağrılması gereken bir
+    // init() fonksiyonu vardı — bunu çağıran hiçbir yer olmadığı için OreTracker
+    // PacketEventBus'a HİÇ kaydolmuyordu, onPacket() asla tetiklenmiyordu ve
+    // trackedOres sonsuza dek boş kalıyordu (deepslate/normal fark etmeden hiçbir
+    // cevher bulunamıyordu). Artık referans alınır alınmaz kendini kaydediyor;
+    // dışarıdan init() çağırmak da hâlâ güvenli (register() idempotent).
+    init {
+        register()
+    }
+
+    fun init() = register()
+
+    private fun register() {
+        PacketEventBus.register(this)
+    }
+
     enum class TrackedOreType(val displayName: String, val colorArgb: Int) {
         DIAMOND       ("Diamond",        0xFF4FD8D0.toInt()),
         ANCIENT_DEBRIS("Ancient Debris", 0xFF9C6B4F.toInt()),
@@ -113,8 +130,6 @@ object OreTracker : PacketEventBus.PacketListener {
     fun countByType(): Map<TrackedOreType, Int> =
         trackedOres.values.groupingBy { it.type }.eachCount()
 
-    fun init() { PacketEventBus.register(this) }
-
     override fun onPacket(event: PacketEvent) {
         if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
         when (val p = event.packet) {
@@ -172,18 +187,23 @@ object OreTracker : PacketEventBus.PacketListener {
 
     fun resolveRuntimeId(runtimeId: Int): TrackedOreType? = paletteMap[runtimeId]
 
+    // NOT: "deepslate_diamond_ore" gibi deepslate varyantları zaten "diamond_ore"
+    // alt string'ini içerdiği için aşağıdaki genel kontroller bunları da yakalar.
+    // Yine de netlik ve gelecekte block ID formatı değişirse (ör. prefix/suffix
+    // sırası ters dönerse) kırılmaması için deepslate varyantlarını ayrıca ve
+    // açıkça kontrol ediyoruz.
     fun resolveOreName(name: String): TrackedOreType? {
         val n = name.lowercase()
         return when {
-            n.contains("ancient_debris")   -> TrackedOreType.ANCIENT_DEBRIS
-            n.contains("diamond_ore")      -> TrackedOreType.DIAMOND
-            n.contains("emerald_ore")      -> TrackedOreType.EMERALD
-            n.contains("gold_ore")         -> TrackedOreType.GOLD
-            n.contains("iron_ore")         -> TrackedOreType.IRON
-            n.contains("redstone_ore")     -> TrackedOreType.REDSTONE
-            n.contains("lapis_ore")        -> TrackedOreType.LAPIS
-            n.contains("coal_ore")         -> TrackedOreType.COAL
-            n.contains("copper_ore")       -> TrackedOreType.COPPER
+            n.contains("ancient_debris")                              -> TrackedOreType.ANCIENT_DEBRIS
+            n.contains("diamond_ore") || n.contains("deepslate_diamond")   -> TrackedOreType.DIAMOND
+            n.contains("emerald_ore") || n.contains("deepslate_emerald")   -> TrackedOreType.EMERALD
+            n.contains("gold_ore")    || n.contains("deepslate_gold")      -> TrackedOreType.GOLD
+            n.contains("iron_ore")    || n.contains("deepslate_iron")      -> TrackedOreType.IRON
+            n.contains("redstone_ore")|| n.contains("deepslate_redstone")  -> TrackedOreType.REDSTONE
+            n.contains("lapis_ore")   || n.contains("deepslate_lapis")     -> TrackedOreType.LAPIS
+            n.contains("coal_ore")    || n.contains("deepslate_coal")      -> TrackedOreType.COAL
+            n.contains("copper_ore")  || n.contains("deepslate_copper")    -> TrackedOreType.COPPER
             n.contains("quartz_ore")       -> TrackedOreType.QUARTZ
             n.contains("amethyst_cluster") -> TrackedOreType.AMETHYST
             n.contains("budding_amethyst") -> TrackedOreType.AMETHYST

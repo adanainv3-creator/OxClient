@@ -33,7 +33,7 @@ import com.rubidiumclient.module.movement.AntiKnockback
 import com.rubidiumclient.module.movement.CreativeFly
 import com.rubidiumclient.module.movement.Jetpack
 import com.rubidiumclient.module.movement.MotionFly
-import com.rubidiumclient.module.movement.OrbitLock
+import com.rubidiumclient.module.combat.AimBot
 import com.rubidiumclient.module.movement.Speed
 import com.rubidiumclient.module.combat.TPAura
 import com.rubidiumclient.module.visual.ArrayListModule
@@ -127,7 +127,7 @@ class RubidiumClientApp : Application() {
             Speed(),
             Jetpack(),
             TPAura(),
-            OrbitLock(),
+            AimBot(),
             AntiKnockback(),
             FullBright(),
             ESP(),

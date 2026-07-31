@@ -21,10 +21,10 @@ class ESPOverlayView(context: Context) : View(context) {
     // 4 property her onDraw()'da ModuleManager.byName() ile linear search +
     // capturing lambda allocate ediyordu — 60-120hz'de gereksiz CPU/GC yükü.
     // Artık sadece bir kere resolve edilip cache'leniyor.
-    private val espModule: ESP? by lazy { ModuleManager.byName("ESP") as? ESP }
+    private val espModule: ESP? by lazy { ModuleManager.byName("BaseFinderESP") as? ESP }
     private val enemyEspModule: EnemyESP? by lazy { ModuleManager.byName("EnemyESP") as? EnemyESP }
     private val xrayModule: Xray? by lazy { ModuleManager.byName("Xray") as? Xray }
-    private val arrayListModule: ArrayListModule? by lazy { ModuleManager.byName("Mod List") as? ArrayListModule }
+    private val arrayListModule: ArrayListModule? by lazy { ModuleManager.byName("ArrayList") as? ArrayListModule }
     private val autoMapArtModule: AutoMapArt? by lazy { ModuleManager.byName("AutoMapArt") as? AutoMapArt }
 
     override fun onDraw(canvas: Canvas) {

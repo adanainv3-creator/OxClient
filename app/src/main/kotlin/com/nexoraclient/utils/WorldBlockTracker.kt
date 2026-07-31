@@ -156,9 +156,21 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleSubChunkPacket(p: SubChunkPacket) {
+        // KRİTİK FIX: sub.position mutlak section koordinatı DEĞİL — paketin
+        // origin'ine (isteğin atıldığı merkez konum) göre RELATİF bir offset
+        // (dx,dy,dz). Bunu doğrudan mutlak kabul edip storeSection'a vermek,
+        // bloğu tamamen yanlış bir section key'i altında saklıyordu (origin'e
+        // yakın küçük delta değerleri altında — yani pratikte çoğunlukla
+        // self'in kendi konumuna yakın bir yerde). Sonucunda hedefin GERÇEK
+        // yüksekliği sorgulandığında ya hiç veri bulunamıyordu (aynı seviye:
+        // delta farklı bir key'e denk geliyordu) ya da tesadüfen self'in kendi
+        // seviyesindeki veriyle eşleşiyordu (hedef bir seviye fark edince) —
+        // CrystalAura'nın "hedefin seviyesi yerine benim seviyeme kristal
+        // koyuyor" bulgusunun asıl kök nedeni buydu.
+        val origin = resolveSubChunkOrigin(p)
         for (sub in p.subChunks) {
             try {
-                val pos = sub.position ?: continue
+                val rel = sub.position ?: continue
                 val buf = sub.data ?: continue
                 if (!buf.isReadable) continue
 
@@ -170,7 +182,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                     continue
                 }
 
-                storeSection(pos.x, pos.y, pos.z, blocks)
+                storeSection(origin.x + rel.x, origin.y + rel.y, origin.z + rel.z, blocks)
 
                 if (!loggedFirstSuccess) {
                     loggedFirstSuccess = true
@@ -178,6 +190,19 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             } catch (e: Exception) {
             }
         }
+    }
+
+    // Kütüphane sürümüne göre alan adı değişebildiğinden resolveSubChunkCount
+    // ile aynı savunmacı reflection yaklaşımı: birkaç olası isim deneniyor.
+    private fun resolveSubChunkOrigin(p: SubChunkPacket): org.cloudburstmc.math.vector.Vector3i {
+        for (name in listOf("centerPosition", "position", "origin", "basePosition")) {
+            try {
+                val m = p.javaClass.getMethod(name)
+                val v = m.invoke(p)
+                if (v is org.cloudburstmc.math.vector.Vector3i) return v
+            } catch (_: Exception) {}
+        }
+        return org.cloudburstmc.math.vector.Vector3i.ZERO
     }
 
     private fun handleLevelChunkPacket(p: LevelChunkPacket) {
