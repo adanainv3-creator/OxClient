@@ -616,7 +616,7 @@ private fun DashboardTab(
     onRequestAccountLogin : () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(title = "Rubidium Client V1.1", subtitle = "Made by Oxygen8315 && KillJoy739860") {
+        ScreenHeader(title = "Rubidium Client V1.2", subtitle = "Made by Oxygen8315 && KillJoy739860") {
             val context = LocalContext.current
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {

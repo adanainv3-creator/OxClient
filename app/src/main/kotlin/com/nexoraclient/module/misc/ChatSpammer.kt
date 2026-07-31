@@ -29,7 +29,7 @@ class ChatSpammer : BaseModule(
     description = "Chat prefix + totem pop sayacı"
 ) {
     companion object {
-        private const val VERSION      = "v1.1"
+        private const val VERSION      = "v1.2"
         private const val TAG_LINE     = "Rubidium Client $VERSION"
         private const val PVP_TAIL     = "by Rubidium Client | Best Mobile Client"
         private const val QUEUE_DELAY_MS = 600L
@@ -58,8 +58,8 @@ class ChatSpammer : BaseModule(
     // ---------- Modül seçenekleri ----------
     private val shortcut = bool("Shortcut", false)        // (Şu an kullanılmıyor, ileride kısayol için)
     private val totemCounter = bool("TotemCounter", true) // Totem pop sayacını aç/kapa
-    private val pcCounterMode = bool("PC Counter Mode", false)   // Açıkken: offhand-polling tabanlı algılamaya geç, diğer (event tabanlı) totem yolları devre dışı kalır
-    private val pcCounterSendChat = bool("PC Counter Send Chat", false) // Referans koddaki SendChat karşılığı — varsayılan kapalı
+    private val pcCounterMode = bool("Best Counter Mode", false)   // Açıkken: offhand-polling tabanlı algılamaya geç, diğer (event tabanlı) totem yolları devre dışı kalır
+    private val pcCounterSendChat = bool("Best Counter Send Chat", false) // Referans koddaki SendChat karşılığı — varsayılan kapalı
 
     // ---------- Durum tabloları ----------
     private val popCounts = ConcurrentHashMap<String, Int>()
@@ -354,7 +354,7 @@ class ChatSpammer : BaseModule(
                     pcPopCounts[name] = count
 
                     if (pcCounterSendChat.value) {
-                        enqueue("> @here @$name popped $count totem(s) [PC] | ${randomJunk()}")
+                        enqueue("> @here @$name popped $count totem(s) | ${randomJunk()}")
                     }
                 }
             }
