@@ -9,7 +9,6 @@ import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventoryContentS
 import org.cloudburstmc.protocol.bedrock.codec.v729.serializer.InventorySlotSerializer_v729
 import org.cloudburstmc.protocol.bedrock.codec.v748.serializer.InventoryContentSerializer_v748
 import org.cloudburstmc.protocol.bedrock.codec.v748.serializer.InventorySlotSerializer_v748
-import org.cloudburstmc.protocol.bedrock.codec.v975.serializer.InventoryContentSerializer_v975
 import org.cloudburstmc.protocol.bedrock.codec.v975.serializer.InventorySlotSerializer_v975
 import org.cloudburstmc.protocol.bedrock.data.EncodingSettings
 import org.cloudburstmc.protocol.bedrock.data.PacketCompressionAlgorithm
@@ -31,7 +30,10 @@ class AutoCodecListener(private val relay: RubidiumRelay? = null) : RubidiumPack
         private fun patchCodec(codec: BedrockCodec): BedrockCodec {
             val v = codec.protocolVersion
             val (contentSerializer, slotSerializer) = when {
-                v >= 975  -> InventoryContentSerializer_v975.INSTANCE  to InventorySlotSerializer_v975.INSTANCE
+                // v975'te sadece InventorySlot formatı değişti (storageItem alanı
+                // eklendi) — InventoryContent formatı hâlâ v748'le aynı, o yüzden
+                // content serializer burada da v748'den geliyor.
+                v >= 975  -> InventoryContentSerializer_v748.INSTANCE  to InventorySlotSerializer_v975.INSTANCE
                 v >= 748  -> InventoryContentSerializer_v748.INSTANCE  to InventorySlotSerializer_v748.INSTANCE
                 v > 729   -> InventoryContentSerializer_v729.INSTANCE  to InventorySlotSerializer_v729.INSTANCE
                 else      -> return codec
