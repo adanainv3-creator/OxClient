@@ -131,6 +131,7 @@ class RubidiumClientApp : Application() {
             Jetpack(),
             ElytraFly(),
             TPAura(),
+            AutoMapArt(),
             AimBot(),
             AntiKnockback(),
             FullBright(),
