@@ -146,6 +146,7 @@ class RubidiumClientApp : Application() {
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect(),
+            BypassFly(),
             ComboShortcut(1),
             ComboShortcut(2),
             CommandHelper(),
