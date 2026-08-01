@@ -22,7 +22,7 @@ object ChunkParser {
         val buf = original.duplicate()
 
         return try {
-            val count = subChunkCount ?: reflectSubChunkCount(pkt) ?: run {
+            val count = subChunkCount ?: resolveSubChunkCount(pkt) ?: run {
                 -1
             }
 
@@ -46,7 +46,17 @@ object ChunkParser {
         } catch (_: Exception) { null }
     }
 
-    private fun reflectSubChunkCount(pkt: LevelChunkPacket): Int? {
+    // FIX (Xray'in hiçbir sey bulamamasinin asil sebebi): burada sadece reflection
+    // method isimleri deneniyordu (getSubChunkCount/getSubChunkLimit/getSectionCount),
+    // gercek LevelChunkPacket sinifinda bu isimler yok — WorldBlockTracker'in
+    // resolveSubChunkCount'unda oldugu gibi asil calisan kaynak direkt
+    // pkt.subChunksLength property'si. Bu deneme hic yapilmadigi icin bu fonksiyon
+    // her zaman null donuyor ve extractOreBlocks/extractBlockEntities her paket
+    // icin bos liste ile hemen cikiyordu.
+    private fun resolveSubChunkCount(pkt: LevelChunkPacket): Int? {
+        val direct = try { pkt.subChunksLength } catch (_: Throwable) { 0 }
+        if (direct in 1..MAX_SUBCHUNKS) return direct
+
         for (methodName in listOf("getSubChunkCount", "getSubChunkLimit", "getSectionCount")) {
             try {
                 val m = pkt.javaClass.getMethod(methodName)
@@ -220,7 +230,7 @@ object ChunkParser {
 
         val chunkX = pkt.chunkX
         val chunkZ = pkt.chunkZ
-        val count = subChunkCount ?: reflectSubChunkCount(pkt) ?: return emptyList()
+        val count = subChunkCount ?: resolveSubChunkCount(pkt) ?: return emptyList()
 
         val result = mutableListOf<OreHit>()
         return try {
@@ -297,10 +307,13 @@ object ChunkParser {
             if (paletteIndex >= palette.size) continue
             if (!paletteIsTarget[paletteIndex]) continue
 
-            // idx -> yerel (lx,ly,lz): XZY sırası (x en anlamlı, sonra z, sonra y)
-            val lx = idx shr 8
+            // idx -> yerel (lx,ly,lz): WorldBlockTracker.getBlockIdentifier'daki
+            // (ly shl 8) or (lz shl 4) or lx kodlamasinin tersi — Y en anlamlı bit,
+            // sonra Z, sonra X (eskiden X en anlamlı bit sanilip tersten okunuyordu,
+            // bulunan her cevherin konumu tamamen yanlis hesaplaniyordu).
+            val ly = idx shr 8
             val lz = (idx shr 4) and 0xF
-            val ly = idx and 0xF
+            val lx = idx and 0xF
 
             out.add(OreHit(chunkX * 16 + lx, baseY + ly, chunkZ * 16 + lz, palette[paletteIndex]))
         }
