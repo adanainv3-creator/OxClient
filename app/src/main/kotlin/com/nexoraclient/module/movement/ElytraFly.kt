@@ -13,6 +13,8 @@ import org.cloudburstmc.protocol.bedrock.data.entity.EntityFlag
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
+import org.cloudburstmc.protocol.bedrock.packet.InventoryContentPacket
+import org.cloudburstmc.protocol.bedrock.packet.InventorySlotPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerActionPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import org.cloudburstmc.protocol.bedrock.packet.SetEntityDataPacket
@@ -41,11 +43,13 @@ class ElytraFly : BaseModule(
 
     @Volatile private var glideStarted = false
     @Volatile private var durabilityTickJob: kotlinx.coroutines.Job? = null
+    @Volatile private var chestplateItem: ItemData? = null
     private var lastSwapMs = 0L
 
     override fun onEnable() {
         super.onEnable()
         glideStarted = false
+        chestplateItem = null
         startGlide()
         durabilityTickJob = launchTickLoop(DURABILITY_CHECK_MS) { checkElytraDurability() }
     }
@@ -59,39 +63,55 @@ class ElytraFly : BaseModule(
 
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
-        val pkt = event.packet
-        if (pkt !is PlayerAuthInputPacket) return
-        if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
 
-        if (requireElytra.value && !hasElytraEquipped()) {
-            if (glideStarted) stopGlide()
-            return
+        when (val pkt = event.packet) {
+            is InventoryContentPacket -> {
+                if (pkt.containerId == ContainerId.ARMOR) {
+                    val item = pkt.contents.getOrNull(InventoryUtil.ArmorSlotType.CHESTPLATE.slotIndex)
+                    chestplateItem = item?.takeUnless { InventoryUtil.isEmpty(it) }
+                }
+            }
+            is InventorySlotPacket -> {
+                if (pkt.containerId == ContainerId.ARMOR &&
+                    pkt.slot == InventoryUtil.ArmorSlotType.CHESTPLATE.slotIndex
+                ) {
+                    chestplateItem = pkt.item.takeUnless { InventoryUtil.isEmpty(it) }
+                }
+            }
+            is PlayerAuthInputPacket -> {
+                if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
+
+                if (requireElytra.value && !hasElytraEquipped()) {
+                    if (glideStarted) stopGlide()
+                    return
+                }
+                if (!glideStarted) startGlide()
+
+                val boosting = pkt.inputData.contains(PlayerAuthInputData.JUMPING) ||
+                               pkt.inputData.contains(PlayerAuthInputData.WANT_UP)
+
+                if (requireJump.value && !boosting) return
+
+                val pitch = Math.toRadians(pkt.rotation.x.toDouble()).toFloat()
+                val yaw   = Math.toRadians(pkt.rotation.y.toDouble()).toFloat()
+                val cosPitch = cos(pitch)
+
+                val dirX = -sin(yaw) * cosPitch
+                val dirZ =  cos(yaw) * cosPitch
+                // Dikey bileseni pitch'e tam bagimli birakmiyoruz — asagi bakarken
+                // yere kazik gibi dalmasin diye sabit hafif bir yukari bilesen var.
+                val liftY = -sin(pitch) * 0.3f + 0.25f
+
+                event.session.clientBound(SetEntityMotionPacket().apply {
+                    runtimeEntityId = EntityTracker.selfRuntimeId
+                    motion = Vector3f.from(
+                        dirX * glideSpeed.value,
+                        liftY * thrustSpeed.value,
+                        dirZ * glideSpeed.value
+                    )
+                })
+            }
         }
-        if (!glideStarted) startGlide()
-
-        val boosting = pkt.inputData.contains(PlayerAuthInputData.JUMPING) ||
-                       pkt.inputData.contains(PlayerAuthInputData.WANT_UP)
-
-        if (requireJump.value && !boosting) return
-
-        val pitch = Math.toRadians(pkt.rotation.x.toDouble()).toFloat()
-        val yaw   = Math.toRadians(pkt.rotation.y.toDouble()).toFloat()
-        val cosPitch = cos(pitch)
-
-        val dirX = -sin(yaw) * cosPitch
-        val dirZ =  cos(yaw) * cosPitch
-        // Dikey bileseni pitch'e tam bagimli birakmiyoruz — asagi bakarken
-        // yere kazik gibi dalmasin diye sabit hafif bir yukari bilesen var.
-        val liftY = -sin(pitch) * 0.3f + 0.25f
-
-        event.session.clientBound(SetEntityMotionPacket().apply {
-            runtimeEntityId = EntityTracker.selfRuntimeId
-            motion = Vector3f.from(
-                dirX * glideSpeed.value,
-                liftY * thrustSpeed.value,
-                dirZ * glideSpeed.value
-            )
-        })
     }
 
     private fun startGlide() {
@@ -121,9 +141,14 @@ class ElytraFly : BaseModule(
         })
     }
 
-    // EntityTracker artık ARMOR container'ı (helmet/chestplate/leggings/boots)
-    // izliyor — chestplate slotunda gerçekten elytra var mı diye bakıyoruz.
-    private fun hasElytraEquipped(): Boolean = EntityTracker.hasElytraEquipped()
+    // Zirh EntityTracker'da tutulmuyor — AutoArmor.kt/AutoTotem.kt'deki gibi,
+    // ARMOR container'indan gelen paketleri dinleyerek chestplateItem'i
+    // kendimiz guncel tutuyoruz; chestplate slotunda gercekten elytra var mi
+    // diye ona bakiyoruz.
+    private fun hasElytraEquipped(): Boolean {
+        val item = chestplateItem ?: return false
+        return InventoryUtil.resolveIdentifier(item) == "minecraft:elytra"
+    }
 
     // Üstteki elytranın DAYANIKLILIĞI (can/durability — oyuncunun kendi canı
     // değil, item'in kalan kullanım ömrü) eşiğin altına düşünce, envanterdeki
@@ -132,7 +157,7 @@ class ElytraFly : BaseModule(
     // durability kullanılıyor.
     private fun checkElytraDurability() {
         val session = PacketEventBus.currentSession ?: return
-        val chest = EntityTracker.getArmorItem(EntityTracker.ARMOR_CHEST_SLOT) ?: return
+        val chest = chestplateItem ?: return
         val chestId = InventoryUtil.resolveIdentifier(chest) ?: return
         if (chestId != "minecraft:elytra") return
 
@@ -167,7 +192,7 @@ class ElytraFly : BaseModule(
             sourceItem        = bestItem,
             destContainer     = ContainerSlotType.ARMOR,
             destContainerId   = ContainerId.ARMOR,
-            destSlot          = EntityTracker.ARMOR_CHEST_SLOT,
+            destSlot          = InventoryUtil.ArmorSlotType.CHESTPLATE.slotIndex,
             destItem          = chest
         )
     }
