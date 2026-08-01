@@ -28,10 +28,13 @@ import com.rubidiumclient.module.misc.ChatSpammer
 import com.rubidiumclient.module.misc.ChatAdvertiser
 import com.rubidiumclient.module.misc.ComboShortcut
 import com.rubidiumclient.module.misc.CommandHelper
+import com.rubidiumclient.module.misc.AutoPositionGoing
+import com.rubidiumclient.module.misc.AutoBaseFinder
 import com.rubidiumclient.module.misc.Disconnect
 import com.rubidiumclient.module.movement.AntiKnockback
 import com.rubidiumclient.module.movement.CreativeFly
 import com.rubidiumclient.module.movement.Jetpack
+import com.rubidiumclient.module.movement.ElytraFly
 import com.rubidiumclient.module.movement.MotionFly
 import com.rubidiumclient.module.combat.AimBot
 import com.rubidiumclient.module.movement.Speed
@@ -126,6 +129,7 @@ class RubidiumClientApp : Application() {
             CreativeFly(),
             Speed(),
             Jetpack(),
+            ElytraFly(),
             TPAura(),
             AimBot(),
             AntiKnockback(),
@@ -143,7 +147,9 @@ class RubidiumClientApp : Application() {
             Disconnect(),
             ComboShortcut(1),
             ComboShortcut(2),
-            CommandHelper()
+            CommandHelper(),
+            AutoPositionGoing(),
+            AutoBaseFinder()
         )
     }
 }
