@@ -2,6 +2,7 @@ package com.rubidiumclient.module.misc
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import com.rubidiumclient.config.MapArtPlan
 import com.rubidiumclient.core.proxy.EntityTracker
 import com.rubidiumclient.core.relay.RubidiumRelaySession
@@ -11,7 +12,9 @@ import com.rubidiumclient.module.BaseModule
 import com.rubidiumclient.module.ModuleCategory
 import com.rubidiumclient.utils.BlockPalette
 import com.rubidiumclient.utils.BlockTracker
+import com.rubidiumclient.utils.GameFov
 import com.rubidiumclient.utils.InventoryUtil
+import com.rubidiumclient.utils.MathUtil
 import com.rubidiumclient.utils.WorldBlockTracker
 import kotlinx.coroutines.Job
 import org.cloudburstmc.math.vector.Vector3f
@@ -48,6 +51,12 @@ class AutoMapArt : BaseModule(
 
         private const val SCHEMATIC_MAX_PX  = 240f
         private const val SCHEMATIC_MARGIN  = 28f
+        private const val ISO_CELL_MIN = 3f
+        private const val ISO_CELL_MAX = 18f
+        private const val GHOST_ALPHA        = 130
+        private const val GHOST_TARGET_ALPHA = 235
+        private const val BOUNDARY_POST_HEIGHT = 4f
+        private const val BOUNDARY_COLOR = 0xFF00E5FF.toInt()
     }
 
     private val schematicFillPaint = Paint().apply { isAntiAlias = false; style = Paint.Style.FILL }
@@ -67,6 +76,19 @@ class AutoMapArt : BaseModule(
         isAntiAlias = true
         setShadowLayer(3f, 0f, 0f, 0xFF000000.toInt())
     }
+    private val schematicBarBgPaint = Paint().apply {
+        style = Paint.Style.FILL
+        color = 0x55FFFFFF
+        isAntiAlias = false
+    }
+    private val schematicBarFillPaint = Paint().apply {
+        style = Paint.Style.FILL
+        color = 0xFF4CAF50.toInt()
+        isAntiAlias = false
+    }
+    private val worldGhostStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val worldGhostFillPaint   = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val boundaryPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
 
     private val skipMissing       = bool("Skip Missing Block", true)
     val autoScanInventory         = bool("Auto Scan Inventory", false)
@@ -77,6 +99,8 @@ class AutoMapArt : BaseModule(
     private val autoCollectMaterials = bool("Auto Collect Materials", true)
     private val chestSearchRange  = int("Chest Search Range (blocks)", 24, 4, 64)
     private val showSchematic     = bool("Show Schematic", true)
+    private val worldOverlay         = bool ("World Overlay",          true)
+    private val worldRenderDistance  = float("World Render Distance",  48f, 8f, 128f)
 
     private var tickJob: Job? = null
 
@@ -229,7 +253,7 @@ class AutoMapArt : BaseModule(
         for (slot in 0..35) {
             val item = EntityTracker.getInventoryItem(slot) ?: continue
             if (item.count <= 0) continue
-            val id = runCatching { item.definition?.identifier }.getOrNull() ?: continue
+            val id = InventoryUtil.resolveIdentifier(item) ?: continue
             if (id in allPaletteIds) found.add(id)
         }
         return found
@@ -492,7 +516,7 @@ class AutoMapArt : BaseModule(
 
         val slotIndex = contents.indexOfFirst { item ->
             !InventoryUtil.isEmpty(item) &&
-                runCatching { item.definition?.identifier }.getOrNull() == type
+                InventoryUtil.resolveIdentifier(item) == type
         }
 
         if (slotIndex < 0) {
@@ -596,7 +620,7 @@ class AutoMapArt : BaseModule(
         for (slot in InventoryUtil.INV_START..InventoryUtil.INV_END) {
             val item = EntityTracker.getInventoryItem(slot) ?: continue
             if (InventoryUtil.isEmpty(item)) continue
-            val id = runCatching { item.definition?.identifier }.getOrNull() ?: continue
+            val id = InventoryUtil.resolveIdentifier(item) ?: continue
             if (id == identifier) return slot
         }
         return null
@@ -606,7 +630,7 @@ class AutoMapArt : BaseModule(
         for (slot in InventoryUtil.HOTBAR_START..InventoryUtil.HOTBAR_END) {
             val item = EntityTracker.getInventoryItem(slot)
             if (item == null || InventoryUtil.isEmpty(item)) return slot
-            val id = runCatching { item.definition?.identifier }.getOrNull()
+            val id = InventoryUtil.resolveIdentifier(item)
             if (id == identifier) return slot
         }
         for (slot in InventoryUtil.INV_START..InventoryUtil.INV_END) {
@@ -644,7 +668,7 @@ class AutoMapArt : BaseModule(
         for (slot in 0..8) {
             val item = EntityTracker.getInventoryItem(slot) ?: continue
             if (item.count <= 0) continue
-            val id = runCatching { item.definition?.identifier }.getOrNull() ?: continue
+            val id = InventoryUtil.resolveIdentifier(item) ?: continue
             if (id == identifier) return slot
         }
         return null
@@ -700,52 +724,336 @@ class AutoMapArt : BaseModule(
     }
 
     fun render(canvas: Canvas, width: Int, height: Int) {
+        renderWorldBoundary(canvas, width, height)
+        renderWorldGhosts(canvas, width, height)
+        renderCornerPanel(canvas, width, height)
+    }
+
+    // World Render Distance disinda kalindiginda bile semanin nerede oldugunu
+    // uzaktan gorebilmek icin — insaatin dis cercevesini + kose isaret
+    // direklerini dunya uzayinda cizer. MathUtil.worldToScreen ile ayni
+    // projeksiyon, mesafe siniri yok (kose gorunur oldugu surece cizilir).
+    private fun renderWorldBoundary(canvas: Canvas, screenW: Int, screenH: Int) {
+        if (!worldOverlay.value) return
+        if (!originSet) return
+        val grid = MapArtPlan.grid.value ?: return
+        val size = grid.size
+        if (size <= 0) return
+
+        val selfX = EntityTracker.selfX
+        val selfY = EntityTracker.selfY
+        val selfZ = EntityTracker.selfZ
+        val yaw   = EntityTracker.selfYaw
+        val pitch = EntityTracker.selfPitch
+        val fovValue = GameFov.current
+
+        val x0 = originX.toFloat()
+        val x1 = (originX + size).toFloat()
+        val z0 = originZ.toFloat()
+        val z1 = (originZ + size).toFloat()
+        val yBase = originY.toFloat()
+        val yPost = yBase + BOUNDARY_POST_HEIGHT
+
+        val groundCorners = arrayOf(
+            floatArrayOf(x0, yBase, z0),
+            floatArrayOf(x1, yBase, z0),
+            floatArrayOf(x1, yBase, z1),
+            floatArrayOf(x0, yBase, z1)
+        )
+        val postTops = arrayOf(
+            floatArrayOf(x0, yPost, z0),
+            floatArrayOf(x1, yPost, z0),
+            floatArrayOf(x1, yPost, z1),
+            floatArrayOf(x0, yPost, z1)
+        )
+
+        val screenGround = arrayOfNulls<FloatArray>(4)
+        val screenPost    = arrayOfNulls<FloatArray>(4)
+        var anyVisible = false
+
+        for (i in 0..3) {
+            val g = groundCorners[i]
+            val p = MathUtil.worldToScreen(g[0], g[1], g[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH, fovValue)
+            if (p != null) { screenGround[i] = floatArrayOf(p.first, p.second); anyVisible = true }
+
+            val t = postTops[i]
+            val pt = MathUtil.worldToScreen(t[0], t[1], t[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH, fovValue)
+            if (pt != null) screenPost[i] = floatArrayOf(pt.first, pt.second)
+        }
+        if (!anyVisible) return
+
+        boundaryPaint.color = BOUNDARY_COLOR
+        boundaryPaint.alpha = 220
+        boundaryPaint.strokeWidth = 2.5f
+
+        for (i in 0..3) {
+            val a = screenGround[i] ?: continue
+            val b = screenGround[(i + 1) % 4] ?: continue
+            canvas.drawLine(a[0], a[1], b[0], b[1], boundaryPaint)
+        }
+        for (i in 0..3) {
+            val a = screenGround[i] ?: continue
+            val b = screenPost[i] ?: continue
+            canvas.drawLine(a[0], a[1], b[0], b[1], boundaryPaint)
+        }
+    }
+
+    // Litematica tarzi: henuz konulmamis bloklari, gercek dunya konumlarinda
+    // (MathUtil.worldToScreen ile ESP.kt'deki drawBox3D'nin ayni projeksiyonu
+    // kullanilarak) yari saydam hayalet kup olarak ekrana basar.
+    private fun renderWorldGhosts(canvas: Canvas, screenW: Int, screenH: Int) {
+        if (!worldOverlay.value) return
+        if (!originSet) return
+        val grid = MapArtPlan.grid.value ?: return
+        val size = grid.size
+        if (size <= 0) return
+
+        val selfX = EntityTracker.selfX
+        val selfY = EntityTracker.selfY
+        val selfZ = EntityTracker.selfZ
+        val yaw   = EntityTracker.selfYaw
+        val pitch = EntityTracker.selfPitch
+        val fovValue = GameFov.current
+        val range = worldRenderDistance.value
+
+        val colMin = floor(selfX - range - originX).toInt().coerceAtLeast(0)
+        val colMax = kotlin.math.ceil(selfX + range - originX).toInt().coerceAtMost(size - 1)
+        val rowMin = floor(selfZ - range - originZ).toInt().coerceAtLeast(0)
+        val rowMax = kotlin.math.ceil(selfZ + range - originZ).toInt().coerceAtMost(size - 1)
+        if (colMin > colMax || rowMin > rowMax) return
+
+        val target = queue.firstOrNull()
+        val rangeSq = range * range
+
+        val cells = ArrayList<GhostCell>()
+        for (row in rowMin..rowMax) {
+            for (col in colMin..colMax) {
+                val id = grid[row][col]
+                val wx = originX + col
+                val wz = originZ + row
+                val dx = (wx + 0.5f) - selfX
+                val dz = (wz + 0.5f) - selfZ
+                val distSq = dx * dx + dz * dz
+                if (distSq > rangeSq) continue
+
+                if (WorldBlockTracker.getBlockIdentifier(wx, originY, wz) == id) continue
+
+                val isTarget = target != null && target.first == col && target.second == row
+                cells.add(GhostCell(row, col, id, distSq, isTarget))
+            }
+        }
+        if (cells.isEmpty()) return
+
+        // Uzaktan yakina ciz — yakin kupler uzaktakilerin ustune dogru binsin.
+        cells.sortByDescending { it.distSq }
+
+        for (cell in cells) {
+            val colorArgb = 0xFF000000.toInt() or BlockPalette.colorOf(cell.id)
+            drawWorldGhostBlock(
+                canvas,
+                originX + cell.col, originY, originZ + cell.row,
+                selfX, selfY, selfZ, yaw, pitch, screenW, screenH, fovValue,
+                colorArgb, cell.isTarget
+            )
+        }
+    }
+
+    private class GhostCell(val row: Int, val col: Int, val id: String, val distSq: Float, val isTarget: Boolean)
+
+    private fun drawWorldGhostBlock(
+        canvas: Canvas,
+        bx: Int, blockY: Int, bz: Int,
+        selfX: Float, selfY: Float, selfZ: Float,
+        yaw: Float, pitch: Float,
+        screenW: Int, screenH: Int, fovValue: Float,
+        colorArgb: Int, isTarget: Boolean
+    ) {
+        val x0 = bx.toFloat(); val x1 = bx + 1f
+        val y0 = blockY.toFloat(); val y1 = blockY + 1f
+        val z0 = bz.toFloat(); val z1 = bz + 1f
+
+        val worldCorners = arrayOf(
+            floatArrayOf(x0, y0, z0), floatArrayOf(x1, y0, z0),
+            floatArrayOf(x1, y0, z1), floatArrayOf(x0, y0, z1),
+            floatArrayOf(x0, y1, z0), floatArrayOf(x1, y1, z0),
+            floatArrayOf(x1, y1, z1), floatArrayOf(x0, y1, z1)
+        )
+
+        val screenCorners = arrayOfNulls<FloatArray>(8)
+        for (i in worldCorners.indices) {
+            val c = worldCorners[i]
+            val p = MathUtil.worldToScreen(
+                c[0], c[1], c[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH, fovValue
+            ) ?: return
+            screenCorners[i] = floatArrayOf(p.first, p.second)
+        }
+
+        worldGhostStrokePaint.color = colorArgb
+        worldGhostStrokePaint.alpha = if (isTarget) 255 else 150
+        worldGhostStrokePaint.strokeWidth = if (isTarget) 3f else 1.5f
+
+        val edges = intArrayOf(
+            0, 1,  1, 2,  2, 3,  3, 0,
+            4, 5,  5, 6,  6, 7,  7, 4,
+            0, 4,  1, 5,  2, 6,  3, 7
+        )
+        var i = 0
+        while (i < edges.size) {
+            val a = screenCorners[edges[i]]!!
+            val b = screenCorners[edges[i + 1]]!!
+            canvas.drawLine(a[0], a[1], b[0], b[1], worldGhostStrokePaint)
+            i += 2
+        }
+
+        worldGhostFillPaint.color = colorArgb
+        worldGhostFillPaint.alpha = if (isTarget) 130 else 60
+        val topPath = Path().apply {
+            val p4 = screenCorners[4]!!; moveTo(p4[0], p4[1])
+            val p5 = screenCorners[5]!!; lineTo(p5[0], p5[1])
+            val p6 = screenCorners[6]!!; lineTo(p6[0], p6[1])
+            val p7 = screenCorners[7]!!; lineTo(p7[0], p7[1])
+            close()
+        }
+        canvas.drawPath(topPath, worldGhostFillPaint)
+    }
+
+    private fun renderCornerPanel(canvas: Canvas, width: Int, height: Int) {
         if (!showSchematic.value) return
         val grid = MapArtPlan.grid.value ?: return
         val size = grid.size
         if (size <= 0) return
 
-        val cellPx = (SCHEMATIC_MAX_PX / size.toFloat()).coerceIn(2f, 16f)
-        val gridPx = cellPx * size
-        val left = width - gridPx - SCHEMATIC_MARGIN
-        val top  = SCHEMATIC_MARGIN
+        val cellPx = (SCHEMATIC_MAX_PX / size.toFloat()).coerceIn(ISO_CELL_MIN, ISO_CELL_MAX)
+        val tileW  = cellPx
+        val tileH  = cellPx * 0.5f
+        val blockH = cellPx * 0.45f
+
+        var minX = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for (row in 0 until size) {
+            for (col in 0 until size) {
+                val ix = (col - row) * (tileW / 2f)
+                val iy = (col + row) * (tileH / 2f)
+                if (ix - tileW / 2f < minX) minX = ix - tileW / 2f
+                if (ix + tileW / 2f > maxX) maxX = ix + tileW / 2f
+                if (iy - tileH / 2f < minY) minY = iy - tileH / 2f
+                if (iy + tileH / 2f + blockH > maxY) maxY = iy + tileH / 2f + blockH
+            }
+        }
+        val isoW = maxX - minX
+        val isoH = maxY - minY
+
+        val panelLeft = width - isoW - SCHEMATIC_MARGIN
+        val panelTop  = SCHEMATIC_MARGIN
 
         canvas.drawRect(
-            left - 8f, top - 8f, left + gridPx + 8f, top + gridPx + 34f,
+            panelLeft - 10f, panelTop - 10f,
+            panelLeft + isoW + 10f, panelTop + isoH + 46f,
             schematicBgPaint
         )
 
-        for (row in 0 until size) {
-            for (col in 0 until size) {
-                val id = grid[row][col]
-                val placed = originSet &&
-                    WorldBlockTracker.getBlockIdentifier(originX + col, originY, originZ + row) == id
-                val argb = 0xFF000000.toInt() or BlockPalette.colorOf(id)
-                schematicFillPaint.color = if (placed) dimColor(argb) else argb
+        val order = ArrayList<Pair<Int, Int>>(size * size)
+        for (row in 0 until size) for (col in 0 until size) order.add(row to col)
+        order.sortWith(compareBy({ it.first + it.second }, { it.first }))
 
-                val x = left + col * cellPx
-                val y = top + row * cellPx
-                canvas.drawRect(x, y, x + cellPx, y + cellPx, schematicFillPaint)
+        val target = queue.firstOrNull()
+        var placedCount = 0
+        val total = size * size
+
+        for ((row, col) in order) {
+            val id = grid[row][col]
+            val placed = originSet &&
+                WorldBlockTracker.getBlockIdentifier(originX + col, originY, originZ + row) == id
+            if (placed) placedCount++
+
+            val baseColor = 0xFF000000.toInt() or BlockPalette.colorOf(id)
+            val isTarget  = target != null && target.first == col && target.second == row
+
+            val cx = panelLeft - minX + (col - row) * (tileW / 2f)
+            val cy = panelTop  - minY + (col + row) * (tileH / 2f)
+
+            if (placed) {
+                drawTopFaceColor(canvas, cx, cy, tileW, tileH, dimColor(baseColor))
+            } else {
+                val alpha = if (isTarget) GHOST_TARGET_ALPHA else GHOST_ALPHA
+                drawIsoGhostCube(canvas, cx, cy, tileW, tileH, blockH, baseColor, alpha)
+                if (isTarget) {
+                    drawTopFaceOutline(canvas, cx, cy, tileW, tileH, schematicHighlightPaint)
+                }
             }
         }
 
-        val target = queue.firstOrNull()
-        if (target != null) {
-            val (col, row) = target
-            val x = left + col * cellPx
-            val y = top + row * cellPx
-            canvas.drawRect(x, y, x + cellPx, y + cellPx, schematicHighlightPaint)
-        }
+        val progress = if (total > 0) placedCount.toFloat() / total.toFloat() else 0f
+        val barY = panelTop + isoH + 18f
+        canvas.drawRect(panelLeft, barY, panelLeft + isoW, barY + 8f, schematicBarBgPaint)
+        canvas.drawRect(panelLeft, barY, panelLeft + isoW * progress, barY + 8f, schematicBarFillPaint)
 
         val label = when {
             stage == Stage.COLLECTING ->
                 "Collecting: ${collectingBlockType?.let { BlockPalette.displayName(it) } ?: "?"}"
-            paused -> "Paused"
+            paused -> "Paused — $placedCount/$total"
             currentBlockType != null ->
-                "${BlockPalette.displayName(currentBlockType!!)} — ${queue.size} left"
-            else -> "AutoMapArt"
+                "${BlockPalette.displayName(currentBlockType!!)} — $placedCount/$total"
+            else -> "AutoMapArt — $placedCount/$total"
         }
-        canvas.drawText(label, left, top + gridPx + 24f, schematicTextPaint)
+        canvas.drawText(label, panelLeft, barY + 28f, schematicTextPaint)
+    }
+
+    // Ust yuz (dama tasi) diamond path'i — placed bloklar icin duz zemin karosu
+    private fun topFacePath(cx: Float, cy: Float, tileW: Float, tileH: Float): Path = Path().apply {
+        moveTo(cx, cy - tileH / 2f)
+        lineTo(cx + tileW / 2f, cy)
+        lineTo(cx, cy + tileH / 2f)
+        lineTo(cx - tileW / 2f, cy)
+        close()
+    }
+
+    private fun drawTopFaceColor(canvas: Canvas, cx: Float, cy: Float, tileW: Float, tileH: Float, colorArgb: Int) {
+        schematicFillPaint.color = colorArgb
+        canvas.drawPath(topFacePath(cx, cy, tileW, tileH), schematicFillPaint)
+    }
+
+    private fun drawTopFaceOutline(canvas: Canvas, cx: Float, cy: Float, tileW: Float, tileH: Float, paint: Paint) {
+        canvas.drawPath(topFacePath(cx, cy, tileW, tileH), paint)
+    }
+
+    // Henuz konulmamis bloklari litematica tarzi yari saydam "hayalet" kup
+    // olarak (ust + iki yan yuz, golgelendirilmis) ciziyor.
+    private fun drawIsoGhostCube(
+        canvas: Canvas, cx: Float, cy: Float,
+        tileW: Float, tileH: Float, blockH: Float,
+        argb: Int, alpha: Int
+    ) {
+        val left = Path().apply {
+            moveTo(cx - tileW / 2f, cy)
+            lineTo(cx, cy + tileH / 2f)
+            lineTo(cx, cy + tileH / 2f + blockH)
+            lineTo(cx - tileW / 2f, cy + blockH)
+            close()
+        }
+        val right = Path().apply {
+            moveTo(cx, cy + tileH / 2f)
+            lineTo(cx + tileW / 2f, cy)
+            lineTo(cx + tileW / 2f, cy + blockH)
+            lineTo(cx, cy + tileH / 2f + blockH)
+            close()
+        }
+
+        schematicFillPaint.color = shade(argb, 0.55f, alpha)
+        canvas.drawPath(left, schematicFillPaint)
+        schematicFillPaint.color = shade(argb, 0.75f, alpha)
+        canvas.drawPath(right, schematicFillPaint)
+        schematicFillPaint.color = shade(argb, 1.0f, alpha)
+        canvas.drawPath(topFacePath(cx, cy, tileW, tileH), schematicFillPaint)
+    }
+
+    private fun shade(argb: Int, factor: Float, alpha: Int): Int {
+        val r = (((argb ushr 16) and 0xFF) * factor).toInt().coerceIn(0, 255)
+        val g = (((argb ushr 8) and 0xFF) * factor).toInt().coerceIn(0, 255)
+        val b = ((argb and 0xFF) * factor).toInt().coerceIn(0, 255)
+        return (alpha shl 24) or (r shl 16) or (g shl 8) or b
     }
 
     private fun dimColor(argb: Int): Int {

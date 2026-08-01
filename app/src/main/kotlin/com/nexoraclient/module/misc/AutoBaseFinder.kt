@@ -18,13 +18,12 @@ import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket
 import java.util.UUID
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.random.Random
 
 /**
  * AutoBaseFinder — secilen ucus yontemiyle (Jetpack ya da ElytraFly tarzi,
  * ikisi de ayni clientbound SetEntityMotionPacket spoof teknigi) belirlenen
- * Y seviyesine kendiliginden cikar, orada dolasarak barrel/ender chest/
- * shulker box arar (BlockTracker), bulunca /sethome baseN atar ve N'i
+ * Y seviyesine kendiliginden cikar, enable anindaki bakis yonunde sabit ve
+ * duz ucarak barrel/ender chest/shulker box arar (BlockTracker), bulunca /sethome baseN atar ve N'i
  * artirir. Ayni bolgede spam /sethome atmamasi icin, bir home alindiktan
  * sonra ayarlanan sure (varsayilan 3 dk) boyunca yeni home aranmiyor.
  *
@@ -51,25 +50,21 @@ class AutoBaseFinder : BaseModule(
     private val shortcut            = bool ("Shortcut",           false)
 
     companion object {
-        private const val TICK_MS       = 250L
-        private const val Y_BAND        = 1.5f
-        private const val WANDER_MIN_MS = 3000L
-        private const val WANDER_MAX_MS = 7000L
+        private const val TICK_MS = 250L
+        private const val Y_BAND  = 1.5f
     }
 
     @Volatile private var tickJob: kotlinx.coroutines.Job? = null
     @Volatile private var glideStarted = false
     @Volatile private var homeCounter  = 1
     @Volatile private var lastHomeMs   = 0L
-    @Volatile private var nextTurnMs   = 0L
-    private var wanderYaw = 0f
+    private var flightYaw = 0f
 
     override fun onEnable() {
         super.onEnable()
         homeCounter = 1
         lastHomeMs  = 0L
-        nextTurnMs  = 0L
-        wanderYaw   = EntityTracker.selfYaw
+        flightYaw   = EntityTracker.selfYaw
         if (flightMode.value == FlightMode.ElytraFly) startGlide()
         tickJob = launchTickLoop(TICK_MS) { tick() }
     }
@@ -98,15 +93,8 @@ class AutoBaseFinder : BaseModule(
             else         -> 0f
         }
 
-        // Sabit yonde ucup sinirli bir alani taramasin diye, belirli araliklarla
-        // rastgele yeni bir yon secip o yonde duz ucuyor (onceki surekli 0.6
-        // derece/tick artis sabit yaricapli bir cembere kilitliyordu).
-        val now = System.currentTimeMillis()
-        if (now >= nextTurnMs) {
-            wanderYaw  = Random.nextFloat() * 360f
-            nextTurnMs = now + Random.nextLong(WANDER_MIN_MS, WANDER_MAX_MS)
-        }
-        val yawRad = Math.toRadians(wanderYaw.toDouble()).toFloat()
+        // Enable anindaki bakis yonunde sabit, duz uçuyor — yon degistirmiyor.
+        val yawRad = Math.toRadians(flightYaw.toDouble()).toFloat()
         val dirX = -sin(yawRad)
         val dirZ =  cos(yawRad)
 
