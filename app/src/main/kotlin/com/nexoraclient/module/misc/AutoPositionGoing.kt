@@ -72,9 +72,24 @@ class AutoPositionGoing : BaseModule(
         if (baseHunting.value) scanForBases(session)
     }
 
-    private fun parsedTargetX(): Float = targetX.value.toFloatOrNull() ?: 0f
-    private fun parsedTargetZ(): Float = targetZ.value.toFloatOrNull() ?: 0f
-    private fun parsedTargetY(): Float = targetY.value.toFloatOrNull() ?: 120f
+    // FIX: bazi mobil klavyeler "akilli noktalama" ile ASCII '-' yerine farkli
+    // bir tire karakteri (unicode minus '\u2212', en dash '\u2013', em dash
+    // '\u2014') basiyor. toFloatOrNull() bunlari taniyamiyor, parse null
+    // donuyor ve kod sessizce 0f/120f varsayilanina dusuyordu — yani girilen
+    // negatif koordinat sessizce "+ versiyonuna" (varsayilana) donusuyordu.
+    // Once bu karakterleri ASCII '-'ya, ondalik icin ',' -> '.' ceviriyoruz.
+    private fun parseCoord(raw: String, fallback: Float): Float {
+        val cleaned = raw.trim()
+            .replace('\u2212', '-')
+            .replace('\u2013', '-')
+            .replace('\u2014', '-')
+            .replace(',', '.')
+        return cleaned.toFloatOrNull() ?: fallback
+    }
+
+    private fun parsedTargetX(): Float = parseCoord(targetX.value, 0f)
+    private fun parsedTargetZ(): Float = parseCoord(targetZ.value, 0f)
+    private fun parsedTargetY(): Float = parseCoord(targetY.value, 120f)
 
     private fun tickAscend(session: RubidiumRelaySession) {
         val dy = parsedTargetY() - EntityTracker.selfY
