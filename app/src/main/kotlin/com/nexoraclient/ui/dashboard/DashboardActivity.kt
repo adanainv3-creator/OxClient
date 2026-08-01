@@ -676,6 +676,9 @@ private fun DashboardTab(
         SelectedApplicationCard(packageName = selectedPackage, onClick = onOpenAppPicker)
         Spacer(Modifier.height(16.dp))
 
+        SelectedServerCard(host = serverHost, port = serverPort, onClick = onToggleServerPanel)
+        Spacer(Modifier.height(16.dp))
+
         AnimatedVisibility(
             visible = showServerPanel,
             enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
@@ -805,6 +808,56 @@ private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
                 color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace
             )
+        }
+    }
+}
+
+@Composable
+private fun SelectedServerCard(host: String, port: Int, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(16.dp)
+    ) {
+        Text(
+            "Selected Server",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = RubidiumOnSurfaceDim,
+            fontFamily = FontFamily.Monospace
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
+                contentAlignment = Alignment.Center
+            ) {
+                RouterGlyph(tint = RubidiumAccentLight)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    host,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = RubidiumOnSurface,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "Port: $port",
+                    fontSize = 11.sp,
+                    color = RubidiumOnSurfaceDim,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text("Change ›", fontSize = 12.sp, color = RubidiumAccentLight, fontFamily = FontFamily.Monospace)
         }
     }
 }

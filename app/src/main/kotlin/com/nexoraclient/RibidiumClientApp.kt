@@ -131,7 +131,6 @@ class RubidiumClientApp : Application() {
             Jetpack(),
             ElytraFly(),
             TPAura(),
-            AutoMapArt(),
             AimBot(),
             AntiKnockback(),
             FullBright(),
@@ -146,12 +145,8 @@ class RubidiumClientApp : Application() {
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect(),
-            BypassFly(),
             ComboShortcut(1),
-            ComboShortcut(2),
-            CommandHelper(),
-            AutoPositionGoing(),
-            AutoBaseFinder()
+            ComboShortcut(2)
         )
     }
 }
