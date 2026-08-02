@@ -241,6 +241,7 @@ class RubidiumRelaySession internal constructor(
         relay.removeSession(this)
         listeners.forEach { try { it.onSessionEnd(this) } catch (_: Exception) {} }
         listeners.clear()
+        ConnectionManager.onDisconnected(reason)
     }
 
     /**
@@ -277,6 +278,7 @@ class RubidiumRelaySession internal constructor(
                             relay.removeSession(this@RubidiumRelaySession)
                             listeners.forEach { try { it.onSessionEnd(this@RubidiumRelaySession) } catch (_: Exception) {} }
                             listeners.clear()
+                            ConnectionManager.onDisconnected("Client bağlantısı koptu")
                         }
                         ctx.fireChannelInactive()
                     }

@@ -45,7 +45,12 @@ class RubidiumRelay(
         remotePort       : Int = 19132,
         onSessionCreated : ((RubidiumRelaySession) -> Unit)? = null
     ) {
-        if (running) { return }
+        // Önceki oturum düzgün stop() ile kapanmadan yeni bir capture() çağrısı
+        // gelirse eskiden burada sessizce return ediliyordu; relay "running" kalmaya
+        // devam ediyor ama ConnectionManager state'i de sıfırlanmadığı için UI
+        // tarafında "Already connected" olarak görünüyordu. Artık önce eski
+        // oturumu temiz şekilde kapatıp yeni bağlantıya devam ediyoruz.
+        if (running) { stop() }
 
         this.remoteHost = remoteHost
         this.remotePort = remotePort
@@ -137,6 +142,7 @@ class RubidiumRelay(
         sessions.toList().forEach { it.disconnect("Relay kapatıldı") }
         sessions.clear()
         shutdownGroups()
+        ConnectionManager.onDisconnected("Relay durduruldu")
     }
 
     internal fun removeSession(session: RubidiumRelaySession) = sessions.remove(session)
