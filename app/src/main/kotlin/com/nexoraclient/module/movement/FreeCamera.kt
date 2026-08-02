@@ -141,7 +141,7 @@ class FreeCamera : BaseModule(
                     )
                 )
                 walkSpeed = 0.1f
-                flySpeed  = flySpeed.value
+                flySpeed  = this@FreeCamera.flySpeed.value
             })
         }
         session.clientBound(packet)
