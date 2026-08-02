@@ -35,6 +35,7 @@ class NoClipModule : BaseModule(
     description = "Ability.NO_CLIP ile bloklardan geçme + dikey serbest hareket (Space/Shift)"
 ) {
     private val moveSpeed = float("Speed", 0.15f, 0.05f, 1.5f)
+    private val shortcut  = bool ("Shortcut", false)
 
     @Volatile private var noClipActive = false
     @Volatile private var lastSession: RubidiumRelaySession? = null

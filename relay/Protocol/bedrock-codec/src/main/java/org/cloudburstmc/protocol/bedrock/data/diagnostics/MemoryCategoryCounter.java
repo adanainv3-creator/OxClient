@@ -17,7 +17,14 @@ public class MemoryCategoryCounter {
         ACTOR_RENDERING,
         BALANCER,
         BLOCK_TICKING_QUEUES,
+        /**
+         * @since v2168
+         */
         BIOME_STORAGE,
+        /**
+         * @since v2168
+         */
+        BLOBS,
         CEREAL,
         CIRCUIT_SYSTEM,
         CLIENT,
@@ -64,13 +71,80 @@ public class MemoryCategoryCounter {
         MATERIAL_VARIATION_MANAGER,
         MOLANG,
         ORE_UI,
-        PERSONA,
+        /**
+         * @since v2168
+         */
+        ORE_UI_CLIENT,
+        /**
+         * @since v2168
+         */
+        PERSONA_PIECES,
+        /**
+         * @since v2168
+         */
+        PERSONA_ANIMATIONS,
+        /**
+         * @since v2168
+         */
+        PERSONA_TEXTURES,
+        /**
+         * @since v2168
+         */
+        PERSONA_CHARACTERS,
+        /**
+         * @since v2168
+         */
+        PERSONA_SKIN_PACKS,
+        /**
+         * @since v2168
+         */
+        PERSONA_REPO,
         PLAYER,
         RENDER_CHUNK,
         RENDER_CHUNK_INDEX_BUFFER,
         RENDER_CHUNK_VERTEX_BUFFER,
         RENDERING,
+        /**
+         * @since v2168
+         */
+        RENDERING_BGFX_INIT,
+        /**
+         * @since v2168
+         */
+        RENDERING_BGFX_START_FRAME,
+        /**
+         * @since v2168
+         */
+        RENDERING_BLOCK_TESSELLATOR,
+        /**
+         * @since v2168
+         */
+        RENDERING_END_FRAME,
+        /**
+         * @since v2168
+         */
+        RENDERING_GRAPHICS_TASKS_INIT,
         RENDERING_LIBRARY,
+        /**
+         * @since v2168
+         */
+        RENDERING_POLYGON_OPERATOR_POOL,
+        /**
+         * @since v2168
+         */
+        RENDERING_PBR_TEXTURE_DATA,
+        /**
+         * @since v2168
+         */
+        RENDERING_RENDER_REGISTRY,
+        /**
+         * @since v2168
+         */
+        RENDERING_SETUP,
+        /**
+         * @since v2168
+         */
+        RENDERING_VERTICES,
         REQUEST_LOG,
         RESOURCE_PACKS,
         SOUND,
@@ -78,11 +152,14 @@ public class MemoryCategoryCounter {
         SUB_CHUNK_BLOCK_DATA,
         SUB_CHUNK_LIGHT_DATA,
         TEXTURES,
-        VR,
         WEATHER_RENDERER,
         WORLD_GENERATOR,
         TASKS,
         TEST,
+        /**
+         * @since v2168
+         */
+        TEST_LOAD_TEST_TAGS,
         SCRIPTING,
         SCRIPTING_RUNTIME,
         SCRIPTING_CONTEXT,
@@ -135,5 +212,17 @@ public class MemoryCategoryCounter {
          * @since v944
          */
         GAMEFACE_SCRIPT_ENGINE,
+        /**
+         * @since v2168
+         */
+        GAMEFACE_SCRIPT,
+        /**
+         * @since v2168
+         */
+        GAMEFACE_LAYOUT,
+        /**
+         * @deprecated since v2168
+         */
+        VR,
     }
 }

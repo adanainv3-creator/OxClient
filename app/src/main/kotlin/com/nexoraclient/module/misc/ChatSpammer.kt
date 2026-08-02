@@ -6,12 +6,9 @@ import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.BaseModule
 import com.rubidiumclient.module.ModuleCategory
 import com.rubidiumclient.module.social.isFriendEntity
-import com.rubidiumclient.utils.InventoryUtil
 import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
 import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
-import org.cloudburstmc.protocol.bedrock.packet.LevelEventPacket
-import org.cloudburstmc.protocol.bedrock.packet.MobEffectPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerListPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import java.util.concurrent.ConcurrentHashMap
@@ -19,56 +16,36 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
-import kotlin.math.abs
-import kotlin.math.sqrt
 import kotlin.random.Random
 
 class ChatSpammer : BaseModule(
     name        = "ChatSpammer",
     category    = ModuleCategory.MISC,
-    description = "Chat prefix + totem pop sayacı"
+    description = "Chat prefix + öldürme/logout spam"
 ) {
     companion object {
         private const val VERSION      = "v1.2"
         private const val TAG_LINE     = "Rubidium Client $VERSION"
-        private const val PVP_TAIL     = "by Rubidium Client | Best Mobile Client"
         private const val QUEUE_DELAY_MS = 600L
         private const val MAX_QUEUE_SIZE = 30
         private const val LOGOUT_RANGE = 256f
-        private const val TOTEM_EVENT_RADIUS = 3f
         private const val SELF_HIT_WINDOW_MS = 3000L
         private const val SNAPSHOT_INTERVAL_MS = 1000L
 
-        // ---------- PC Counter (offhand-polling tabanlı alternatif algılama) ----------
-        private const val PC_COUNTER_POLL_INTERVAL_MS = 150L
-        private const val PC_COUNTER_DEBOUNCE_MS = 1200L
-        private const val PC_COUNTER_RANGE = 100f
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
         private val JUNK_RANGE = 12..22
-
-        private val POP_MESSAGES = listOf(
-            "> @here @{name} Popped {count} Totem $PVP_TAIL | {junk}",
-            "> @here @{name} is actually totemfag | {count} Popped | {junk} | Rubidium Client",
-            "> @here @{name} popped {count}x already lmao | {junk} | $TAG_LINE",
-            "> @here bro @{name} needs {count} totems just to survive | {junk}",
-            "> @here @{name} totem #{count} down, ez clap | {junk} | Rubidium Client"
-        )
     }
 
     // ---------- Modül seçenekleri ----------
-    private val shortcut = bool("Shortcut", false)        // (Şu an kullanılmıyor, ileride kısayol için)
-    private val totemCounter = bool("TotemCounter", true) // Totem pop sayacını aç/kapa
-    private val pcCounterMode = bool("Best Counter Mode", false)   // Açıkken: offhand-polling tabanlı algılamaya geç, diğer (event tabanlı) totem yolları devre dışı kalır
-    private val pcCounterSendChat = bool("Best Counter Send Chat", false) // Referans koddaki SendChat karşılığı — varsayılan kapalı
+    private val shortcut    = bool("Shortcut", false)      // (Şu an kullanılmıyor, ileride kısayol için)
+    private val killSpammer = bool("KillSpammer", true)    // Öldürme mesajlarını aç/kapa
 
     // ---------- Durum tabloları ----------
-    private val popCounts = ConcurrentHashMap<String, Int>()
-    private val recentPopMs = ConcurrentHashMap<Long, Long>()
-    private val pendingRegen      = ConcurrentHashMap<Long, Long>()
-    private val pendingAbsorption = ConcurrentHashMap<Long, Long>()
-    private val recentDeathMs  = ConcurrentHashMap<Long, Long>()
-    private val recentHitsByMe = ConcurrentHashMap<Long, Long>()
-    private val recentLogoutMs = ConcurrentHashMap<Long, Long>()
+    private data class HitInfo(val name: String, val timeMs: Long)
+
+    private val recentDeathMs    = ConcurrentHashMap<Long, Long>()
+    private val recentHitsByMe   = ConcurrentHashMap<Long, HitInfo>()   // vuruş anındaki ismi de saklıyoruz — ölüm anında entity tracker'dan silinmiş olabilir
+    private val recentLogoutMs   = ConcurrentHashMap<Long, Long>()
     private val knownPlayerNames = ConcurrentHashMap<Long, String>()
 
     private val messageQueue = ConcurrentLinkedQueue<String>()
@@ -77,11 +54,6 @@ class ChatSpammer : BaseModule(
 
     private data class PlayerSnapshot(val name: String, val x: Float, val y: Float, val z: Float, val isFriend: Boolean)
     private val playerSnapshots = ConcurrentHashMap<Long, PlayerSnapshot>()
-
-    // ---------- PC Counter durum tabloları ----------
-    private val lastHadTotem   = ConcurrentHashMap<Long, Boolean>()
-    private val pcPopCounts    = ConcurrentHashMap<String, Int>()
-    private val pcRecentPopMs  = ConcurrentHashMap<Long, Long>()
 
     // ---------- Paket işleyici ----------
     override fun onPacket(event: PacketEvent) {
@@ -102,82 +74,13 @@ class ChatSpammer : BaseModule(
                 event.cancelAndReplace(buildTextPacket(formatted))
             }
 
-            // ---------- EntityEventPacket (Totem veya Ölüm) ----------
+            // ---------- EntityEventPacket (Ölüm) ----------
             is EntityEventPacket -> {
                 if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
-
-                val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
-
-                // Kendi ölümüm — PC Counter state'ini (respawn sonrası) temizle
-                if (p.runtimeEntityId == EntityTracker.selfRuntimeId) {
-                    if (typeStr.contains("DEATH")) resetPcCounterState()
-                    return
-                }
-
-                // Ölüm işlemi her zaman çalışır
-                if (typeStr.contains("DEATH")) {
-                    handleDeath(p.runtimeEntityId)
-                    return
-                }
-
-                if (pcCounterMode.value) return // Bu modda diğer totem algılama yolları kapalı
-
-                // Totem pop – sadece seçenek açıkken
-                if (typeStr.contains("TOTEM") && totemCounter.value) {
-                    handleTotemPop(p.runtimeEntityId)
-                }
-            }
-
-            // ---------- LevelEventPacket (Totem patlama efekti) ----------
-            is LevelEventPacket -> {
-                if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
-                if (!totemCounter.value) return
-                if (pcCounterMode.value) return // Bu modda diğer totem algılama yolları kapalı
-
-                val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
-                if (!typeStr.contains("TOTEM")) return
-
-                val pos = p.position ?: return
-
-                val nearest = EntityTracker.getAll()
-                    .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
-                    .minByOrNull { e ->
-                        val dx = e.x - pos.x; val dy = e.y - pos.y; val dz = e.z - pos.z
-                        dx * dx + dy * dy + dz * dz
-                    } ?: return
-
-                val dx = nearest.x - pos.x; val dy = nearest.y - pos.y; val dz = nearest.z - pos.z
-                val nearestDist = sqrt(dx * dx + dy * dy + dz * dz)
-                if (nearestDist > TOTEM_EVENT_RADIUS) return
-
-                handleTotemPop(nearest.runtimeId)
-            }
-
-            // ---------- MobEffectPacket (Regen + Absorption kombinasyonu) ----------
-            is MobEffectPacket -> {
-                if (event.direction != PacketEvent.Direction.SERVER_TO_CLIENT) return
                 if (p.runtimeEntityId == EntityTracker.selfRuntimeId) return
-                if (!totemCounter.value) return
-                if (pcCounterMode.value) return // Bu modda diğer totem algılama yolları kapalı
 
-                val eventStr = runCatching { p.event?.toString()?.uppercase() ?: "" }.getOrElse { "" }
-                if (!eventStr.contains("ADD")) return
-
-                val now = System.currentTimeMillis()
-                val rid = p.runtimeEntityId
-
-                when (p.effectId) {
-                    10 -> pendingRegen[rid] = now
-                    22 -> pendingAbsorption[rid] = now
-                }
-
-                val regenAt  = pendingRegen[rid]
-                val absorbAt = pendingAbsorption[rid]
-                if (regenAt != null && absorbAt != null && abs(regenAt - absorbAt) < 500L) {
-                    pendingRegen.remove(rid)
-                    pendingAbsorption.remove(rid)
-                    handleTotemPop(rid)
-                }
+                val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
+                if (typeStr.contains("DEATH")) handleDeath(p.runtimeEntityId)
             }
 
             // ---------- InventoryTransaction (Kendi vuruşumuzu takip) ----------
@@ -185,7 +88,12 @@ class ChatSpammer : BaseModule(
                 if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
                 if (p.transactionType != InventoryTransactionType.ITEM_USE_ON_ENTITY) return
                 if (p.actionType != 1) return
-                recentHitsByMe[p.runtimeEntityId] = System.currentTimeMillis()
+
+                // İsim burada, vuruş anında yakalanıyor — ölüm event'i geldiğinde
+                // entity zaten tracker'dan silinmiş olabiliyor.
+                val target = EntityTracker.getById(p.runtimeEntityId)
+                val name   = target?.name?.takeIf { it.isNotEmpty() } ?: return
+                recentHitsByMe[p.runtimeEntityId] = HitInfo(name, System.currentTimeMillis())
             }
 
             // ---------- PlayerListPacket (Oyuncu çıkışı – logout) ----------
@@ -240,43 +148,27 @@ class ChatSpammer : BaseModule(
     // ---------- Modül yaşam döngüsü ----------
     override fun onEnable() {
         super.onEnable()
-        // Tüm geçici verileri temizle
-        popCounts.clear()
-        recentPopMs.clear()
-        pendingRegen.clear()
-        pendingAbsorption.clear()
         recentDeathMs.clear()
         recentLogoutMs.clear()
         recentHitsByMe.clear()
         knownPlayerNames.clear()
         playerSnapshots.clear()
         messageQueue.clear()
-        lastHadTotem.clear()
-        pcPopCounts.clear()
-        pcRecentPopMs.clear()
 
         scheduler = Executors.newSingleThreadScheduledExecutor().also {
             it.scheduleWithFixedDelay({ flushQueue() }, 0, QUEUE_DELAY_MS, TimeUnit.MILLISECONDS)
             it.scheduleWithFixedDelay({ refreshPlayerSnapshots() }, 0, SNAPSHOT_INTERVAL_MS, TimeUnit.MILLISECONDS)
-            it.scheduleWithFixedDelay({ pollTotemsPcCounter() }, 0, PC_COUNTER_POLL_INTERVAL_MS, TimeUnit.MILLISECONDS)
         }
     }
 
     override fun onDisable() {
         super.onDisable()
-        popCounts.clear()
-        recentPopMs.clear()
-        pendingRegen.clear()
-        pendingAbsorption.clear()
         recentDeathMs.clear()
         recentLogoutMs.clear()
         recentHitsByMe.clear()
         knownPlayerNames.clear()
         playerSnapshots.clear()
         messageQueue.clear()
-        lastHadTotem.clear()
-        pcPopCounts.clear()
-        pcRecentPopMs.clear()
 
         scheduler?.shutdownNow()
         scheduler = null
@@ -302,114 +194,25 @@ class ChatSpammer : BaseModule(
         messageQueue.offer(message)
     }
 
-    // ---------- PC Counter: offhand-polling tabanlı alternatif totem algılama ----------
-    // Referans: C++ PopCounter.cpp — her tick offhand slotunu okuyup totem varken
-    // yoksa "pop" sayıyor. Event tabanlı yollardan (EntityEventPacket/LevelEventPacket/
-    // MobEffectPacket) daha az güvenilir: gerçek bir hasar/patlama sinyaliyle
-    // doğrulama yapmıyor, sadece item'ın kaybolduğunu görüyor.
-    //
-    // BİLİNEN KISITLAMA: Oyuncu totemi patlatmadan elle offhand'den çıkarıp başka
-    // bir item takarsa (veya item'ı düşürürse) bu da yanlışlıkla "pop" sayılır.
-    // pcCounterMode açıkken diğer (daha güvenilir) event tabanlı yollar bilerek
-    // devre dışı bırakıldığından burada çapraz doğrulama yapılamıyor.
-    //
-    // VARSAYIM (doğrulandı — EntityTracker.kt'ye eklendi): TrackedEntity.offHandItem,
-    // MobEquipmentPacket'in SERVER_TO_CLIENT/OFFHAND yayınından besleniyor.
-    // Totem kontrolü projede zaten var olan InventoryUtil.isTotem() ile yapılıyor
-    // (runtime-id fallback'i dahil, string identifier'a bağımlı kalmıyor).
-    private fun pollTotemsPcCounter() {
-        if (!isEnabled || !totemCounter.value || !pcCounterMode.value) return
-
-        val activeRuntimeIds = HashSet<Long>()
-
-        EntityTracker.getPlayers().forEach { e ->
-            if (e.runtimeId == EntityTracker.selfRuntimeId) return@forEach
-
-            if (e.isFriendEntity) {
-                lastHadTotem.remove(e.runtimeId)
-                return@forEach
-            }
-
-            val dist = EntityTracker.distanceTo(e)
-            if (dist > PC_COUNTER_RANGE) {
-                lastHadTotem.remove(e.runtimeId)
-                return@forEach
-            }
-
-            activeRuntimeIds.add(e.runtimeId)
-
-            val hasTotem = runCatching {
-                InventoryUtil.isTotem(e.offHandItem)
-            }.getOrElse { false }
-
-            val had = lastHadTotem[e.runtimeId] ?: false
-            if (had && !hasTotem) {
-                val now = System.currentTimeMillis()
-                val last = pcRecentPopMs[e.runtimeId]
-                if (last == null || now - last >= PC_COUNTER_DEBOUNCE_MS) {
-                    pcRecentPopMs[e.runtimeId] = now
-
-                    val name = e.name.takeIf { it.isNotEmpty() } ?: "unknown"
-                    val count = (pcPopCounts[name] ?: 0) + 1
-                    pcPopCounts[name] = count
-
-                    if (pcCounterSendChat.value) {
-                        enqueue("> @here @$name popped $count totem(s) | ${randomJunk()}")
-                    }
-                }
-            }
-            lastHadTotem[e.runtimeId] = hasTotem
-        }
-
-        // Artık menzilde/görünür olmayan oyuncuların state'ini temizle
-        lastHadTotem.keys.retainAll(activeRuntimeIds)
-        pcRecentPopMs.keys.retainAll(activeRuntimeIds)
-    }
-
-    private fun resetPcCounterState() {
-        lastHadTotem.clear()
-        pcPopCounts.clear()
-        pcRecentPopMs.clear()
-    }
-    // ---------- Totem pop işleyicisi (event tabanlı) ----------
-    private fun handleTotemPop(runtimeId: Long) {
-        val entity = EntityTracker.getById(runtimeId)
-        if (entity?.isFriendEntity == true) return
-
-        val now = System.currentTimeMillis()
-        val last = recentPopMs[runtimeId]
-        if (last != null && now - last < 1500L) return
-        recentPopMs[runtimeId] = now
-
-        val name  = entity?.name?.takeIf { it.isNotEmpty() } ?: "unknown"
-        val count = (popCounts[name] ?: 0) + 1
-        popCounts[name] = count
-
-        val text = POP_MESSAGES[Random.nextInt(POP_MESSAGES.size)]
-            .replace("{name}", name)
-            .replace("{count}", count.toString())
-            .replace("{junk}", randomJunk())
-
-        enqueue(text)
-    }
-
     // ---------- Ölüm işleyicisi ----------
     private fun handleDeath(runtimeId: Long) {
-        val entity = EntityTracker.getById(runtimeId) ?: return
-        if (!entity.isPlayer) return
-        if (entity.isFriendEntity) return
+        if (!killSpammer.value) return
 
+        // Vuruş kaydı yoksa (ya da penceresi geçmişse) bu ölüm bize ait değil.
+        val hit = recentHitsByMe.remove(runtimeId) ?: return
         val now = System.currentTimeMillis()
+        if (now - hit.timeMs > SELF_HIT_WINDOW_MS) return
+
         val last = recentDeathMs[runtimeId]
         if (last != null && now - last < 1500L) return
         recentDeathMs[runtimeId] = now
 
-        val name = entity.name.takeIf { it.isNotEmpty() } ?: return
+        // Entity hâlâ tracker'daysa arkadaş kontrolünü yap; silinmişse
+        // (çoğu ölüm durumunda olduğu gibi) vuruş anındaki isimle devam et.
+        val entity = EntityTracker.getById(runtimeId)
+        if (entity?.isFriendEntity == true) return
 
-        val hitAt = recentHitsByMe.remove(runtimeId) ?: return
-        if (now - hitAt > SELF_HIT_WINDOW_MS) return
-
-        enqueue("> @here EZ @$name killed by Rubidium Client | ${randomJunk()}")
+        enqueue("> @here EZ @${hit.name} killed by Rubidium Client | ${randomJunk()}")
     }
 
     // ---------- Logout işleyicisi ----------

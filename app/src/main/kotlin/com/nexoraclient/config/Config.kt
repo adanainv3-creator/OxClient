@@ -24,7 +24,68 @@ private val Context.configDataStore: DataStore<Preferences> by preferencesDataSt
 
 data class ConfigProfile(val name: String, val savedAt: Long)
 
+/** Bir overlay elemanının ekrandaki x/y konumu. */
+data class Pos(val x: Float, val y: Float)
+
+/**
+ * Overlay elemanlarının (totem, target, fab, shortcut butonları, komut kısayolları)
+ * canlı konum durumu. OverlayService bunu okuyup sürüklerken günceller; Config,
+ * profil kaydederken/yüklerken bunu JSON'a çevirir ya da JSON'dan doldurur.
+ * Bu ayrım OverlayService ile Config'i birbirine sıkı bağımlı kılmadan haberleştirir.
+ */
+object OverlayPositions {
+    var totem: Pos = Pos(16f, 16f)
+    var target: Pos = Pos(16f, 64f)
+    var fab: Pos = Pos(16f, 120f)
+    val shortcuts = mutableMapOf<String, Pos>()
+    val commandShortcuts = mutableMapOf<String, Pos>()
+
+    /** Config bir profil yüklediğinde tetiklenir; overlay açık halde konumlarını tazeleyebilsin diye. */
+    var onChanged: (() -> Unit)? = null
+
+    internal fun toJson(): JSONObject = JSONObject().apply {
+        put("totem", posToJson(totem))
+        put("target", posToJson(target))
+        put("fab", posToJson(fab))
+        put("shortcuts", mapToJson(shortcuts))
+        put("commandShortcuts", mapToJson(commandShortcuts))
+    }
+
+    internal fun applyFrom(json: JSONObject?) {
+        json ?: return
+        posFromJson(json.optJSONObject("totem"))?.let { totem = it }
+        posFromJson(json.optJSONObject("target"))?.let { target = it }
+        posFromJson(json.optJSONObject("fab"))?.let { fab = it }
+        applyMap(shortcuts, json.optJSONObject("shortcuts"))
+        applyMap(commandShortcuts, json.optJSONObject("commandShortcuts"))
+        onChanged?.invoke()
+    }
+
+    private fun applyMap(target: MutableMap<String, Pos>, json: JSONObject?) {
+        json ?: return
+        target.clear()
+        json.keys().forEach { key -> posFromJson(json.optJSONObject(key))?.let { target[key] = it } }
+    }
+
+    private fun posToJson(pos: Pos): JSONObject =
+        JSONObject().put("x", pos.x.toDouble()).put("y", pos.y.toDouble())
+
+    private fun posFromJson(obj: JSONObject?): Pos? {
+        obj ?: return null
+        val x = obj.optDouble("x", Double.NaN)
+        val y = obj.optDouble("y", Double.NaN)
+        if (x.isNaN() || y.isNaN()) return null
+        return Pos(x.toFloat(), y.toFloat())
+    }
+
+    private fun mapToJson(map: Map<String, Pos>): JSONObject =
+        JSONObject().apply { map.forEach { (key, pos) -> put(key, posToJson(pos)) } }
+}
+
 object Config {
+
+    private const val CONFIG_VERSION = 2
+    private const val MAX_NAME_LENGTH = 40
 
     private val KEY_CONFIGS = stringPreferencesKey("config_profiles")
 
@@ -54,6 +115,11 @@ object Config {
         parseProfileList(raw)
     } catch (_: Exception) { emptyList() }
 
+    suspend fun exists(name: String): Boolean = try {
+        val raw = safeCtx().configDataStore.data.map { it[KEY_CONFIGS] }.first()
+        readRoot(raw).optJSONObject("profiles")?.has(name) == true
+    } catch (_: Exception) { false }
+
     private fun parseProfileList(raw: String?): List<ConfigProfile> {
         val profilesJson = readRoot(raw).optJSONObject("profiles") ?: JSONObject()
         return profilesJson.keys().asSequence().map { name ->
@@ -65,10 +131,15 @@ object Config {
     private fun readRoot(raw: String?): JSONObject =
         try { JSONObject(raw ?: "{}") } catch (_: Exception) { JSONObject() }
 
+    private fun sanitizeName(name: String): String = name.trim().take(MAX_NAME_LENGTH)
+
+    private fun profileEntry(state: JSONObject): JSONObject =
+        JSONObject().put("savedAt", System.currentTimeMillis()).put("state", state)
+
     // ---- Kaydet / Yükle / Sil ----
 
     suspend fun save(name: String): Boolean {
-        val trimmed = name.trim()
+        val trimmed = sanitizeName(name)
         if (trimmed.isBlank()) return false
 
         return try {
@@ -77,10 +148,7 @@ object Config {
                 val root = readRoot(prefs[KEY_CONFIGS])
                 val profilesJson = root.optJSONObject("profiles") ?: JSONObject().also { root.put("profiles", it) }
 
-                val entry = JSONObject()
-                entry.put("savedAt", System.currentTimeMillis())
-                entry.put("state", state)
-                profilesJson.put(trimmed, entry)
+                profilesJson.put(trimmed, profileEntry(state))
 
                 root.put("active", trimmed)
                 prefs[KEY_CONFIGS] = root.toString()
@@ -121,7 +189,7 @@ object Config {
     }
 
     suspend fun rename(oldName: String, newName: String): Boolean {
-        val trimmed = newName.trim()
+        val trimmed = sanitizeName(newName)
         if (trimmed.isBlank() || trimmed == oldName) return false
 
         return try {
@@ -168,23 +236,27 @@ object Config {
         }
 
         val root = JSONObject()
-        root.put("version", 1)
+        root.put("version", CONFIG_VERSION)
         root.put("modules", modulesJson)
+        root.put("positions", OverlayPositions.toJson())
         return root
     }
 
     private fun applyState(root: JSONObject) {
-        val modulesJson = root.optJSONObject("modules") ?: return
+        val modulesJson = root.optJSONObject("modules")
+        if (modulesJson != null) {
+            ModuleManager.getAll().forEach { module ->
+                val moduleJson = modulesJson.optJSONObject(module.name) ?: return@forEach
+                applySettingsTo(module, moduleJson.optJSONObject("settings"))
 
-        ModuleManager.getAll().forEach { module ->
-            val moduleJson = modulesJson.optJSONObject(module.name) ?: return@forEach
-            applySettingsTo(module, moduleJson.optJSONObject("settings"))
-
-            val shouldEnable = moduleJson.optBoolean("enabled", module.isEnabled)
-            if (shouldEnable != module.isEnabled) {
-                if (shouldEnable) ModuleManager.enable(module) else ModuleManager.disable(module)
+                val shouldEnable = moduleJson.optBoolean("enabled", module.isEnabled)
+                if (shouldEnable != module.isEnabled) {
+                    if (shouldEnable) ModuleManager.enable(module) else ModuleManager.disable(module)
+                }
             }
         }
+        // Eski (v1) profillerde "positions" yok — bu durumda mevcut konumlar korunur.
+        OverlayPositions.applyFrom(root.optJSONObject("positions"))
     }
 
     private fun applySettingsTo(module: BaseModule, settingsJson: JSONObject?) {
@@ -240,18 +312,15 @@ object Config {
             val state = if (parsed.has("state")) parsed.getJSONObject("state") else parsed
             if (!state.has("modules")) return null // geçerli bir RubidiumClient config'i değil
 
-            var name = (nameOverride?.trim()?.takeIf { it.isNotEmpty() })
-                ?: parsed.optString("name").trim()
+            var name = (nameOverride?.let { sanitizeName(it) }?.takeIf { it.isNotEmpty() })
+                ?: sanitizeName(parsed.optString("name"))
             if (name.isBlank()) name = "Imported ${System.currentTimeMillis()}"
 
             safeCtx().configDataStore.edit { prefs ->
                 val root = readRoot(prefs[KEY_CONFIGS])
                 val profilesJson = root.optJSONObject("profiles") ?: JSONObject().also { root.put("profiles", it) }
 
-                val entry = JSONObject()
-                entry.put("savedAt", System.currentTimeMillis())
-                entry.put("state", state)
-                profilesJson.put(name, entry)
+                profilesJson.put(name, profileEntry(state))
 
                 root.put("active", name)
                 prefs[KEY_CONFIGS] = root.toString()

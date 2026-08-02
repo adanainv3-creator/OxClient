@@ -138,14 +138,9 @@ class RubidiumRelaySession internal constructor(
     }
 
     private fun flushQueue(session: ClientSession) {
-        var n = 0
         while (true) {
             val (pkt, immediate) = pendingQueue.poll() ?: break
-            try {
-                if (immediate) session.sendPacketImmediately(pkt)
-                else session.sendPacket(pkt)
-                n++
-            } catch (e: Exception) { }
+            sendToServer(pkt, immediate)
         }
     }
 
@@ -189,20 +184,47 @@ class RubidiumRelaySession internal constructor(
         return true
     }
 
+    // KÖK SEBEP ("body stays behind while soul moves" / rubber-band raporları):
+    // clientSession ve serverSession'ın gerçek gönderim çağrıları (sendPacketImmediately)
+    // eskiden HANGİ THREAD'DEN gelirse gelsin doğrudan çağrılıyordu. Ama pakederler
+    // buraya en az üç farklı thread'den geliyor: (1) client'ın kendi RakNet event loop'u
+    // (gerçek MovePlayerPacket/PlayerAuthInputPacket akışını buradan forward ediyoruz),
+    // (2) modül tick coroutine'leri (CrystalAura vb. Dispatchers.Default), (3) overlay/UI
+    // tarafı (Dispatchers.Main, örn. PacketUtil.sendMoveAtSelf ile crit hareketi enjekte
+    // ederken). RakNet oturumunun güvenilir/sıralı paket sayaçları (reliable message
+    // index, ordering index) thread-safe değil — iki thread aynı anda sendPacketImmediately
+    // çağırırsa bu sayaçlar bozulabiliyor, server ara sıra "eksik" bir sıra numarası
+    // bekleyip zaman aşımına kadar sonraki hareket paketlerini tutuyor. Sonuç: gerçek
+    // input (soul) akmaya devam ederken server'ın onayladığı pozisyon (body) donup
+    // sonra sıçrıyor. KillAura'nın crit/rotasyon paketleri bunu tetiklemeye daha yatkın
+    // (daha sık enjekte ediyor) ama düz yürürken de aynı yarış nadiren oluşabiliyor.
+    // Çözüm: her gönderimi ilgili kanalın KENDİ event loop'una (tek thread'li executor)
+    // yönlendirip aynı anda yalnızca bir thread'in sendPacketImmediately'e dokunmasını
+    // garanti ediyoruz — hem karşılıklı dışlama hem de göndericiler arası FIFO sıra elde
+    // ediliyor (aynı kanala art arda gelen çağrılar kuyruğa girdikleri sırayla işlenir).
+    private inline fun runOnChannelLoop(channel: Channel?, crossinline block: () -> Unit) {
+        val loop = channel?.eventLoop()
+        if (loop == null || loop.inEventLoop()) block() else loop.execute { block() }
+    }
+
     fun sendToClient(packet: BedrockPacket) {
         if (closed.get()) return
-        try { clientSession.sendPacketImmediately(packet) }
-        catch (e: Exception) { }
+        runOnChannelLoop(clientSession.peer.channel) {
+            try { clientSession.sendPacketImmediately(packet) }
+            catch (e: Exception) { }
+        }
     }
 
     fun sendToServer(packet: BedrockPacket, immediate: Boolean = true) {
         if (closed.get()) return
         val srv = serverSession
         if (srv != null && serverConnected.get()) {
-            try {
-                if (immediate) srv.sendPacketImmediately(packet)
-                else srv.sendPacket(packet)
-            } catch (e: Exception) { }
+            runOnChannelLoop(srv.peer.channel) {
+                try {
+                    if (immediate) srv.sendPacketImmediately(packet)
+                    else srv.sendPacket(packet)
+                } catch (e: Exception) { }
+            }
         } else {
             if (pendingQueue.size < MAX_QUEUE) pendingQueue.add(packet to immediate)
         }

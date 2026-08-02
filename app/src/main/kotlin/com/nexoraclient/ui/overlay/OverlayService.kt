@@ -51,6 +51,8 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.rubidiumclient.R
 import com.rubidiumclient.config.Config
 import com.rubidiumclient.config.MapArtPlan
+import com.rubidiumclient.config.OverlayPositions
+import com.rubidiumclient.config.Pos
 import com.rubidiumclient.core.proxy.EntityTracker
 import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.*
@@ -106,12 +108,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     private val shortcutViews = mutableMapOf<String, ComposeView>()
     private val commandShortcutViews = mutableMapOf<String, ComposeView>()
 
-    private var totemX = 16f; private var totemY = 16f
-    private var targetX = 16f; private var targetY = 64f
-    private var fabX = 16f; private var fabY = 120f
-    private val shortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
-    private val commandShortcutPositions = mutableMapOf<String, Pair<Float, Float>>()
-
     private lateinit var audioManager: AudioManager
     private var mediaSession: android.support.v4.media.session.MediaSessionCompat? = null
 
@@ -122,6 +118,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         createChannel()
+        OverlayPositions.onChanged = { serviceScope.launch { applyPositionsToViews() } }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -136,6 +133,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     override fun onDestroy() {
         lcReg.currentState = Lifecycle.State.DESTROYED
+        OverlayPositions.onChanged = null
         OverlayState.setOverlayVisible(false)
         try { mediaSession?.isActive = false; mediaSession?.release() } catch (_: Exception) {}
         removeAllOverlays()
@@ -210,14 +208,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             val totemParams = overlayParams(
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                totemX, totemY
+                OverlayPositions.totem.x, OverlayPositions.totem.y
             )
             totemView = composeView {
                 TotemCounterIcon(
                     onDrag = { dx, dy ->
-                        totemX += dx; totemY += dy
-                        totemParams.x = totemX.roundToInt()
-                        totemParams.y = totemY.roundToInt()
+                        val next = Pos(OverlayPositions.totem.x + dx, OverlayPositions.totem.y + dy)
+                        OverlayPositions.totem = next
+                        totemParams.x = next.x.roundToInt()
+                        totemParams.y = next.y.roundToInt()
                         safeUpdate(totemView, totemParams)
                     }
                 )
@@ -227,14 +226,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             val targetParams = overlayParams(
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                targetX, targetY
+                OverlayPositions.target.x, OverlayPositions.target.y
             )
             targetView = composeView {
                 TargetIndicator(
                     onDrag = { dx, dy ->
-                        targetX += dx; targetY += dy
-                        targetParams.x = targetX.roundToInt()
-                        targetParams.y = targetY.roundToInt()
+                        val next = Pos(OverlayPositions.target.x + dx, OverlayPositions.target.y + dy)
+                        OverlayPositions.target = next
+                        targetParams.x = next.x.roundToInt()
+                        targetParams.y = next.y.roundToInt()
                         safeUpdate(targetView, targetParams)
                     }
                 )
@@ -244,15 +244,16 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             val fabParams = overlayParams(
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                fabX, fabY
+                OverlayPositions.fab.x, OverlayPositions.fab.y
             )
             fabView = composeView {
                 MenuFab(
                     onClick = { toggleMenu() },
                     onDrag  = { dx, dy ->
-                        fabX += dx; fabY += dy
-                        fabParams.x = fabX.roundToInt()
-                        fabParams.y = fabY.roundToInt()
+                        val next = Pos(OverlayPositions.fab.x + dx, OverlayPositions.fab.y + dy)
+                        OverlayPositions.fab = next
+                        fabParams.x = next.x.roundToInt()
+                        fabParams.y = next.y.roundToInt()
                         safeUpdate(fabView, fabParams)
                     }
                 )
@@ -271,23 +272,22 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             try { wm.removeViewImmediate(view) } catch (_: Exception) {}
             shortcutViews.remove(name)
         }
-        ModuleManager.shortcutModules().forEach { mod ->
+        ModuleManager.shortcutModules().forEachIndexed { idx, mod ->
             if (mod.name !in shortcutViews) {
-                val idx = ModuleManager.shortcutModules().indexOf(mod)
-                val pos = shortcutPositions.getOrPut(mod.name) { 50f to (420f + idx * 50f) }
+                val pos = OverlayPositions.shortcuts.getOrPut(mod.name) { Pos(50f, 420f + idx * 50f) }
                 val params = overlayParams(
                     android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                     android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                    pos.first, pos.second
+                    pos.x, pos.y
                 )
                 val view = composeView {
                     ShortcutButton(
                         module   = mod,
                         onDrag   = { dx, dy ->
-                            val (cx, cy) = shortcutPositions[mod.name] ?: (0f to 0f)
-                            val nx = cx + dx; val ny = cy + dy
-                            shortcutPositions[mod.name] = nx to ny
-                            params.x = nx.roundToInt(); params.y = ny.roundToInt()
+                            val cur = OverlayPositions.shortcuts[mod.name] ?: Pos(0f, 0f)
+                            val next = Pos(cur.x + dx, cur.y + dy)
+                            OverlayPositions.shortcuts[mod.name] = next
+                            params.x = next.x.roundToInt(); params.y = next.y.roundToInt()
                             safeUpdate(shortcutViews[mod.name], params)
                         },
                         onToggle = { ModuleManager.toggle(mod) }
@@ -306,24 +306,24 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         commandShortcutViews.entries.filter { it.key !in activeEntries }.forEach { (entry, view) ->
             try { wm.removeViewImmediate(view) } catch (_: Exception) {}
             commandShortcutViews.remove(entry)
-            commandShortcutPositions.remove(entry)
+            OverlayPositions.commandShortcuts.remove(entry)
         }
         activeEntries.forEachIndexed { idx, entry ->
             if (entry !in commandShortcutViews) {
-                val pos = commandShortcutPositions.getOrPut(entry) { 50f to (620f + idx * 50f) }
+                val pos = OverlayPositions.commandShortcuts.getOrPut(entry) { Pos(50f, 620f + idx * 50f) }
                 val params = overlayParams(
                     android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                     android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                    pos.first, pos.second
+                    pos.x, pos.y
                 )
                 val view = composeView {
                     CommandEntryButton(
                         text   = entry,
                         onDrag = { dx, dy ->
-                            val (cx, cy) = commandShortcutPositions[entry] ?: (0f to 0f)
-                            val nx = cx + dx; val ny = cy + dy
-                            commandShortcutPositions[entry] = nx to ny
-                            params.x = nx.roundToInt(); params.y = ny.roundToInt()
+                            val cur = OverlayPositions.commandShortcuts[entry] ?: Pos(0f, 0f)
+                            val next = Pos(cur.x + dx, cur.y + dy)
+                            OverlayPositions.commandShortcuts[entry] = next
+                            params.x = next.x.roundToInt(); params.y = next.y.roundToInt()
                             safeUpdate(commandShortcutViews[entry], params)
                         },
                         onTap = { helper?.send(entry) }
@@ -383,6 +383,21 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
 
     private fun safeUpdate(view: ComposeView?, params: android.view.WindowManager.LayoutParams) {
         view?.let { try { wm.updateViewLayout(it, params) } catch (_: Exception) {} }
+    }
+
+    /** Config.load() sonrası (overlay zaten görünürken) tüm elemanları kaydedilmiş konumlara taşır. */
+    private fun applyPositionsToViews() {
+        fun snap(view: ComposeView?, pos: Pos) {
+            view ?: return
+            val params = view.layoutParams as? android.view.WindowManager.LayoutParams ?: return
+            params.x = pos.x.roundToInt(); params.y = pos.y.roundToInt()
+            safeUpdate(view, params)
+        }
+        snap(totemView, OverlayPositions.totem)
+        snap(targetView, OverlayPositions.target)
+        snap(fabView, OverlayPositions.fab)
+        shortcutViews.forEach { (name, view) -> OverlayPositions.shortcuts[name]?.let { snap(view, it) } }
+        commandShortcutViews.forEach { (entry, view) -> OverlayPositions.commandShortcuts[entry]?.let { snap(view, it) } }
     }
 
     private fun composeView(content: @Composable () -> Unit) =

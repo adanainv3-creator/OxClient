@@ -3,10 +3,7 @@ package org.cloudburstmc.protocol.bedrock.packet;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
-import org.cloudburstmc.protocol.bedrock.data.diagnostics.EntityDiagnosticTimingInfo;
-import org.cloudburstmc.protocol.bedrock.data.diagnostics.MemoryCategoryCounter;
-import org.cloudburstmc.protocol.bedrock.data.diagnostics.SystemDiagnosticTimingInfo;
-import org.cloudburstmc.protocol.bedrock.data.diagnostics.WhiskerScopeDataSummary;
+import org.cloudburstmc.protocol.bedrock.data.diagnostics.*;
 import org.cloudburstmc.protocol.common.PacketSignal;
 
 import java.util.ArrayList;
@@ -38,6 +35,10 @@ public class ServerboundDiagnosticsPacket implements BedrockPacket{
      * @since v1001
      */
     private final List<WhiskerScopeDataSummary> whiskerScopes = new ArrayList<>();
+    /**
+     * @since v2168
+     */
+    private final List<SystemCategory> systemCategories = new ArrayList<>();
 
     @Override
     public PacketSignal handle(BedrockPacketHandler handler) {

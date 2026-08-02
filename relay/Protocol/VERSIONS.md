@@ -14,7 +14,7 @@ This library supports multiple versions of the Bedrock protocol. Below is a list
 | Bedrock_v388  |       1.13.0        |
 | Bedrock_v389  |  1.14.0 - 1.14.50   |
 | Bedrock_v390  |       1.14.60       |
-| Bedrock_v407  | 1.16.0 - 1.16.10    |
+| Bedrock_v407  |  1.16.0 - 1.16.10   |
 | Bedrock_v408  |       1.16.20       |
 | Bedrock_v419  |      1.16.100       |
 | Bedrock_v422  | 1.16.200 - 1.16.201 |
@@ -65,4 +65,5 @@ This library supports multiple versions of the Bedrock protocol. Below is a list
 | Bedrock_v924  |   1.26.0 - 1.26.3   |
 | Bedrock_v944  |  1.26.10 - 1.26.13  |
 | Bedrock_v975  |  1.26.20 - 1.26.23  |
-| Bedrock_v1001 |       1.26.30       |
+| Bedrock_v1001 |  1.26.30 - 1.26.33  |
+| Bedrock_v2168 |       1.26.40       |

@@ -3,6 +3,8 @@ package org.cloudburstmc.protocol.bedrock.packet;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
+import org.checkerframework.checker.nullness.qual.Nullable;
+import org.cloudburstmc.protocol.bedrock.data.sound.*;
 import org.cloudburstmc.protocol.common.PacketSignal;
 
 /**
@@ -16,7 +18,45 @@ import org.cloudburstmc.protocol.common.PacketSignal;
 public class ClientboundUpdateSoundDataPacket implements BedrockPacket {
 
     private long serverSoundHandle;
+    /**
+     * @deprecated since v2168
+     */
     private String type;
+    /**
+     * @since v2168
+     */
+    @Nullable
+    private FadeSoundData fade;
+    /**
+     * @since v2168
+     */
+    @Nullable
+    private PauseSoundData pause;
+    /**
+     * @since v2168
+     */
+    @Nullable
+    private ResumeSoundData resume;
+    /**
+     * @since v2168
+     */
+    @Nullable
+    private SeekToSoundData seekTo;
+    /**
+     * @since v2168
+     */
+    @Nullable
+    private SetPitchSoundData pitch;
+    /**
+     * @since v2168
+     */
+    @Nullable
+    private SetVolumeSoundData volume;
+    /**
+     * @since v2168
+     */
+    @Nullable
+    private StopSoundData stop;
 
     @Override
     public PacketSignal handle(BedrockPacketHandler handler) {
