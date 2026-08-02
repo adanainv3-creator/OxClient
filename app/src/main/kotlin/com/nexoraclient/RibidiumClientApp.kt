@@ -20,6 +20,7 @@ import com.rubidiumclient.module.misc.AutoMapArt
 import com.rubidiumclient.module.combat.AutoTotem
 import com.rubidiumclient.module.combat.Criticals
 import com.rubidiumclient.module.combat.CrystalAura
+import com.rubidiumclient.module.misc.PopCounter
 import com.rubidiumclient.module.movement.BypassFly
 import com.rubidiumclient.module.combat.KillAura
 import com.rubidiumclient.module.combat.KillAuraPro
