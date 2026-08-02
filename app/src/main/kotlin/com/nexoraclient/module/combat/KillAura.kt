@@ -6,7 +6,6 @@ import com.rubidiumclient.core.relay.RubidiumRelaySession
 import com.rubidiumclient.events.PacketEvent
 import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.*
-import com.rubidiumclient.module.misc.InventoryHelper
 import com.rubidiumclient.module.social.isFriendEntity
 import com.rubidiumclient.utils.MathUtil
 import com.rubidiumclient.utils.PacketUtil
@@ -58,6 +57,11 @@ class KillAura : BaseModule(
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
     private val autoWeapon      = bool ("AutoWeapon",       true)
+    // AutoWeapon artık InventoryHelper'ın envanter taramasına/konfigürasyonuna
+    // bağımlı değil — kılıcın ve tridentin hangi hotbar slotunda olduğu
+    // doğrudan burada belirtiliyor. InventoryHelper modülü olmasa bile çalışır.
+    private val swordSlot       = int  ("Sword Slot",       0,     0,    8)
+    private val tridentSlot     = int  ("Trident Slot",     1,     0,    8)
 
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L
@@ -279,42 +283,25 @@ class KillAura : BaseModule(
             else -> {}
         }
 
-        // Silah seçimi: yağmur/su varsa ve AutoWeapon açıksa InventoryHelper'ın
-        // ayırdığı sabit trident slotundan saldır; değilse (havadayken) yine
-        // InventoryHelper'ın kurallarına göre kılıcın oturduğu slottan saldır.
-        // AutoWeapon kapalıysa hiçbir slot zorlaması yapılmaz, seçili slot kullanılır.
+        // Silah seçimi: yağmur/su varsa ve AutoWeapon açıksa Trident Slot'tan,
+        // değilse (havadayken) Sword Slot'tan saldır. AutoWeapon kapalıysa
+        // hiçbir slot zorlaması yapılmaz, seçili slot kullanılır.
         val hotbarSlot = resolveWeaponSlot()
         PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
     }
 
     // ---------- Silah slotu seçimi ----------
-    // 1) AutoWeapon kapalıysa: dokunmuyoruz, o an seçili hotbar slotu kullanılır.
-    // 2) Yağmur yağıyorsa VEYA WorldBlockTracker gerçekten suda olduğumuzu
-    //    söylüyorsa: InventoryHelper'ın trident için ayırdığı sabit slot kullanılır.
-    // 3) İkisi de yoksa ("havadayken"): InventoryHelper'ın kurallarına göre
-    //    kılıcın bulunduğu slot kullanılır.
-    // 4) FIX: InventoryHelper cache'i boşsa (modül kapalı/henüz taramadıysa)
-    //    artık doğrudan "seçili slota" düşülmüyor — bu, o an elde tutulan şey
-    //    kılıç değilse (ör. az önce potion/gapple yediysek) sunucuya yumruk
-    //    saldırısı olarak gidiyordu. Onun yerine hotbar CANLI olarak taranıp
-    //    gerçekten bir kılıç/trident var mı diye bakılıyor; ancak hiçbir yerde
-    //    kılıç yoksa en son çare olarak seçili slota düşülür.
+    // AutoWeapon kapalıysa dokunulmaz (mevcut seçili slot kullanılır).
+    // Açıksa: yağmur/suda Trident Slot, aksi halde Sword Slot kullanılır.
+    // Artık InventoryHelper'a ya da envanterde canlı "_sword"/"trident"
+    // identifier taramasına hiç bakmıyor — direkt kullanıcının belirttiği
+    // sabit slot numarasını döndürüyor.
     private fun resolveWeaponSlot(): Int {
         val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         if (!autoWeapon.value) return fallback
 
         val wet = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
-        if (wet) {
-            InventoryHelper.currentTridentSlot?.let { return it }
-            InventoryHelper.findTridentSlotInHotbar()?.let { return it }
-            InventoryHelper.currentSwordSlot?.let { return it }
-            InventoryHelper.findSwordSlotInHotbar()?.let { return it }
-            return fallback
-        }
-
-        InventoryHelper.currentSwordSlot?.let { return it }
-        InventoryHelper.findSwordSlotInHotbar()?.let { return it }
-        return fallback
+        return if (wet) tridentSlot.value.coerceIn(0, 8) else swordSlot.value.coerceIn(0, 8)
     }
 
     private suspend fun injectCrit(s: com.rubidiumclient.core.relay.RubidiumRelaySession) {

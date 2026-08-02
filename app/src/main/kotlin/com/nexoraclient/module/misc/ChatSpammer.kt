@@ -24,7 +24,7 @@ class ChatSpammer : BaseModule(
     description = "Chat prefix + öldürme/logout spam"
 ) {
     companion object {
-        private const val VERSION      = "v1.2"
+        private const val VERSION      = "v1.3"
         private const val TAG_LINE     = "Rubidium Client $VERSION"
         private const val QUEUE_DELAY_MS = 600L
         private const val MAX_QUEUE_SIZE = 30

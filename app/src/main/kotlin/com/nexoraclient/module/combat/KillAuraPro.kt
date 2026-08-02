@@ -6,7 +6,6 @@ import com.rubidiumclient.core.relay.RubidiumRelaySession
 import com.rubidiumclient.events.PacketEvent
 import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.*
-import com.rubidiumclient.module.misc.InventoryHelper
 import com.rubidiumclient.module.social.isFriendEntity
 import com.rubidiumclient.utils.MathUtil
 import com.rubidiumclient.utils.PacketUtil
@@ -50,6 +49,10 @@ class KillAuraPro : BaseModule(
     private val headLockSmooth = float("Head Lock Smooth", 1f, 0.01f, 1f)
     private val shortcut      = bool ("Shortcut",      false)
     private val autoWeapon    = bool ("AutoWeapon",    true)
+    // AutoWeapon artık InventoryHelper'a bağımlı değil — kılıcın ve tridentin
+    // hangi hotbar slotunda olduğu doğrudan burada belirtiliyor.
+    private val swordSlot     = int  ("Sword Slot",    0,    0,  8)
+    private val tridentSlot   = int  ("Trident Slot",  1,    0,  8)
 
     @Volatile private var lastAttackMs = 0L
     @Volatile private var headLockYaw   = 0f
@@ -193,35 +196,23 @@ class KillAuraPro : BaseModule(
 
         PacketUtil.sendSwing(session)
 
-        // Silah seçimi: yağmur/su + AutoWeapon açıksa trident slotu, değilse
-        // ("havadayken") InventoryHelper'ın kılıç için ayırdığı slot kullanılır.
+        // Silah seçimi: yağmur/su + AutoWeapon açıksa Trident Slot, değilse
+        // ("havadayken") Sword Slot kullanılır.
         val hotbarSlot = resolveWeaponSlot()
         PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
     }
 
     // ---------- Silah slotu seçimi ----------
     // KillAura.kt ile birebir aynı mantık: AutoWeapon kapalıysa dokunulmaz;
-    // yağmur/suda trident slotuna, aksi halde InventoryHelper'ın gerçek
-    // konfigürasyonuna bakarak kılıcın olduğu slota geçilir.
-    // FIX: aynı kök sebep KillAura.kt'de düzeltildi — InventoryHelper cache'i
-    // boşken doğrudan seçili slota düşmek, elde kılıç yoksa yumruk saldırısına
-    // sebep oluyordu. Artık düşmeden önce hotbar canlı taranıyor.
+    // yağmur/suda Trident Slot'a, aksi halde Sword Slot'a geçilir. Artık
+    // InventoryHelper'a bağımlı değil — kullanıcının belirttiği sabit slot
+    // numarası doğrudan döndürülür.
     private fun resolveWeaponSlot(): Int {
         val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         if (!autoWeapon.value) return fallback
 
         val wet = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
-        if (wet) {
-            InventoryHelper.currentTridentSlot?.let { return it }
-            InventoryHelper.findTridentSlotInHotbar()?.let { return it }
-            InventoryHelper.currentSwordSlot?.let { return it }
-            InventoryHelper.findSwordSlotInHotbar()?.let { return it }
-            return fallback
-        }
-
-        InventoryHelper.currentSwordSlot?.let { return it }
-        InventoryHelper.findSwordSlotInHotbar()?.let { return it }
-        return fallback
+        return if (wet) tridentSlot.value.coerceIn(0, 8) else swordSlot.value.coerceIn(0, 8)
     }
 
     // Criticals.kt'deki fix ile birebir aynı prensip: gerçek zaman aralıklı

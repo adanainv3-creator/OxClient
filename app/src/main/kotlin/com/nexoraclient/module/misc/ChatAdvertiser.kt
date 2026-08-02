@@ -25,7 +25,7 @@ class ChatAdvertiser : BaseModule(
     private val shortcut          = bool("Shortcut", false)
 
     private val adsMessages = listOf(
-        "> @here Use Best Mobile Client | discord.gg/At5VHua7ZP | %RANDOM% | Rubidium Client"
+        "> @here Use Best Mobile Client | discord.gg\At5VHua7ZP | %RANDOM% | Rubidium Client"
     )
 
     private val pvpMessages = listOf(

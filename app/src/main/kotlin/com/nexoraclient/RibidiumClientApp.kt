@@ -19,7 +19,6 @@ import com.rubidiumclient.module.movement.AutoScaffold
 import com.rubidiumclient.module.misc.AutoMapArt
 import com.rubidiumclient.module.combat.AutoTotem
 import com.rubidiumclient.module.combat.Criticals
-import com.rubidiumclient.module.misc.InventoryHelper
 import com.rubidiumclient.module.combat.CrystalAura
 import com.rubidiumclient.module.movement.BypassFly
 import com.rubidiumclient.module.combat.KillAura
@@ -143,22 +142,17 @@ class RubidiumClientApp : Application() {
             ESP(),
             EnemyESP(),
             Xray(),
-            InventoryHelper(),
+            PopCounter(),
             HeadTrack(),
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
-            BypassFly(),
-            AutoScaffold(),
-            AutoMapArt(),
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect(),
             AutoBaseFinder(),
-            AutoPositionGoing(),
             ComboShortcut(1),
             ComboShortcut(2),
-            V2Aura(),
             LegitAura(),
             AirJump(),
             FreeCamera(),

@@ -34,7 +34,7 @@ class PopCounter : BaseModule(
     description = "Offhand-polling tabanlı totem pop sayacı"
 ) {
     companion object {
-        private const val VERSION      = "v1.2"
+        private const val VERSION      = "v1.3"
         private const val TAG_LINE     = "Rubidium Client $VERSION"
         private const val PVP_TAIL     = "by Rubidium Client | Best Mobile Client"
         private const val QUEUE_DELAY_MS = 600L
