@@ -616,34 +616,7 @@ private fun DashboardTab(
     onRequestAccountLogin : () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        ScreenHeader(title = "Rubidium Client V1.2", subtitle = "Made by Oxygen8315 && KillJoy739860") {
-            val context = LocalContext.current
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                IconButton(onClick = onToggleServerPanel, modifier = Modifier.size(32.dp)) {
-                    MoreVertGlyph(tint = if (showServerPanel) RubidiumAccentLight else RubidiumOnSurfaceDim)
-                }
-                IconButton(
-                    onClick = {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse("https://discord.gg/eRu3EbWdM"))
-                        )
-                    },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    DiscordGlyph(tint = RubidiumOnSurfaceDim)
-                }
-                IconButton(
-                    onClick = {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/@RubidiumClientss"))
-                        )
-                    },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    YoutubeGlyph(tint = RubidiumOnSurfaceDim)
-                }
-            }
-        }
+        ScreenHeader(title = "Rubidium Client V1.3", subtitle = "Made by Oxygen8315 && KillJoy739860")
 
         AnimatedVisibility(
             visible = !accountLoggedIn,
@@ -673,10 +646,10 @@ private fun DashboardTab(
             }
         }
 
-        SelectedApplicationCard(packageName = selectedPackage, onClick = onOpenAppPicker)
+        SelectedServerCard(host = serverHost, port = serverPort, onClick = onToggleServerPanel)
         Spacer(Modifier.height(16.dp))
 
-        SelectedServerCard(host = serverHost, port = serverPort, onClick = onToggleServerPanel)
+        SelectedApplicationCard(packageName = selectedPackage, onClick = onOpenAppPicker)
         Spacer(Modifier.height(16.dp))
 
         AnimatedVisibility(
@@ -1853,63 +1826,4 @@ private fun DocumentGlyph(modifier: Modifier = Modifier, tint: Color = Color.Whi
     }
 }
 
-@Composable
-private fun MoreVertGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-        val r = size.minDimension * 0.09f
-        val spacing = size.height * 0.32f
-        listOf(-1, 0, 1).forEach { i ->
-            drawCircle(color = tint, radius = r, center = Offset(cx, cy + i * spacing))
-        }
-    }
-}
 
-@Composable
-private fun DiscordGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.28f, h * 0.22f)
-            cubicTo(w * 0.10f, h * 0.30f, w * 0.06f, h * 0.55f, w * 0.10f, h * 0.78f)
-            cubicTo(w * 0.22f, h * 0.86f, w * 0.34f, h * 0.90f, w * 0.40f, h * 0.90f)
-            lineTo(w * 0.46f, h * 0.80f)
-            cubicTo(w * 0.36f, h * 0.76f, w * 0.30f, h * 0.71f, w * 0.30f, h * 0.71f)
-            cubicTo(w * 0.42f, h * 0.78f, w * 0.58f, h * 0.78f, w * 0.70f, h * 0.71f)
-            cubicTo(w * 0.70f, h * 0.71f, w * 0.64f, h * 0.76f, w * 0.54f, h * 0.80f)
-            lineTo(w * 0.60f, h * 0.90f)
-            cubicTo(w * 0.66f, h * 0.90f, w * 0.78f, h * 0.86f, w * 0.90f, h * 0.78f)
-            cubicTo(w * 0.94f, h * 0.55f, w * 0.90f, h * 0.30f, w * 0.72f, h * 0.22f)
-            cubicTo(w * 0.72f, h * 0.22f, w * 0.62f, h * 0.16f, w * 0.50f, h * 0.16f)
-            cubicTo(w * 0.38f, h * 0.16f, w * 0.28f, h * 0.22f, w * 0.28f, h * 0.22f)
-            close()
-        }
-        drawPath(path = path, color = tint, style = Stroke(width = h * 0.07f, cap = StrokeCap.Round))
-        drawCircle(color = tint, radius = h * 0.055f, center = Offset(w * 0.37f, h * 0.52f))
-        drawCircle(color = tint, radius = h * 0.055f, center = Offset(w * 0.63f, h * 0.52f))
-    }
-}
-
-@Composable
-private fun YoutubeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(w * 0.08f, h * 0.20f),
-            size = Size(w * 0.84f, h * 0.60f),
-            cornerRadius = CornerRadius(w * 0.18f),
-            style = Stroke(width = h * 0.09f)
-        )
-        val play = Path().apply {
-            moveTo(w * 0.42f, h * 0.36f)
-            lineTo(w * 0.42f, h * 0.64f)
-            lineTo(w * 0.66f, h * 0.50f)
-            close()
-        }
-        drawPath(path = play, color = tint)
-    }
-}
