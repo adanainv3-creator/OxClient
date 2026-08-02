@@ -46,6 +46,7 @@ import com.rubidiumclient.module.visual.FullBright
 import com.rubidiumclient.module.visual.EnemyESP
 import com.rubidiumclient.module.visual.Xray
 import com.rubidiumclient.module.combat.HeadTrack
+import com.rubidiumclient.module.combat.V2Aura
 import com.rubidiumclient.utils.WorldBlockTracker
 import com.rubidiumclient.utils.OreTracker
 
@@ -142,11 +143,17 @@ class RubidiumClientApp : Application() {
             FOVChanger(),
             ArrayListModule(),
             AutoArmor(),
+            BypassFly(),
+            AutoScaffold(),
+            AutoMapArt(),
             ChatSpammer(),
             ChatAdvertiser(),
             Disconnect(),
+            AutoBaseFinder(),
+            AutoPositionGoing(),
             ComboShortcut(1),
-            ComboShortcut(2)
+            ComboShortcut(2),
+            V2Aura()
         )
     }
 }
