@@ -47,6 +47,11 @@ import com.rubidiumclient.module.visual.EnemyESP
 import com.rubidiumclient.module.visual.Xray
 import com.rubidiumclient.module.combat.HeadTrack
 import com.rubidiumclient.module.combat.V2Aura
+import com.rubidiumclient.module.combat.LegitAura
+import com.rubidiumclient.module.movement.AirJump
+import com.rubidiumclient.module.movement.FreeCamera
+import com.rubidiumclient.module.movement.LifeboatFly
+import com.rubidiumclient.module.movement.NoClipModule
 import com.rubidiumclient.utils.WorldBlockTracker
 import com.rubidiumclient.utils.OreTracker
 
@@ -153,7 +158,12 @@ class RubidiumClientApp : Application() {
             AutoPositionGoing(),
             ComboShortcut(1),
             ComboShortcut(2),
-            V2Aura()
+            V2Aura(),
+            LegitAura(),
+            AirJump(),
+            FreeCamera(),
+            LifeboatFly(),
+            NoClipModule()
         )
     }
 }
