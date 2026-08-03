@@ -136,6 +136,70 @@ private object UnlockSessionStore {
     }
 }
 
+/**
+ * Caches the gate password fetched from the server so the unlock screen can
+ * check it locally instead of calling the server on every attempt. Refreshed
+ * in the background at most once every REFRESH_INTERVAL_MS; if the server is
+ * unreachable, the previously cached value (or DEFAULT_PASSWORD on a fresh
+ * install) keeps working.
+ */
+private object GatePasswordStore {
+    private const val PREFS_NAME       = "rubidiumclient_prefs"
+    private const val KEY_PASSWORD     = "gate_password"
+    private const val KEY_FETCHED_AT   = "gate_password_fetched_at"
+    private const val REFRESH_INTERVAL_MS = 8 * 60 * 60 * 1000L // 8 saat
+    const val DEFAULT_PASSWORD = "public"
+
+    fun get(context: Context): String =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_PASSWORD, null) ?: DEFAULT_PASSWORD
+
+    fun hasCached(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .contains(KEY_PASSWORD)
+
+    fun set(context: Context, password: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PASSWORD, password)
+            .putLong(KEY_FETCHED_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    fun needsRefresh(context: Context): Boolean {
+        val fetchedAt = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_FETCHED_AT, 0L)
+        return System.currentTimeMillis() - fetchedAt >= REFRESH_INTERVAL_MS
+    }
+}
+
+private const val GATE_PASSWORD_URL = "https://oxclient.com.tr/gate-password"
+
+/** GETs the current gate password from the server. Returns null on any failure. */
+private fun fetchGatePassword(): String? {
+    return try {
+        val url = java.net.URL(GATE_PASSWORD_URL)
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8000
+            readTimeout = 8000
+        }
+        val stream = if (conn.responseCode in 200..299) conn.inputStream else return null
+        val responseText = stream.bufferedReader().use { it.readText() }
+        val password = org.json.JSONObject(responseText).optString("password", "")
+        password.ifBlank { null }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** Refreshes the cached gate password if it's missing or older than the refresh interval. */
+private suspend fun refreshGatePasswordIfNeeded(context: Context) {
+    if (GatePasswordStore.hasCached(context) && !GatePasswordStore.needsRefresh(context)) return
+    val fetched = withContext(Dispatchers.IO) { fetchGatePassword() }
+    if (fetched != null) GatePasswordStore.set(context, fetched)
+}
+
 private enum class DashTab { RELAY, CONFIG, ACCOUNTS }
 
 class DashboardActivity : ComponentActivity() {
@@ -175,6 +239,10 @@ class DashboardActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Keeps the locally cached gate password fresh (at most once every
+        // 8h) regardless of whether the lock screen is currently showing.
+        lifecycleScope.launch { refreshGatePasswordIfNeeded(this@DashboardActivity) }
 
         setContent {
             RubidiumClientTheme {
@@ -293,40 +361,18 @@ class DashboardActivity : ComponentActivity() {
     }
 }
 
-// Gate password check is verified against the backend (/verify) instead of a
-// local hardcoded string. Only the password is sent — no email/identity leaves
-// the device for this check.
-private const val VERIFY_URL = "https://oxclient.com.tr/verify"
-
-/** POSTs { "password": ... } to /verify (no email field) and returns the "valid" flag. */
-private fun checkGatePassword(password: String): Boolean {
-    return try {
-        val url = java.net.URL(VERIFY_URL)
-        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-            requestMethod = "POST"
-            doOutput = true
-            connectTimeout = 8000
-            readTimeout = 8000
-            setRequestProperty("Content-Type", "application/json")
-        }
-        val body = org.json.JSONObject().apply { put("password", password) }.toString()
-        conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-
-        val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
-        val responseText = stream?.bufferedReader()?.use { it.readText() } ?: return false
-        org.json.JSONObject(responseText).optBoolean("valid", false)
-    } catch (_: Exception) {
-        false
-    }
-}
-
 @Composable
 private fun PasswordGateScreen(onUnlock: () -> Unit) {
+    val context = LocalContext.current
     var input by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var passwordVisible by remember { mutableStateOf(false) }
     var isChecking by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    // Keeps the cache warm while the user is sitting on this screen, in case
+    // the app was offline at launch and the server has since come back.
+    LaunchedEffect(Unit) { refreshGatePasswordIfNeeded(context) }
 
     val canSubmit = input.isNotBlank() && !isChecking
 
@@ -335,7 +381,10 @@ private fun PasswordGateScreen(onUnlock: () -> Unit) {
         isChecking = true
         errorMessage = null
         scope.launch {
-            val valid = withContext(Dispatchers.IO) { checkGatePassword(input) }
+            // Checked against the locally cached password, refreshed from the
+            // server at most every 8 hours — a down server no longer blocks
+            // logins.
+            val valid = GatePasswordStore.get(context) == input
             isChecking = false
             if (valid) {
                 onUnlock()

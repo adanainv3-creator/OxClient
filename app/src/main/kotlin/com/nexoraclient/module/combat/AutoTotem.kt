@@ -6,10 +6,19 @@ import com.rubidiumclient.events.PacketEvent
 import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.*
 import com.rubidiumclient.utils.InventoryUtil
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
+import java.util.concurrent.Executors
 
 class AutoTotem : BaseModule(
     name        = "AutoTotem",
@@ -17,11 +26,18 @@ class AutoTotem : BaseModule(
     description = "Totemi sürekli sol ele takar"
 ) {
     companion object {
-        private const val RESEND_COOLDOWN_MS = 40L
+        private const val RESEND_COOLDOWN_MS = 8L
+        private const val TICK_INTERVAL_MS   = 5L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
 
-    @Volatile private var tickJob: kotlinx.coroutines.Job? = null
+    private val totemDispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "AutoTotem-Tick").apply { isDaemon = true; priority = Thread.MAX_PRIORITY }
+    }.asCoroutineDispatcher()
+
+    private val totemScope = CoroutineScope(totemDispatcher + SupervisorJob())
+
+    @Volatile private var tickJob: Job? = null
     @Volatile private var totemSlot = -1
     @Volatile private var offhandHasTotem = false
     @Volatile private var lastSendMs = 0L
@@ -36,7 +52,14 @@ class AutoTotem : BaseModule(
         if (!offhandHasTotem && totemSlot >= 0) {
             equipTotem()
         }
-        tickJob = launchTickLoop(20L) { tickCheck() }
+        tickJob = totemScope.launch {
+            while (currentCoroutineContext().isActive) {
+                if (isEnabled) {
+                    try { tickCheck() } catch (e: Exception) { }
+                }
+                delay(TICK_INTERVAL_MS)
+            }
+        }
     }
 
     override fun onDisable() {
@@ -124,6 +147,13 @@ class AutoTotem : BaseModule(
                     refreshFromSnapshot()
                     if (totemSlot >= 0) equipTotem()
                 }
+            }
+
+            is UpdateAttributesPacket -> {
+                if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
+                if (offhandHasTotem) return
+                val health = pkt.attributes.firstOrNull { it.name == "minecraft:health" } ?: return
+                if (health.value <= health.maxValue * 0.35f && totemSlot >= 0) equipTotem()
             }
         }
     }

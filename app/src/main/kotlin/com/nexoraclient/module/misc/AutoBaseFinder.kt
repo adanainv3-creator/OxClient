@@ -33,7 +33,7 @@ import kotlin.math.sin
  * hedef Y'ye ulasmak icin ayni yukari/ileri itis mantigini kullanir.
  */
 class AutoBaseFinder : BaseModule(
-    name        = "AutoBaseFinder",
+    name        = "AutoStashHunter",
     category    = ModuleCategory.MISC,
     description = "Belirlenen Y seviyesinde ucarak depolama bloklarini arar, bulunca otomatik /sethome atar"
 ) {

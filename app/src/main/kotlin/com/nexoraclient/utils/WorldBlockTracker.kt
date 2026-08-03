@@ -8,6 +8,7 @@ import org.cloudburstmc.protocol.bedrock.packet.ChangeDimensionPacket
 import org.cloudburstmc.protocol.bedrock.packet.ClientCacheStatusPacket
 import org.cloudburstmc.protocol.bedrock.packet.LevelChunkPacket
 import org.cloudburstmc.protocol.bedrock.packet.SubChunkPacket
+import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateBlockPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateSubChunkBlocksPacket
 import java.util.concurrent.ConcurrentHashMap
@@ -54,9 +55,41 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     fun reset() {
         sections.clear(); insertOrder.clear(); overrides.clear()
         loggedFirstSuccess = false; loggedFirstFailure = false
+        debugLoggedCacheStatusSeen = false
+        debugLoggedLevelChunkSeen = false
+        debugLoggedSubChunkSeen = false
     }
 
     @Volatile private var loggedCacheOverride = false
+
+    // ---- GEÇİCİ DEBUG ENSTRÜMANTASYONU ----
+    // "No chunk data" kaynağını kesinleştirmek için: her dalın gerçekten
+    // çalışıp çalışmadığını oyun içi mesajla gösteriyoruz. Her biri sadece
+    // BİR KERE (session başına) tetiklenir ki spam olmasın. Sorun bulununca
+    // DEBUG_ENABLED = false yapılıp ya da bu bloklar tamamen kaldırılabilir.
+    private const val DEBUG_ENABLED = true
+
+    @Volatile private var debugLoggedCacheStatusSeen = false
+    @Volatile private var debugLoggedLevelChunkSeen   = false
+    @Volatile private var debugLoggedSubChunkSeen     = false
+
+    private fun debugMsg(text: String) {
+        if (!DEBUG_ENABLED) return
+        try {
+            PacketEventBus.currentSession?.sendToClient(
+                TextPacket().apply {
+                    type = TextPacket.Type.RAW
+                    isNeedsTranslation = false
+                    sourceName = ""
+                    message = "§b[WBT] $text"
+                    xuid = ""
+                    platformChatId = ""
+                }
+            )
+        } catch (e: Exception) {
+        }
+    }
+    // ---- /GEÇİCİ DEBUG ENSTRÜMANTASYONU ----
 
     // KRİTİK FIX: KillAura.kt'deki headlock fix'iyle birebir aynı kök sebep —
     // event.cancelAndReplace(p) çağrılmadan yapılan mutation'lar hiçbir zaman
@@ -68,19 +101,36 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     // return ediyor, yani sections HİÇBİR ZAMAN dolmuyordu (AutoMapArt "No chunk
     // data" hatasının asıl kaynağı buydu).
     private fun handleClientCacheStatus(event: PacketEvent, p: ClientCacheStatusPacket) {
+        if (!debugLoggedCacheStatusSeen) {
+            debugLoggedCacheStatusSeen = true
+            debugMsg("ClientCacheStatusPacket görüldü, isSupported=${p.isSupported}")
+        }
         if (p.isSupported) {
             p.isSupported = false
             if (!loggedCacheOverride) {
                 loggedCacheOverride = true
             }
             event.cancelAndReplace(p)
+            debugMsg("cache override gönderildi, isSupported=false yapıldı")
         }
     }
 
     override fun onPacket(event: PacketEvent) {
         when (val p = event.packet) {
-            is SubChunkPacket -> handleSubChunkPacket(p)
-            is LevelChunkPacket -> handleLevelChunkPacket(p)
+            is SubChunkPacket -> {
+                if (!debugLoggedSubChunkSeen) {
+                    debugLoggedSubChunkSeen = true
+                    debugMsg("SubChunkPacket görüldü (ilk kez)")
+                }
+                handleSubChunkPacket(p)
+            }
+            is LevelChunkPacket -> {
+                if (!debugLoggedLevelChunkSeen) {
+                    debugLoggedLevelChunkSeen = true
+                    debugMsg("LevelChunkPacket görüldü (ilk kez), cachingEnabled=${runCatching { p.isCachingEnabled() }.getOrNull()}")
+                }
+                handleLevelChunkPacket(p)
+            }
             is UpdateBlockPacket -> handleUpdateBlock(p)
             is UpdateSubChunkBlocksPacket -> handleUpdateSubChunkBlocks(p)
             is ClientCacheStatusPacket -> handleClientCacheStatus(event, p)
@@ -178,6 +228,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                 if (blocks == null) {
                     if (!loggedFirstFailure) {
                         loggedFirstFailure = true
+                        debugMsg("SubChunk decode FAILED (ilk kez)")
                     }
                     continue
                 }
@@ -186,8 +237,10 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
                 if (!loggedFirstSuccess) {
                     loggedFirstSuccess = true
+                    debugMsg("SubChunk decode OK (ilk kez), sections=${sections.size}")
                 }
             } catch (e: Exception) {
+                debugMsg("SubChunk exception: ${e.javaClass.simpleName}: ${e.message}")
             }
         }
     }
@@ -211,6 +264,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             if (subChunksLength <= 0) {
                 if (!loggedFirstFailure) {
                     loggedFirstFailure = true
+                    debugMsg("subChunksLength <= 0 (ilk kez), resolveSubChunkCount başarısız")
                 }
                 return
             }
@@ -220,6 +274,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
                 if (!loggedFirstFailure) {
                     loggedFirstFailure = true
+                    debugMsg("cachingEnabled=true (ilk kez) — chunk drop edildi, override işe yaramamış")
                 }
                 return
             }
@@ -242,6 +297,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                 if (blocks == null) {
                     if (!loggedFirstFailure) {
                         loggedFirstFailure = true
+                        debugMsg("LevelChunk subchunk decode FAILED (ilk kez), i=$i / $subChunksLength")
                     }
                     break
                 }
@@ -251,8 +307,10 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
             if (decodedCount > 0 && !loggedFirstSuccess) {
                 loggedFirstSuccess = true
+                debugMsg("LevelChunk decode OK (ilk kez), decodedCount=$decodedCount, sections=${sections.size}")
             }
         } catch (e: Exception) {
+            debugMsg("LevelChunk exception: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 

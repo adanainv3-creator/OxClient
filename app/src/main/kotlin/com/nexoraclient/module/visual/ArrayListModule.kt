@@ -2,45 +2,56 @@ package com.rubidiumclient.module.visual
 
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
-import android.graphics.Shader
 import com.rubidiumclient.module.BaseModule
 import com.rubidiumclient.module.ModuleCategory
 import com.rubidiumclient.module.ModuleManager
 import kotlin.math.min
 
+/**
+ * Sade/estetik varyant — önceki rainbow-gradient tasarım yerine, kategoriye
+ * göre sabit, göz yormayan pastel bir vurgu rengi kullanılıyor. Rainbow
+ * animasyonu ve LinearGradient/HSV hesaplaması tamamen kaldırıldı, bu da
+ * kodu hem daha sade hem de daha performanslı yapıyor (her frame gradient/
+ * renk yeniden hesaplamıyor).
+ */
 class ArrayListModule : BaseModule(
     name = "ArrayList",
     category = ModuleCategory.VISUAL,
-    description = "Aktif modülleri sağ üst köşede renkli liste halinde gösterir"
+    description = "Aktif modülleri sağ üst köşede sade bir liste halinde gösterir"
 ) {
     private val activationTimestamps = HashMap<String, Long>()
     private val slideProgress = HashMap<String, Float>()
     private var lastFrameTimeNs = 0L
 
     companion object {
-        private const val RAINBOW_STOPS = 6
-        private const val GRADIENT_BASE_WIDTH = 200f
-        private const val RAINBOW_INTERVAL_MS = 33L
+        // Kategoriye göre sabit, pastel/desatüre vurgu renkleri — göz alıcı
+        // parlak/rainbow tonlar yerine sakin, birbirinden ayırt edilebilir
+        // ama baskın olmayan renkler.
+        // NOT: ModuleCategory.SOCIAL ismi diğer kategorilerle (COMBAT/MOVEMENT/
+        // VISUAL/MISC) aynı isimlendirme deseninden (module/social paketi ->
+        // SOCIAL) çıkarıldı, doğrulanmadı. Derleme hatası alırsan bu satırı
+        // gerçek enum sabitinin ismiyle güncelle ya da tamamen kaldır.
+        private fun accentColorFor(category: ModuleCategory): Int = when (category) {
+            ModuleCategory.COMBAT   -> Color.rgb(0xCB, 0x8A, 0x8E) // muted rose
+            ModuleCategory.MOVEMENT -> Color.rgb(0x7E, 0x9C, 0xC2) // muted slate blue
+            ModuleCategory.VISUAL   -> Color.rgb(0xA6, 0x98, 0xC9) // muted lavender
+            ModuleCategory.SOCIAL   -> Color.rgb(0x74, 0xAD, 0xA3) // muted teal
+            ModuleCategory.MISC     -> Color.rgb(0x9A, 0xA3, 0x9E) // muted sage
+            else                    -> Color.rgb(0xB0, 0xB0, 0xB0) // fallback: nötr gri
+        }
     }
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 30f
+        textSize = 27f
         textAlign = Paint.Align.RIGHT
-        setShadowLayer(3f, 1f, 1f, Color.BLACK)
+        color = Color.rgb(0xEC, 0xEC, 0xEC) // yumuşak off-white, saf beyaz değil
+        setShadowLayer(1.6f, 0f, 1f, Color.argb(140, 0, 0, 0)) // hafif, göze batmayan gölge
     }
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val reusableRect = RectF()
-    private val gradientMatrix = Matrix()
-    private val hsvBuf = FloatArray(3).apply { this[1] = 0.85f; this[2] = 1f }
-
-    private val colorCache = HashMap<String, IntArray>()
-    private val gradientCache = HashMap<String, LinearGradient>()
-    private var lastRainbowUpdateMs = 0L
 
     private var cachedVersion = -1
     private var cachedSorted: List<BaseModule> = emptyList()
@@ -50,10 +61,7 @@ class ArrayListModule : BaseModule(
         super.onEnable()
         activationTimestamps.clear()
         slideProgress.clear()
-        colorCache.clear()
-        gradientCache.clear()
         lastFrameTimeNs = 0L
-        lastRainbowUpdateMs = 0L
         cachedVersion = -1
     }
 
@@ -101,13 +109,7 @@ class ArrayListModule : BaseModule(
                 if (next <= 0f) toRemove.add(key) else slideProgress[key] = next
             }
         }
-        if (toRemove.isNotEmpty()) {
-            toRemove.forEach {
-                slideProgress.remove(it)
-                colorCache.remove(it)
-                gradientCache.remove(it)
-            }
-        }
+        if (toRemove.isNotEmpty()) toRemove.forEach { slideProgress.remove(it) }
         if (slideProgress.isEmpty()) return
 
         val fadingOut = slideProgress.keys.filter { it !in activeNames }
@@ -116,23 +118,16 @@ class ArrayListModule : BaseModule(
                 fadingOut.mapNotNull { n -> ModuleManager.byName(n)?.let { n to it.category } }
 
         val fm = textPaint.fontMetrics
-        val lineH = (fm.descent - fm.ascent) + 12f
+        val lineH = (fm.descent - fm.ascent) + 11f
         val rightX = screenW - 16f
 
-        val cycleMs = 1000f
-        val nowMs = System.currentTimeMillis()
-        val basePhase = ((nowMs % cycleMs) / cycleMs) * 360f
-
-        val refreshRainbow = nowMs - lastRainbowUpdateMs >= RAINBOW_INTERVAL_MS
-        if (refreshRainbow) lastRainbowUpdateMs = nowMs
-
         var y = 16f
-        drawOrder.forEachIndexed { index, (name, _) ->
-            val progress = slideProgress[name] ?: return@forEachIndexed
+        for ((name, category) in drawOrder) {
+            val progress = slideProgress[name] ?: continue
 
             val textW = textPaint.measureText(name)
-            val accentW = 6f
-            val boxW = textW + 20f + accentW
+            val accentW = 3f
+            val boxW = textW + 18f + accentW
 
             val slideOffset = (1f - progress) * (boxW + 24f)
             val boxRight = rightX + slideOffset
@@ -141,46 +136,23 @@ class ArrayListModule : BaseModule(
             val boxBottom = y + lineH - 6f
 
             val alpha = (255 * progress).toInt().coerceIn(0, 255)
+            val accentColor = accentColorFor(category)
 
-            var colors = colorCache[name]
-            if (refreshRainbow || colors == null) {
-                val arr = colors ?: IntArray(RAINBOW_STOPS).also { colorCache[name] = it }
-                for (i in 0 until RAINBOW_STOPS) {
-                    val hue = ((basePhase + index * -40f + i * (360f / RAINBOW_STOPS)) % 360f + 360f) % 360f
-                    hsvBuf[0] = hue
-                    arr[i] = Color.HSVToColor(hsvBuf)
-                }
-                colors = arr
-                gradientCache[name] = LinearGradient(
-                    0f, 0f, GRADIENT_BASE_WIDTH, 0f, arr, null, Shader.TileMode.CLAMP
-                )
-            }
-            val gradient = gradientCache[name] ?: LinearGradient(
-                0f, 0f, GRADIENT_BASE_WIDTH, 0f, colors, null, Shader.TileMode.CLAMP
-            ).also { gradientCache[name] = it }
-
+            // Arka plan: sade, yarı saydam koyu dikdörtgen — flashy hiçbir şey yok.
             reusableRect.set(boxLeft, boxTop, boxRight, boxBottom)
-            bgPaint.shader = null
-            bgPaint.color = Color.BLACK
-            bgPaint.alpha = (110 * progress).toInt().coerceIn(0, 255)
-            canvas.drawRoundRect(reusableRect, 8f, 8f, bgPaint)
+            bgPaint.color = Color.rgb(0x14, 0x14, 0x16)
+            bgPaint.alpha = (95 * progress).toInt().coerceIn(0, 255)
+            canvas.drawRoundRect(reusableRect, 6f, 6f, bgPaint)
 
-            reusableRect.set(boxLeft, boxTop, boxLeft + 5f, boxBottom)
-            accentPaint.shader = null
-            accentPaint.color = colors[0]
+            // İnce, sabit renkli kategori şeridi (kalın/parlak değil).
+            reusableRect.set(boxLeft, boxTop, boxLeft + 3f, boxBottom)
+            accentPaint.color = accentColor
             accentPaint.alpha = alpha
-            canvas.drawRoundRect(reusableRect, 3f, 3f, accentPaint)
+            canvas.drawRoundRect(reusableRect, 1.5f, 1.5f, accentPaint)
 
-            val textLeft = boxRight - 10f - textW
-            val scaleX = if (textW > 0f) textW / GRADIENT_BASE_WIDTH else 1f
-            gradientMatrix.setScale(scaleX, 1f)
-            gradientMatrix.postTranslate(textLeft, 0f)
-            gradient.setLocalMatrix(gradientMatrix)
-
-            textPaint.shader = gradient
             textPaint.alpha = alpha
-            val textY = boxTop + 6f - fm.ascent
-            canvas.drawText(name, boxRight - 10f, textY, textPaint)
+            val textY = boxTop + 5f - fm.ascent
+            canvas.drawText(name, boxRight - 9f, textY, textPaint)
 
             y += lineH
         }

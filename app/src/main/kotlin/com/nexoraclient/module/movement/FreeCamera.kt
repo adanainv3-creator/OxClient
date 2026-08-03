@@ -5,12 +5,15 @@ import com.rubidiumclient.core.relay.RubidiumRelaySession
 import com.rubidiumclient.events.PacketEvent
 import com.rubidiumclient.module.*
 import com.rubidiumclient.utils.PacketUtil
+import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.Ability
 import org.cloudburstmc.protocol.bedrock.data.AbilityLayer
+import org.cloudburstmc.protocol.bedrock.data.PlayerAuthInputData
 import org.cloudburstmc.protocol.bedrock.data.PlayerPermission
 import org.cloudburstmc.protocol.bedrock.data.command.CommandPermission
 import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
+import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket
 import org.cloudburstmc.protocol.bedrock.packet.UpdateAbilitiesPacket
 
 /**
@@ -41,8 +44,14 @@ class FreeCamera : BaseModule(
     category    = ModuleCategory.MOVEMENT,
     description = "Lokal NOCLIP+uçuş ile serbest kamera; sunucuya dondurulmuş pozisyon gönderilir"
 ) {
-    private val heartbeatMs = int("Heartbeat", 200, 50, 1000)
-    private val flySpeed    = float("Fly Speed", 0.6f, 0.1f, 2.0f)
+    private val heartbeatMs   = int  ("Heartbeat",       200, 50,  1000)
+    private val flySpeed      = float("Fly Speed",       0.6f, 0.1f, 2.0f)
+    // FIX: ability layer'daki verticalFlySpeed native istemcinin gerçek
+    // dikey hızını her zaman etkilemiyor (bazı versiyonlarda dikey hız sabit/
+    // ayrı hesaplanıyor) — bu yüzden AirJump/NoClipModule/LifeboatFly'daki
+    // gibi Jump/Sneak'e doğrudan SetEntityMotionPacket enjekte ederek garantili
+    // bir dikey hız veriyoruz, ability alanına güvenmek yerine.
+    private val verticalSpeed = float("Vertical Speed",  1.0f, 0.1f, 3.0f)
 
     @Volatile private var active = false
     @Volatile private var frozenX = 0f
@@ -70,8 +79,8 @@ class FreeCamera : BaseModule(
             lastSession?.let { session ->
                 session.clientBound(MovePlayerPacket().apply {
                     runtimeEntityId       = EntityTracker.selfRuntimeId
-                    position              = org.cloudburstmc.math.vector.Vector3f.from(frozenX, frozenY, frozenZ)
-                    rotation              = org.cloudburstmc.math.vector.Vector3f.from(frozenPitch, frozenYaw, frozenYaw)
+                    position              = Vector3f.from(frozenX, frozenY, frozenZ)
+                    rotation              = Vector3f.from(frozenPitch, frozenYaw, frozenYaw)
                     mode                  = MovePlayerPacket.Mode.TELEPORT
                     isOnGround            = true
                     ridingRuntimeEntityId = 0L
@@ -112,6 +121,22 @@ class FreeCamera : BaseModule(
 
         // Gerçek (freecam) hareketi sunucuya asla gitmiyor.
         event.cancel()
+
+        // Dikey hareket: ability'nin verticalFlySpeed'ine güvenmek yerine
+        // Jump=yukarı / Sneak=aşağı için doğrudan motion enjekte ediyoruz —
+        // garanti hız, native istemcinin iç fizik sabitlerine bağımlı değil.
+        var verticalMotion = 0f
+        if (pkt.inputData.contains(PlayerAuthInputData.JUMPING)) {
+            verticalMotion = verticalSpeed.value
+        } else if (pkt.inputData.contains(PlayerAuthInputData.SNEAKING)) {
+            verticalMotion = -verticalSpeed.value
+        }
+        if (verticalMotion != 0f) {
+            event.session.clientBound(SetEntityMotionPacket().apply {
+                runtimeEntityId = EntityTracker.selfRuntimeId
+                motion = Vector3f.from(0f, verticalMotion, 0f)
+            })
+        }
 
         val now = System.currentTimeMillis()
         if (now - lastHeartbeatMs >= heartbeatMs.value) {
