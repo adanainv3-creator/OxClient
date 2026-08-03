@@ -52,6 +52,14 @@ import com.rubidiumclient.module.movement.AirJump
 import com.rubidiumclient.module.movement.FreeCamera
 import com.rubidiumclient.module.movement.LifeboatFly
 import com.rubidiumclient.module.movement.NoClipModule
+import com.rubidiumclient.module.combat.AntiCrystal
+import com.rubidiumclient.module.combat.SelfTrap
+import com.rubidiumclient.module.combat.AutoTrap
+import com.rubidiumclient.module.combat.PistonAura
+import com.rubidiumclient.module.movement.AntiPiston
+import com.rubidiumclient.module.combat.BedAura
+import com.rubidiumclient.module.combat.AntiBed
+import com.rubidiumclient.module.misc.AutoMine
 import com.rubidiumclient.utils.WorldBlockTracker
 import com.rubidiumclient.utils.OreTracker
 
@@ -160,7 +168,19 @@ class RubidiumClientApp : Application() {
             AutoTravel(),
             LifeboatFly(),
             Performance(),
-            NoClipModule()
+            NoClipModule(),
+            AntiCrystal(),
+            SelfTrap(),
+            AutoTrap(),
+            PistonAura(),
+            AntiPiston(),
+            BedAura(),
+            AntiBed(),
+            AutoMine(),
+            AutoMapArt(),
+            BypassFly(),
+            AutoScaffold(),
+            CommandHelper()
         )
     }
 }
