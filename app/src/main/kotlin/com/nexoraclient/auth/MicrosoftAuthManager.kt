@@ -89,7 +89,7 @@ object MicrosoftAuthManager {
             runCatching { doTokenExchangeFlow(code) }
                 .onFailure { e ->
                     if (e !is CancellationException) {
-                        _authState.value = AuthState.Error(e.message ?: "Giriş başarısız")
+                        _authState.value = AuthState.Error(e.message ?: "Sign-in failed")
                     } else {
                         _authState.value = AuthState.Idle
                     }
@@ -129,7 +129,7 @@ object MicrosoftAuthManager {
                 runCatching { refreshTokenSilently(account) }
                     .onFailure { e ->
                         if (e !is CancellationException) {
-                            _authState.value = AuthState.Error(e.message ?: "Hesap yenilenemedi")
+                            _authState.value = AuthState.Error(e.message ?: "Account could not be refreshed")
                         }
                     }
             }
@@ -251,7 +251,7 @@ object MicrosoftAuthManager {
             _authState.value = AuthState.Success(account.gamertag, mcResult.chainJson)
 
         } catch (e: Exception) {
-            _authState.value = AuthState.Error("Token yenileme başarısız: ${e.message}")
+            _authState.value = AuthState.Error("Token refresh failed: ${e.message}")
         }
     }
 
@@ -273,11 +273,11 @@ object MicrosoftAuthManager {
         if (resp.has("error")) {
             val err = resp.optString("error")
             val desc = resp.optString("error_description", "")
-            error("XBL hatası: $err — $desc")
+            error("XBL error: $err — $desc")
         }
 
         val token = resp.optString("Token").takeIf { it.isNotBlank() }
-            ?: error("XBL Token alanı boş — yanıt: ${respText.take(400)}")
+            ?: error("XBL Token field empty — response: ${respText.take(400)}")
 
         val xui      = resp.optJSONObject("DisplayClaims")
             ?.optJSONArray("xui")
@@ -306,23 +306,23 @@ object MicrosoftAuthManager {
         if (resp.has("XErr")) {
             val xerr = resp.optLong("XErr")
             val msg = when (xerr) {
-                2148916233L -> "Xbox hesabı yok. Lütfen xbox.com'dan oluşturun."
-                2148916238L -> "Çocuk hesabı — ebeveyn onayı gerekli."
-                else        -> "XSTS hatası: $xerr — ${resp.optString("Message")}"
+                2148916233L -> "No Xbox account. Please create one at xbox.com."
+                2148916238L -> "Child account — parental consent required."
+                else        -> "XSTS error: $xerr — ${resp.optString("Message")}"
             }
             error(msg)
         }
 
         val token = resp.optString("Token").takeIf { it.isNotBlank() }
-            ?: error("XSTS Token alanı boş — yanıt: ${respText.take(400)}")
+            ?: error("XSTS Token field empty — response: ${respText.take(400)}")
 
         val xui      = resp.optJSONObject("DisplayClaims")
             ?.optJSONArray("xui")
             ?.optJSONObject(0)
-            ?: error("XSTS DisplayClaims.xui[0] yok — yanıt: ${respText.take(400)}")
+            ?: error("XSTS DisplayClaims.xui[0] missing — response: ${respText.take(400)}")
 
         val uhs      = xui.optString("uhs").takeIf { it.isNotBlank() }
-            ?: error("XSTS uhs boş")
+            ?: error("XSTS uhs empty")
         val gamertag = xui.optString("gtg") ?: ""
 
         return XblAuthResult(token, uhs, gamertag)
@@ -382,7 +382,7 @@ object MicrosoftAuthManager {
             if (!resp.isSuccessful) {
                 error("MC /authentication HTTP ${resp.code} — $body")
             }
-            body.ifBlank { error("MC /authentication yanıtı boş") }
+            body.ifBlank { error("MC /authentication response empty") }
         }
 
         val json             = JSONObject(responseText)
@@ -424,7 +424,7 @@ object MicrosoftAuthManager {
         }
 
         val token = json.optString("token").takeIf { it.isNotBlank() }
-            ?: error("MC token alınamadı: $responseText")
+            ?: error("MC token could not be obtained: $responseText")
 
         val fallbackChain = JSONObject().apply {
             put("chain", JSONArray().apply { put(deviceJwt); put(token) })
@@ -499,11 +499,11 @@ object MicrosoftAuthManager {
 
     private fun derToRaw(der: ByteArray): ByteArray {
         var i = 2
-        check(der[i] == 0x02.toByte()) { "DER: r tag bekleniyor" }
+        check(der[i] == 0x02.toByte()) { "DER: expected r tag" }
         i++
         val rLen = der[i++].toInt() and 0xFF
         val r    = der.copyOfRange(i, i + rLen); i += rLen
-        check(der[i] == 0x02.toByte()) { "DER: s tag bekleniyor" }
+        check(der[i] == 0x02.toByte()) { "DER: expected s tag" }
         i++
         val sLen = der[i++].toInt() and 0xFF
         val s    = der.copyOfRange(i, i + sLen)
@@ -582,5 +582,5 @@ object MicrosoftAuthManager {
         }
 
     private fun Map<String, Any?>.str(key: String): String =
-        this[key] as? String ?: error("'$key' alanı bulunamadı — yanıt: ${this.keys}")
+        this[key] as? String ?: error("'$key' field not found — response: ${this.keys}")
 }

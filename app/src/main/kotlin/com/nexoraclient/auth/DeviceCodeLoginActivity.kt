@@ -26,7 +26,7 @@ class DeviceCodeLoginActivity : ComponentActivity() {
             append("&redirect_uri=${android.net.Uri.encode(REDIRECT_URI)}")
             append("&scope=${android.net.Uri.encode(SCOPE)}")
             append("&display=touch")
-            append("&locale=tr")
+            append("&locale=en")
         }
     }
 
@@ -113,12 +113,12 @@ class DeviceCodeLoginActivity : ComponentActivity() {
         when {
             !code.isNullOrBlank() -> {
                 codeExchanged = true
-                Toast.makeText(this, "Kod alındı, bağlanıyor…", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Code received, connecting…", Toast.LENGTH_SHORT).show()
                 MicrosoftAuthManager.exchangeCodeForToken(code)
                 finish()
             }
             !err.isNullOrBlank() -> {
-                Toast.makeText(this, "Giriş başarısız: $err", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Sign-in failed: $err", Toast.LENGTH_LONG).show()
                 finish()
             }
         }
