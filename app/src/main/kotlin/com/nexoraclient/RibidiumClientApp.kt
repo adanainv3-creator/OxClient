@@ -47,7 +47,6 @@ import com.rubidiumclient.module.visual.FullBright
 import com.rubidiumclient.module.visual.TargetHud
 import com.rubidiumclient.module.visual.Xray
 import com.rubidiumclient.module.combat.HeadTrack
-import com.rubidiumclient.module.combat.V2Aura
 import com.rubidiumclient.module.combat.LegitAura
 import com.rubidiumclient.module.movement.AirJump
 import com.rubidiumclient.module.movement.FreeCamera

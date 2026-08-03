@@ -1546,6 +1546,8 @@ private fun SettingsLinkRow(
 }
 
 
+@Composable
+private fun AutoMapArtSection(
     selectedSize: Int,
     onSelectSize: (Int) -> Unit,
     onPickImage: () -> Unit
