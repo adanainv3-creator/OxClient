@@ -15,8 +15,8 @@ import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import java.util.UUID
 import kotlin.math.sqrt
 
-class AutoPositionGoing : BaseModule(
-    name        = "AutoPositionGoing",
+class AutoTravel : BaseModule(
+    name        = "AutoTravel",
     category    = ModuleCategory.MISC,
     description = "Belirlenen Y seviyesine cikar, hedef X/Z koordinatina ucar, varinca /sethome atar. Opsiyonel Base Hunting: hareket etmeden, gecerken depolama bloklari bulunca ayrica /sethome atar"
 ) {

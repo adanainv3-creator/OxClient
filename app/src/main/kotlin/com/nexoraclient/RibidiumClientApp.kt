@@ -29,7 +29,7 @@ import com.rubidiumclient.module.misc.ChatSpammer
 import com.rubidiumclient.module.misc.ChatAdvertiser
 import com.rubidiumclient.module.misc.ComboShortcut
 import com.rubidiumclient.module.misc.CommandHelper
-import com.rubidiumclient.module.misc.AutoPositionGoing
+import com.rubidiumclient.module.misc.AutoTravel
 import com.rubidiumclient.module.misc.AutoBaseFinder
 import com.rubidiumclient.module.misc.Disconnect
 import com.rubidiumclient.module.movement.AntiKnockback
@@ -44,7 +44,7 @@ import com.rubidiumclient.module.visual.ArrayListModule
 import com.rubidiumclient.module.visual.ESP
 import com.rubidiumclient.module.visual.FOVChanger
 import com.rubidiumclient.module.visual.FullBright
-import com.rubidiumclient.module.visual.EnemyESP
+import com.rubidiumclient.module.visual.TargetHud
 import com.rubidiumclient.module.visual.Xray
 import com.rubidiumclient.module.combat.HeadTrack
 import com.rubidiumclient.module.combat.V2Aura
@@ -142,7 +142,7 @@ class RubidiumClientApp : Application() {
             AntiKnockback(),
             FullBright(),
             ESP(),
-            EnemyESP(),
+            TargetHud(),
             Xray(),
             PopCounter(),
             HeadTrack(),
@@ -158,6 +158,7 @@ class RubidiumClientApp : Application() {
             LegitAura(),
             AirJump(),
             FreeCamera(),
+            AutoTravel(),
             LifeboatFly(),
             Performance(),
             NoClipModule()

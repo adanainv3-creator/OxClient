@@ -632,14 +632,13 @@ private fun ScreenHeader(
 }
 
 /** Header used on the Dashboard tab: keeps the version number on the same line as the
- *  title (instead of wrapping below it) and adds the YouTube / Discord links underneath. */
+ *  title (instead of wrapping below it). */
 @Composable
 private fun DashboardHeader(title: String, subtitle: String) {
-    val context = LocalContext.current
     Spacer(Modifier.height(18.dp))
     Text(
         title,
-        fontSize = 20.sp,
+        fontSize = 30.sp,
         fontWeight = FontWeight.Bold,
         color = RubidiumOnBackground,
         fontFamily = FontFamily.Monospace,
@@ -654,51 +653,7 @@ private fun DashboardHeader(title: String, subtitle: String) {
         color = RubidiumOnSurfaceDim,
         fontFamily = FontFamily.Monospace
     )
-    Spacer(Modifier.height(12.dp))
-    SocialLinksRow(context = context)
     Spacer(Modifier.height(20.dp))
-}
-
-/** Yatay, chip tarzı sosyal link satırı — eskiden dikey stacked satırlar
- *  gereksiz yükseklik kaplayıp altındaki kartlarla (rounded border) görsel
- *  tutarsızlık yaratıyordu. Artık aynı kart dilinde (border + rounded corner)
- *  yan yana, kompakt iki chip. */
-@Composable
-private fun SocialLinksRow(context: Context) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        SocialLinkChip(
-            label = "YouTube",
-            url = "https://youtube.com/@rubidiumclient?si=is-Fde6enWRQZzdS",
-            context = context
-        ) { tint -> YoutubeGlyph(tint = tint) }
-        SocialLinkChip(
-            label = "Discord",
-            url = "https://discord.gg/KKJRzWKUTt",
-            context = context
-        ) { tint -> DiscordGlyph(tint = tint) }
-    }
-}
-
-@Composable
-private fun SocialLinkChip(
-    label   : String,
-    url     : String,
-    context : Context,
-    glyph   : @Composable (Color) -> Unit
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(8.dp))
-            .background(RubidiumSurface)
-            .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-            .padding(horizontal = 12.dp, vertical = 7.dp)
-    ) {
-        glyph(RubidiumOnSurfaceDim)
-        Text(label, fontSize = 12.sp, color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
-    }
 }
 
 @Composable
@@ -849,32 +804,32 @@ private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
             .background(RubidiumSurface)
             .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .padding(16.dp)
+            .padding(12.dp)
     ) {
         Text(
             "Selected Application",
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             color = RubidiumOnSurfaceDim,
             fontFamily = FontFamily.Monospace
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(7.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
+                modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
                 contentAlignment = Alignment.Center
             ) {
                 if (icon != null) {
-                    Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(32.dp))
+                    Image(bitmap = icon, contentDescription = null, modifier = Modifier.size(26.dp))
                 } else {
-                    Text("📦", fontSize = 16.sp)
+                    Text("📦", fontSize = 14.sp)
                 }
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     label,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = RubidiumOnSurface,
                     fontFamily = FontFamily.Monospace,
@@ -883,20 +838,20 @@ private fun SelectedApplicationCard(packageName: String, onClick: () -> Unit) {
                 )
                 Text(
                     packageName,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     color = RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Text("Change ›", fontSize = 12.sp, color = RubidiumAccentLight, fontFamily = FontFamily.Monospace)
+            Text("Change ›", fontSize = 11.sp, color = RubidiumAccentLight, fontFamily = FontFamily.Monospace)
         }
         if (version != null) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 "Current: v$version",
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace
             )
@@ -912,28 +867,28 @@ private fun SelectedServerCard(host: String, port: Int, onClick: () -> Unit) {
             .background(RubidiumSurface)
             .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .padding(16.dp)
+            .padding(12.dp)
     ) {
         Text(
             "Selected Server",
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             color = RubidiumOnSurfaceDim,
             fontFamily = FontFamily.Monospace
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(7.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
+                modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
                 contentAlignment = Alignment.Center
             ) {
                 RouterGlyph(tint = RubidiumAccentLight)
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     host,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = RubidiumOnSurface,
                     fontFamily = FontFamily.Monospace,
@@ -942,14 +897,14 @@ private fun SelectedServerCard(host: String, port: Int, onClick: () -> Unit) {
                 )
                 Text(
                     "Port: $port",
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     color = RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Text("Change ›", fontSize = 12.sp, color = RubidiumAccentLight, fontFamily = FontFamily.Monospace)
+            Text("Change ›", fontSize = 11.sp, color = RubidiumAccentLight, fontFamily = FontFamily.Monospace)
         }
     }
 }
@@ -1918,47 +1873,6 @@ private fun HomeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) 
             close()
         }
         drawPath(path = path, color = tint, style = Stroke(width = h * 0.09f, cap = StrokeCap.Round))
-    }
-}
-
-@Composable
-private fun YoutubeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
-    Canvas(modifier = modifier.size(18.dp)) {
-        val w = size.width
-        val h = size.height
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(0f, h * 0.15f),
-            size = Size(w, h * 0.70f),
-            cornerRadius = CornerRadius(h * 0.20f),
-            style = Stroke(width = h * 0.11f)
-        )
-        val path = Path().apply {
-            moveTo(w * 0.40f, h * 0.35f)
-            lineTo(w * 0.40f, h * 0.65f)
-            lineTo(w * 0.66f, h * 0.50f)
-            close()
-        }
-        drawPath(path = path, color = tint)
-    }
-}
-
-@Composable
-private fun DiscordGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
-    Canvas(modifier = modifier.size(18.dp)) {
-        val w = size.width
-        val h = size.height
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(w * 0.06f, h * 0.18f),
-            size = Size(w * 0.88f, h * 0.54f),
-            cornerRadius = CornerRadius(h * 0.24f)
-        )
-        drawCircle(color = tint, radius = w * 0.11f, center = Offset(w * 0.22f, h * 0.80f))
-        drawCircle(color = tint, radius = w * 0.11f, center = Offset(w * 0.78f, h * 0.80f))
-        listOf(0.36f, 0.64f).forEach { fx ->
-            drawCircle(color = RubidiumBackground, radius = h * 0.09f, center = Offset(w * fx, h * 0.46f))
-        }
     }
 }
 

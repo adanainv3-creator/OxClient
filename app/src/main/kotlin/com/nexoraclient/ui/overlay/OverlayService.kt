@@ -1,4 +1,3 @@
-
 package com.rubidiumclient.ui.overlay
 
 import android.app.NotificationChannel
@@ -60,7 +59,7 @@ import com.rubidiumclient.module.misc.AutoMapArt
 import com.rubidiumclient.module.misc.ComboShortcut
 import com.rubidiumclient.module.misc.CommandHelper
 import com.rubidiumclient.module.social.FriendManager
-import com.rubidiumclient.module.social.isFriendEntity
+import com.rubidiumclient.module.visual.TargetHud
 import com.rubidiumclient.session.SessionManager
 import com.rubidiumclient.ui.theme.*
 import com.rubidiumclient.utils.BlockPalette
@@ -78,7 +77,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     companion object {
         private const val CHANNEL_ID = "ox_overlay"
         private const val NOTIF_ID   = 1002
-        private const val TARGET_RANGE = 128f
 
         fun start(ctx: Context) {
             val i = Intent(ctx, OverlayService::class.java)
@@ -152,14 +150,6 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
                 OverlayState.updateTotemCount(totemCount)
 
-                val nearest = EntityTracker.getPlayers(TARGET_RANGE)
-                    .filterNot { it.isFriendEntity }
-                    .minByOrNull { EntityTracker.distanceTo(it) }
-                val targetLabel = nearest?.let { e ->
-                    e.name.ifBlank { e.identifier.removePrefix("minecraft:") }
-                }
-                OverlayState.updateTarget(targetLabel)
-
                 delay(500L)
             }
         }
@@ -229,7 +219,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 OverlayPositions.target.x, OverlayPositions.target.y
             )
             targetView = composeView {
-                TargetIndicator(
+                TargetHudBox(
                     onDrag = { dx, dy ->
                         val next = Pos(OverlayPositions.target.x + dx, OverlayPositions.target.y + dy)
                         OverlayPositions.target = next
@@ -514,46 +504,67 @@ private fun TotemCounterIcon(onDrag: (Float, Float) -> Unit) {
 
 
 @Composable
-private fun TargetIndicator(onDrag: (Float, Float) -> Unit) {
-    val target = OverlayState.targetName
+private fun TargetHudBox(onDrag: (Float, Float) -> Unit) {
+    val module = remember { ModuleManager.byName("TargetHud") as? TargetHud }
 
-    val autoTotem  = remember { ModuleManager.byName("AutoTotem") }
-    var autoTotemEnabled by remember { mutableStateOf(autoTotem?.isEnabled ?: false) }
-    LaunchedEffect(autoTotem) {
-        autoTotem?.enabledFlow?.collect { autoTotemEnabled = it }
+    var enabled by remember { mutableStateOf(module?.isEnabled ?: false) }
+    LaunchedEffect(module) {
+        module?.enabledFlow?.collect { enabled = it }
     }
 
+    val target = module?.target?.collectAsState()?.value
+    val isCritical = target?.isCritical == true
+
+    val accentColor by animateColorAsState(
+        targetValue = if (isCritical) Color(0xFFFF453A) else Color(0xFF4DD0E1),
+        animationSpec = tween(200),
+        label = "targetHudAccent"
+    )
+
     AnimatedVisibility(
-        visible = autoTotemEnabled,
+        visible = enabled && target != null,
         enter   = fadeIn() + expandHorizontally(),
         exit    = fadeOut() + shrinkHorizontally()
     ) {
-    Box(
-        modifier = Modifier
-            .wrapContentSize()
-            .pointerInput(Unit) {
-                detectDragGestures { change, offset ->
-                    change.consume()
-                    onDrag(offset.x, offset.y)
+        Row(
+            modifier = Modifier
+                .wrapContentSize()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xDD111827))
+                .border(1.dp, if (isCritical) accentColor.copy(alpha = 0.8f) else Color(0xFF2D3F6E), RoundedCornerShape(10.dp))
+                .pointerInput(Unit) {
+                    detectDragGestures { change, offset ->
+                        change.consume()
+                        onDrag(offset.x, offset.y)
+                    }
                 }
-            }
-            .padding(6.dp)
-    ) {
-        Text(
-            text = "T: ${target ?: "-"}",
-            fontSize = 14.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            color = if (target != null) Color.White else Color.White.copy(alpha = 0.45f),
-            style = androidx.compose.ui.text.TextStyle(
-                shadow = androidx.compose.ui.graphics.Shadow(
-                    color = Color.Black,
-                    offset = androidx.compose.ui.geometry.Offset(1f, 1f),
-                    blurRadius = 5f
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(accentColor)
+            )
+            Text(
+                text       = target?.name ?: "-",
+                fontSize   = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                maxLines   = 1,
+                overflow   = TextOverflow.Ellipsis,
+                color      = if (isCritical) accentColor else Color.White,
+                style = androidx.compose.ui.text.TextStyle(
+                    shadow = androidx.compose.ui.graphics.Shadow(
+                        color = Color.Black,
+                        offset = androidx.compose.ui.geometry.Offset(1f, 1f),
+                        blurRadius = 4f
+                    )
                 )
             )
-        )
-    }
+        }
     }
 }
 
