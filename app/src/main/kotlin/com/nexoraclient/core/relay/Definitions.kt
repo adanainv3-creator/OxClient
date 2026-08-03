@@ -10,7 +10,19 @@ import org.cloudburstmc.protocol.bedrock.data.definitions.ItemDefinition
 import org.cloudburstmc.protocol.common.DefinitionRegistry
 import org.cloudburstmc.protocol.common.NamedDefinition
 import org.cloudburstmc.protocol.common.SimpleDefinitionRegistry
+import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * PERFORMANS FIX: Bu obje önceden init()'te ~21 item JSON dosyasını VE
+ * ilgili block_palette NBT dosyalarını (GZIP decompress + NBT parse) TAMAMEN
+ * senkron ve HEPSİNİ AYNI ANDA yüklüyordu — app açılışında (RibidiumClientApp
+ * içinde çağrılıyor) bu ciddi bir startup gecikmesi/donma kaynağıydı, çünkü
+ * bağlanılan sunucunun protokolüne göre pratikte SADECE BİR versiyon gerçekten
+ * kullanılıyor. Artık init() sadece dosya listesini/versiyon eşlemesini
+ * TARIYOR (ucuz, sadece dosya adı parse), gerçek NBT/JSON parse işi bir
+ * versiyon ilk defa getClosestDefinitions() ile istendiğinde yapılıyor ve
+ * sonrası için cache'leniyor (ConcurrentHashMap.computeIfAbsent, thread-safe).
+ */
 object Definitions {
 
     private const val TAG = "Definitions"
@@ -23,29 +35,46 @@ object Definitions {
         val itemDefinitions: DefinitionRegistry<ItemDefinition>
     )
 
+    private data class FilePair(val blockFile: String, val itemFile: String)
+
     var cameraPresetDefinitions: DefinitionRegistry<NamedDefinition> =
         SimpleDefinitionRegistry.builder<NamedDefinition>().build()
         private set
 
-    private val registry = LinkedHashMap<Int, VersionedDefinitions>()
+    // Versiyon -> dosya eşlemesi: init()'te dolduruluyor, ucuz (sadece dosya
+    // adlarını okuyup regex ile versiyon çıkarmak).
+    private val fileMap = LinkedHashMap<Int, FilePair>()
     private val sortedVersions = mutableListOf<Int>()
+
+    // Gerçek parse edilmiş sonuçlar burada cache'leniyor — SADECE fiilen
+    // istenen versiyonlar için, ilk istekte dolduruluyor.
+    private val loadedCache = ConcurrentHashMap<Int, VersionedDefinitions>()
+    // Aynı block palette dosyası birden fazla item versiyonu tarafından
+    // fallback olarak paylaşılabiliyor — dosya bazında ayrı cache, aynı
+    // paleti iki kere parse etmemek için.
+    private val blockPaletteCache =
+        ConcurrentHashMap<String, Pair<DefinitionRegistry<BlockDefinition>, DefinitionRegistry<BlockDefinition>>>()
+
+    @Volatile private var appContext: Context? = null
 
     @Volatile var loaded = false
         private set
 
     fun init(context: Context) {
         if (loaded) return
+        appContext = context.applicationContext
         try {
-            loadAllVersions(context)
+            scanVersions(context)
             sortedVersions.clear()
-            sortedVersions.addAll(registry.keys)
+            sortedVersions.addAll(fileMap.keys)
             sortedVersions.sortDescending()
             loaded = true
         } catch (e: Exception) {
         }
     }
 
-    private fun loadAllVersions(context: Context) {
+    /** Sadece dosya adlarını tarar, hiçbir dosya İÇERİĞİ okumaz — hızlı. */
+    private fun scanVersions(context: Context) {
         val files = try {
             context.assets.list("nbt") ?: emptyArray()
         } catch (e: Exception) {
@@ -59,30 +88,10 @@ object Definitions {
         val fallbackBlockFile = blockFiles.firstOrNull { extractVersion(it) == null }
             ?: blockFiles.firstOrNull()
 
-        // Cache loaded block palettes to avoid OOM
-        val blockPaletteCache = mutableMapOf<String, Pair<DefinitionRegistry<BlockDefinition>, DefinitionRegistry<BlockDefinition>>>()
-
         for (itemFile in itemFiles) {
-            val version = extractVersion(itemFile)
-            if (version == null) {
-                continue
-            }
-
-            val blockFile = versionedBlockFiles[version] ?: fallbackBlockFile
-            if (blockFile == null) {
-                continue
-            }
-
-            try {
-                // Load block palette only if not already cached
-                val (blocks, blocksHashed) = blockPaletteCache.getOrPut(blockFile) {
-                    loadBlockPalette(context, blockFile)
-                }
-                
-                val items = loadItemPalette(context, itemFile)
-                registry[version] = VersionedDefinitions(version, blocks, blocksHashed, items)
-            } catch (e: Exception) {
-            }
+            val version = extractVersion(itemFile) ?: continue
+            val blockFile = versionedBlockFiles[version] ?: fallbackBlockFile ?: continue
+            fileMap[version] = FilePair(blockFile, itemFile)
         }
     }
 
@@ -109,30 +118,40 @@ object Definitions {
         val array = org.json.JSONArray(json)
 
         val map = Int2ObjectOpenHashMap<NbtItemDefinition>()
-        var totemIndex = -1
-        var totemRawId = -1
         for (i in 0 until array.length()) {
             val obj = array.getJSONObject(i)
             val name = obj.getString("name")
             map.put(i, NbtItemDefinition(i, name))
-
-            if (name == "minecraft:totem_of_undying") {
-                totemIndex = i
-                totemRawId = obj.optInt("id", -1)
-            }
         }
         return NbtItemDefinitionRegistry(map)
     }
 
+    private fun loadVersion(protocolVersion: Int): VersionedDefinitions? {
+        val ctx = appContext ?: return null
+        val pair = fileMap[protocolVersion] ?: return null
+        return try {
+            val (blocks, blocksHashed) = blockPaletteCache.computeIfAbsent(pair.blockFile) {
+                loadBlockPalette(ctx, pair.blockFile)
+            }
+            val items = loadItemPalette(ctx, pair.itemFile)
+            VersionedDefinitions(protocolVersion, blocks, blocksHashed, items)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun getClosestDefinitions(protocolVersion: Int): VersionedDefinitions {
-        registry[protocolVersion]?.let { return it }
+        loadedCache[protocolVersion]?.let { return it }
 
         check(sortedVersions.isNotEmpty()) {
             "Hiçbir definitions versiyonu yüklenemedi — assets/nbt/ içeriğini kontrol et"
         }
 
         val closest = sortedVersions.firstOrNull { it <= protocolVersion } ?: sortedVersions.last()
-        return registry[closest]!!
+
+        return loadedCache.computeIfAbsent(closest) { v ->
+            loadVersion(v) ?: error("$v için definitions yüklenemedi")
+        }
     }
 
     class NbtBlockDefinitionRegistry(

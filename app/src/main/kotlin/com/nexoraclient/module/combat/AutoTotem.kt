@@ -153,7 +153,7 @@ class AutoTotem : BaseModule(
                 if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
                 if (offhandHasTotem) return
                 val health = pkt.attributes.firstOrNull { it.name == "minecraft:health" } ?: return
-                if (health.value <= health.maxValue * 0.35f && totemSlot >= 0) equipTotem()
+                if (health.value <= health.maximum * 0.35f && totemSlot >= 0) equipTotem()
             }
         }
     }

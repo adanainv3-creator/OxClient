@@ -647,27 +647,31 @@ private fun DashboardHeader(title: String, subtitle: String) {
         softWrap = false,
         overflow = TextOverflow.Visible
     )
-    Spacer(Modifier.height(2.dp))
+    Spacer(Modifier.height(3.dp))
     Text(
         subtitle,
         fontSize = 12.sp,
         color = RubidiumOnSurfaceDim,
         fontFamily = FontFamily.Monospace
     )
-    Spacer(Modifier.height(10.dp))
-    SocialLinksColumn(context = context)
+    Spacer(Modifier.height(12.dp))
+    SocialLinksRow(context = context)
     Spacer(Modifier.height(20.dp))
 }
 
+/** Yatay, chip tarzı sosyal link satırı — eskiden dikey stacked satırlar
+ *  gereksiz yükseklik kaplayıp altındaki kartlarla (rounded border) görsel
+ *  tutarsızlık yaratıyordu. Artık aynı kart dilinde (border + rounded corner)
+ *  yan yana, kompakt iki chip. */
 @Composable
-private fun SocialLinksColumn(context: Context) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SocialLinkItem(
+private fun SocialLinksRow(context: Context) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        SocialLinkChip(
             label = "YouTube",
             url = "https://youtube.com/@rubidiumclient?si=is-Fde6enWRQZzdS",
             context = context
         ) { tint -> YoutubeGlyph(tint = tint) }
-        SocialLinkItem(
+        SocialLinkChip(
             label = "Discord",
             url = "https://discord.gg/KKJRzWKUTt",
             context = context
@@ -676,7 +680,7 @@ private fun SocialLinksColumn(context: Context) {
 }
 
 @Composable
-private fun SocialLinkItem(
+private fun SocialLinkChip(
     label   : String,
     url     : String,
     context : Context,
@@ -684,10 +688,13 @@ private fun SocialLinkItem(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.clickable {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-        }
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(8.dp))
+            .background(RubidiumSurface)
+            .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .padding(horizontal = 12.dp, vertical = 7.dp)
     ) {
         glyph(RubidiumOnSurfaceDim)
         Text(label, fontSize = 12.sp, color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)

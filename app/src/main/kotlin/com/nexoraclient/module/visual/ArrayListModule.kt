@@ -29,15 +29,14 @@ class ArrayListModule : BaseModule(
         // Kategoriye göre sabit, pastel/desatüre vurgu renkleri — göz alıcı
         // parlak/rainbow tonlar yerine sakin, birbirinden ayırt edilebilir
         // ama baskın olmayan renkler.
-        // NOT: ModuleCategory.SOCIAL ismi diğer kategorilerle (COMBAT/MOVEMENT/
-        // VISUAL/MISC) aynı isimlendirme deseninden (module/social paketi ->
-        // SOCIAL) çıkarıldı, doğrulanmadı. Derleme hatası alırsan bu satırı
-        // gerçek enum sabitinin ismiyle güncelle ya da tamamen kaldır.
+        // NOT: ModuleCategory.SOCIAL derlemede "Unresolved reference" verdi —
+        // bu enum sabiti gerçekten yok, o yüzden kaldırıldı. FriendManager
+        // muhtemelen MISC ya da başka bir kategori kullanıyor; else fallback
+        // zaten nötr bir renk veriyor.
         private fun accentColorFor(category: ModuleCategory): Int = when (category) {
             ModuleCategory.COMBAT   -> Color.rgb(0xCB, 0x8A, 0x8E) // muted rose
             ModuleCategory.MOVEMENT -> Color.rgb(0x7E, 0x9C, 0xC2) // muted slate blue
             ModuleCategory.VISUAL   -> Color.rgb(0xA6, 0x98, 0xC9) // muted lavender
-            ModuleCategory.SOCIAL   -> Color.rgb(0x74, 0xAD, 0xA3) // muted teal
             ModuleCategory.MISC     -> Color.rgb(0x9A, 0xA3, 0x9E) // muted sage
             else                    -> Color.rgb(0xB0, 0xB0, 0xB0) // fallback: nötr gri
         }

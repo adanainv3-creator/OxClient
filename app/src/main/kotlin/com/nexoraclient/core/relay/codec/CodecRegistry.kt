@@ -1,17 +1,32 @@
 package com.rubidiumclient.core.relay.codec
 
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec
+import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * PERFORMANS FIX: registerAllCodecs() önceden ~50 codec sınıfının HEPSİNİ
+ * Class.forName + reflection field access ile app açılışında yüklüyordu,
+ * halbuki bir oturumda gerçekte SADECE bağlanan clientın protokolüne uyan
+ * TEK codec kullanılıyor. Artık init() sadece protokol->classname eşlemesini
+ * (hiç reflection yok, sadece sabitler) kuruyor; gerçek Class.forName +
+ * reflection yükü bir codec ilk defa istendiğinde yapılıp cache'leniyor.
+ */
 object CodecRegistry {
 
     private const val TAG = "CodecRegistry"
 
-    private val codecMap = LinkedHashMap<Int, BedrockCodec>()
+    private data class CodecEntry(val minecraftVersionLabel: String, val className: String)
+
+    private val classNameMap = LinkedHashMap<Int, CodecEntry>()
     private val minecraftVersionMap = HashMap<String, Int>()
     private val sortedProtocolVersions = mutableListOf<Int>()
 
+    private val loadedCodecs = ConcurrentHashMap<Int, BedrockCodec>()
+
     init {
         registerAllCodecs()
+        sortedProtocolVersions.addAll(classNameMap.keys)
+        sortedProtocolVersions.sortDescending()
     }
 
     private fun registerAllCodecs() {
@@ -77,44 +92,64 @@ object CodecRegistry {
         registerCodec(944, "1.21.150~", "org.cloudburstmc.protocol.bedrock.codec.v944.Bedrock_v944")
         registerCodec(975, "26.23~", "org.cloudburstmc.protocol.bedrock.codec.v975.Bedrock_v975")
         registerCodec(1001, "26.34~", "org.cloudburstmc.protocol.bedrock.codec.v1001.Bedrock_v1001")
-
-        sortedProtocolVersions.sortDescending()
     }
 
+    /** Sadece isim eşlemesini kaydeder — hiç reflection/class-loading yapmaz, çok ucuz. */
     private fun registerCodec(protocolVersion: Int, minecraftVersionLabel: String, className: String) {
-        try {
-            val codecClass = Class.forName(className)
+        classNameMap[protocolVersion] = CodecEntry(minecraftVersionLabel, className)
+        minecraftVersionMap[minecraftVersionLabel] = protocolVersion
+    }
+
+    /** Gerçek Class.forName + reflection field access burada, ilk istekte, ve cache'lenerek. */
+    private fun loadCodec(protocolVersion: Int): BedrockCodec? {
+        val entry = classNameMap[protocolVersion] ?: return null
+        return try {
+            val codecClass = Class.forName(entry.className)
             val codecField = codecClass.getDeclaredField("CODEC")
             codecField.isAccessible = true
-            val codec = codecField.get(null) as BedrockCodec
-
-            codecMap[protocolVersion] = codec
-            minecraftVersionMap[minecraftVersionLabel] = protocolVersion
-            sortedProtocolVersions.add(protocolVersion)
+            codecField.get(null) as BedrockCodec
         } catch (e: Throwable) {
+            null
         }
     }
 
-    fun getCodecByProtocol(protocolVersion: Int): BedrockCodec? = codecMap[protocolVersion]
+    fun getCodecByProtocol(protocolVersion: Int): BedrockCodec? =
+        loadedCodecs[protocolVersion] ?: loadCodec(protocolVersion)?.also { loadedCodecs[protocolVersion] = it }
 
     fun getClosestCodec(protocolVersion: Int): BedrockCodec {
-        codecMap[protocolVersion]?.let { return it }
+        getCodecByProtocol(protocolVersion)?.let { return it }
 
         check(sortedProtocolVersions.isNotEmpty()) {
             "Hiçbir Bedrock codec yüklenemedi — bedrock-codec dependency'sini kontrol et"
         }
 
-        val closest = sortedProtocolVersions.firstOrNull { it <= protocolVersion }
-            ?: sortedProtocolVersions.last()
+        // İlk denenen "en yakın" versiyon her ihtimalde gerçekten yüklenebilir
+        // olmayabilir (eksik/yanlış dependency) — eskiden bu tür versiyonlar
+        // zaten sortedProtocolVersions'a hiç girmiyordu (sessizce elenirdi).
+        // Aynı güvenliği korumak için, o versiyon lazy-load'da başarısız
+        // olursa bir sonraki en yakın adaya geçiyoruz.
+        val ordered = sortedProtocolVersions.filter { it <= protocolVersion }
+            .ifEmpty { sortedProtocolVersions }
+            .sortedDescending()
 
-        return codecMap[closest]!!
+        for (candidate in ordered) {
+            getCodecByProtocol(candidate)?.let { return it }
+        }
+        for (candidate in sortedProtocolVersions) {
+            getCodecByProtocol(candidate)?.let { return it }
+        }
+
+        error("Hiçbir Bedrock codec yüklenemedi (hepsi başarısız oldu)")
     }
 
     fun getLatestCodec(): BedrockCodec {
         check(sortedProtocolVersions.isNotEmpty()) {
             "Hiçbir Bedrock codec yüklenemedi — bedrock-codec dependency'sini kontrol et"
         }
-        return codecMap[sortedProtocolVersions.first()]!!
+        for (candidate in sortedProtocolVersions) {
+            getCodecByProtocol(candidate)?.let { return it }
+        }
+        error("Hiçbir Bedrock codec yüklenemedi (hepsi başarısız oldu)")
     }
 
     fun getMinecraftVersionLabel(protocolVersion: Int): String? =

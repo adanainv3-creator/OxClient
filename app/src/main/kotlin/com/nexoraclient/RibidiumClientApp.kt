@@ -15,6 +15,7 @@ import com.rubidiumclient.core.relay.Definitions
 import com.rubidiumclient.module.ModuleManager
 import com.rubidiumclient.module.social.FriendManager
 import com.rubidiumclient.module.combat.AutoArmor
+import com.rubidiumclient.module.misc.Performance
 import com.rubidiumclient.module.movement.AutoScaffold
 import com.rubidiumclient.module.misc.AutoMapArt
 import com.rubidiumclient.module.combat.AutoTotem
@@ -158,6 +159,7 @@ class RubidiumClientApp : Application() {
             AirJump(),
             FreeCamera(),
             LifeboatFly(),
+            Performance(),
             NoClipModule()
         )
     }
