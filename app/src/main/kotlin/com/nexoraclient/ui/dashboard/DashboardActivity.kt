@@ -665,7 +665,7 @@ private fun DashboardHeader(title: String, subtitle: String) {
     Spacer(Modifier.height(18.dp))
     Text(
         title,
-        fontSize = 30.sp,
+        fontSize = 24.sp,
         fontWeight = FontWeight.Bold,
         color = RubidiumOnBackground,
         fontFamily = FontFamily.Monospace,
