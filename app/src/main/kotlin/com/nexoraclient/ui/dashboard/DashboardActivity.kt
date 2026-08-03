@@ -89,6 +89,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.cos
+import kotlin.math.sin
 
 val SUPPORTED_PACKAGES = listOf(
     "com.mojang.minecraftpe"      to "Minecraft",
@@ -113,6 +115,30 @@ private object SelectedAppStore {
     fun set(context: Context, packageName: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putString(KEY_SELECTED_PACKAGE, packageName).apply()
+    }
+}
+
+/** The two overlay HUD layouts the user can pick between in Settings. Only the
+ *  preference is stored here for now — OverlayService doesn't read it yet. */
+enum class OverlayUiStyle(val label: String, val description: String) {
+    CLASSIC("Classic", "The current overlay layout"),
+    MODERN("Modern", "A new compact layout (coming soon)")
+}
+
+/** Remembers the user's chosen overlay UI style, across app restarts. */
+private object OverlayUiStore {
+    private const val PREFS_NAME = "rubidiumclient_prefs"
+    private const val KEY_UI_STYLE = "overlay_ui_style"
+
+    fun get(context: Context): OverlayUiStyle {
+        val saved = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_UI_STYLE, null)
+        return OverlayUiStyle.values().firstOrNull { it.name == saved } ?: OverlayUiStyle.CLASSIC
+    }
+
+    fun set(context: Context, style: OverlayUiStyle) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(KEY_UI_STYLE, style.name).apply()
     }
 }
 
@@ -200,7 +226,7 @@ private suspend fun refreshGatePasswordIfNeeded(context: Context) {
     if (fetched != null) GatePasswordStore.set(context, fetched)
 }
 
-private enum class DashTab { RELAY, CONFIG, ACCOUNTS }
+private enum class DashTab { RELAY, CONFIG, ACCOUNTS, SETTINGS }
 
 class DashboardActivity : ComponentActivity() {
 
@@ -567,6 +593,7 @@ fun DashboardScreen(
                             onAddAccount     = { showSignIn = true }
                         )
                         DashTab.CONFIG -> ConfigTab()
+                        DashTab.SETTINGS -> SettingsTab()
                     }
                 }
             }
@@ -1362,7 +1389,163 @@ private fun ConfigTab() {
 }
 
 @Composable
-private fun AutoMapArtSection(
+private fun SettingsTab() {
+    val context = LocalContext.current
+    var uiStyle by remember { mutableStateOf(OverlayUiStore.get(context)) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        ScreenHeader(title = "Settings")
+
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(24.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingsSectionLabel("Overlay UI")
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(RubidiumSurface)
+                        .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
+                        .padding(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    OverlayUiStyle.values().forEach { style ->
+                        UiStyleOption(
+                            style    = style,
+                            selected = uiStyle == style,
+                            onClick  = {
+                                uiStyle = style
+                                OverlayUiStore.set(context, style)
+                            }
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingsSectionLabel("Community")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingsLinkRow(
+                        label = "Discord",
+                        subtitle = "Join the server",
+                        url   = "https://discord.gg/KKJRzWKUTt",
+                        context = context
+                    ) { tint -> DiscordGlyph(tint = tint) }
+                    SettingsLinkRow(
+                        label = "YouTube",
+                        subtitle = "Watch videos & tutorials",
+                        url   = "https://youtube.com/@rubidiumclient?si=is-Fde6enWRQZzdS",
+                        context = context
+                    ) { tint -> YoutubeGlyph(tint = tint) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionLabel(text: String) {
+    Text(
+        text.uppercase(),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.sp,
+        color = RubidiumOnSurfaceDim,
+        fontFamily = FontFamily.Monospace
+    )
+}
+
+@Composable
+private fun UiStyleOption(
+    style    : OverlayUiStyle,
+    selected : Boolean,
+    onClick  : () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) RubidiumSurfaceVar else Color.Transparent)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .clip(CircleShape)
+                .background(if (selected) RubidiumAccent else Color.Transparent)
+                .border(1.5.dp, if (selected) RubidiumAccent else RubidiumOutlineStrong, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(RubidiumBackground))
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                style.label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = RubidiumOnSurface,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                style.description,
+                fontSize = 11.sp,
+                color = RubidiumOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsLinkRow(
+    label    : String,
+    subtitle : String,
+    url      : String,
+    context  : Context,
+    glyph    : @Composable (Color) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
+            .clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            glyph(RubidiumAccentLight)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = RubidiumOnSurface,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                subtitle,
+                fontSize = 11.sp,
+                color = RubidiumOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        Text("›", fontSize = 18.sp, color = RubidiumOnSurfaceDim, fontFamily = FontFamily.Monospace)
+    }
+}
+
+
     selectedSize: Int,
     onSelectSize: (Int) -> Unit,
     onPickImage: () -> Unit
@@ -1560,6 +1743,12 @@ private fun BottomTabBar(current: DashTab, onSelect: (DashTab) -> Unit) {
                 label    = "Accounts",
                 selected = current == DashTab.ACCOUNTS,
                 onClick  = { onSelect(DashTab.ACCOUNTS) }
+            )
+            TabItem(
+                icon     = { tint -> GearGlyph(tint = tint) },
+                label    = "Settings",
+                selected = current == DashTab.SETTINGS,
+                onClick  = { onSelect(DashTab.SETTINGS) }
             )
         }
     }
@@ -1896,6 +2085,71 @@ private fun DocumentGlyph(modifier: Modifier = Modifier, tint: Color = Color.Whi
                 strokeWidth = h * 0.06f,
                 cap = StrokeCap.Round
             )
+        }
+    }
+}
+
+@Composable
+private fun GearGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val w = size.width
+        val h = size.height
+        val center = Offset(w * 0.5f, h * 0.5f)
+        val outerR = h * 0.40f
+        val innerR = h * 0.24f
+        val toothLen = h * 0.13f
+        val toothCount = 8
+        val path = Path()
+        for (i in 0 until toothCount * 2) {
+            val angle = (Math.PI * 2.0 * i) / (toothCount * 2)
+            val r = if (i % 2 == 0) outerR + toothLen else outerR
+            val x = center.x + (r * cos(angle)).toFloat()
+            val y = center.y + (r * sin(angle)).toFloat()
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
+        drawPath(path = path, color = tint)
+        drawCircle(color = RubidiumBackground, radius = innerR, center = center)
+    }
+}
+
+@Composable
+private fun YoutubeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(18.dp)) {
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(0f, h * 0.15f),
+            size = Size(w, h * 0.70f),
+            cornerRadius = CornerRadius(h * 0.20f),
+            style = Stroke(width = h * 0.11f)
+        )
+        val path = Path().apply {
+            moveTo(w * 0.40f, h * 0.35f)
+            lineTo(w * 0.40f, h * 0.65f)
+            lineTo(w * 0.66f, h * 0.50f)
+            close()
+        }
+        drawPath(path = path, color = tint)
+    }
+}
+
+@Composable
+private fun DiscordGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier.size(18.dp)) {
+        val w = size.width
+        val h = size.height
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(w * 0.06f, h * 0.18f),
+            size = Size(w * 0.88f, h * 0.54f),
+            cornerRadius = CornerRadius(h * 0.24f)
+        )
+        drawCircle(color = tint, radius = w * 0.11f, center = Offset(w * 0.22f, h * 0.80f))
+        drawCircle(color = tint, radius = w * 0.11f, center = Offset(w * 0.78f, h * 0.80f))
+        listOf(0.36f, 0.64f).forEach { fx ->
+            drawCircle(color = RubidiumBackground, radius = h * 0.09f, center = Offset(w * fx, h * 0.46f))
         }
     }
 }
