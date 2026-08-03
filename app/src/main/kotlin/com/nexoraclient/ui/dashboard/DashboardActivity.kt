@@ -228,9 +228,20 @@ private suspend fun refreshGatePasswordIfNeeded(context: Context) {
 
 private enum class DashTab { RELAY, CONFIG, ACCOUNTS, SETTINGS }
 
+/** Ayarlar > Erişilebilirlik listesinde KeybindAccessibilityService'in açık olup olmadığını kontrol eder. */
+private fun isAccessibilityServiceEnabled(context: Context): Boolean {
+    val expected = "${context.packageName}/com.rubidiumclient.input.KeybindAccessibilityService"
+    val enabled = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+    return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+}
+
 class DashboardActivity : ComponentActivity() {
 
     private var overlayPermissionGranted by mutableStateOf(false)
+    private var accessibilityServiceEnabled by mutableStateOf(false)
     private var selectedPackage by mutableStateOf("com.mojang.minecraftpe")
 
     private val overlayLauncher = registerForActivityResult(
@@ -245,12 +256,19 @@ class DashboardActivity : ComponentActivity() {
         )
     }
 
+    private fun requestAccessibilityPermission() {
+        // Android, Erişilebilirlik servislerini bir Intent sonucuyla dönmez —
+        // sadece ayarlar ekranını açabiliyoruz; durumu onResume()'de tekrar okuyoruz.
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         overlayPermissionGranted = Settings.canDrawOverlays(this)
+        accessibilityServiceEnabled = isAccessibilityServiceEnabled(this)
 
         // Restore the last app the user picked; fall back to whichever
         // supported package is actually installed, then plain Minecraft.
@@ -300,7 +318,9 @@ class DashboardActivity : ComponentActivity() {
                         onCancelAuth  = { MicrosoftAuthManager.cancelSignIn() },
                         onSelectAccount = { account -> MicrosoftAuthManager.switchAccount(account) },
                         overlayPermissionGranted   = overlayPermissionGranted,
-                        onRequestOverlayPermission = { requestOverlayPermission() }
+                        onRequestOverlayPermission = { requestOverlayPermission() },
+                        accessibilityServiceEnabled   = accessibilityServiceEnabled,
+                        onRequestAccessibilityPermission = { requestAccessibilityPermission() }
                     )
                 }
             }
@@ -310,6 +330,7 @@ class DashboardActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         overlayPermissionGranted = Settings.canDrawOverlays(this)
+        accessibilityServiceEnabled = isAccessibilityServiceEnabled(this)
     }
 
     private fun startRelay(targetPkg: String) {
@@ -517,7 +538,9 @@ fun DashboardScreen(
     onCancelAuth  : () -> Unit,
     onSelectAccount : (SavedAccount) -> Unit,
     overlayPermissionGranted   : Boolean = true,
-    onRequestOverlayPermission : () -> Unit = {}
+    onRequestOverlayPermission : () -> Unit = {},
+    accessibilityServiceEnabled       : Boolean = false,
+    onRequestAccessibilityPermission  : () -> Unit = {}
 ) {
     val authState     by MicrosoftAuthManager.authState.collectAsStateWithLifecycle()
     val scope          = rememberCoroutineScope()
@@ -593,7 +616,10 @@ fun DashboardScreen(
                             onAddAccount     = { showSignIn = true }
                         )
                         DashTab.CONFIG -> ConfigTab()
-                        DashTab.SETTINGS -> SettingsTab()
+                        DashTab.SETTINGS -> SettingsTab(
+                            accessibilityServiceEnabled      = accessibilityServiceEnabled,
+                            onRequestAccessibilityPermission = onRequestAccessibilityPermission
+                        )
                     }
                 }
             }
@@ -1389,7 +1415,10 @@ private fun ConfigTab() {
 }
 
 @Composable
-private fun SettingsTab() {
+private fun SettingsTab(
+    accessibilityServiceEnabled      : Boolean = false,
+    onRequestAccessibilityPermission : () -> Unit = {}
+) {
     val context = LocalContext.current
     var uiStyle by remember { mutableStateOf(OverlayUiStore.get(context)) }
 
@@ -1401,6 +1430,14 @@ private fun SettingsTab() {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingsSectionLabel("Permissions")
+                AccessibilityPermissionRow(
+                    enabled = accessibilityServiceEnabled,
+                    onClick = onRequestAccessibilityPermission
+                )
+            }
+
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SettingsSectionLabel("Overlay UI")
                 Column(
@@ -1496,6 +1533,61 @@ private fun UiStyleOption(
                 style.description,
                 fontSize = 11.sp,
                 color = RubidiumOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+    }
+}
+
+@Composable
+private fun AccessibilityPermissionRow(enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(RubidiumSurface)
+            .border(1.dp, RubidiumOutlineStrong, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            GearGlyph(tint = RubidiumAccentLight)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "Keybinds (Accessibility)",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = RubidiumOnSurface,
+                fontFamily = FontFamily.Monospace
+            )
+            Text(
+                "Klavye/gamepad/yan-tuş keybind'ları için gerekli",
+                fontSize = 11.sp,
+                color = RubidiumOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(if (enabled) RubidiumSuccess.copy(0.2f) else RubidiumError.copy(0.15f))
+                .border(
+                    1.dp,
+                    if (enabled) RubidiumSuccess.copy(0.5f) else RubidiumError.copy(0.4f),
+                    RoundedCornerShape(20.dp)
+                )
+                .padding(horizontal = 8.dp, vertical = 3.dp)
+        ) {
+            Text(
+                if (enabled) "Enabled" else "Disabled",
+                fontSize = 9.sp,
+                color = if (enabled) RubidiumSuccess else RubidiumError,
+                fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace
             )
         }

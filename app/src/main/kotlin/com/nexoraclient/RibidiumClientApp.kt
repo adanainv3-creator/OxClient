@@ -13,6 +13,7 @@ import com.rubidiumclient.config.Config
 import com.rubidiumclient.config.ServerConfig
 import com.rubidiumclient.core.relay.Definitions
 import com.rubidiumclient.module.ModuleManager
+import com.rubidiumclient.module.KeybindManager
 import com.rubidiumclient.module.social.FriendManager
 import com.rubidiumclient.module.combat.AutoArmor
 import com.rubidiumclient.module.misc.Performance
@@ -82,6 +83,7 @@ class RubidiumClientApp : Application() {
         AccountManager.init(applicationContext)
         MicrosoftAuthManager.init(applicationContext)
         FriendManager.init(applicationContext)
+        KeybindManager.init(applicationContext)
 
         Thread({
             try {

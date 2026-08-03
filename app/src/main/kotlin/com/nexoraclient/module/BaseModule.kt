@@ -67,7 +67,8 @@ abstract class BaseModule(
     val enabledFlow: StateFlow<Boolean> = _enabledFlow.asStateFlow()
     val isEnabled: Boolean get() = _enabledFlow.value
 
-    open val keybind: String = ""
+    /** KeybindManager'da bu modüle atanmış tuşun okunabilir etiketi (örn. "R", "Vol +"). Yoksa boş string. */
+    val keybindLabel: String get() = KeybindManager.labelFor(name) ?: ""
 
     fun setEnabled(v: Boolean) {
         if (_enabledFlow.value == v) return

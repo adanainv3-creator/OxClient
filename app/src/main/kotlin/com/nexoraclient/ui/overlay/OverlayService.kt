@@ -36,8 +36,16 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusable
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rubidiumclient.module.KeybindManager
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -342,10 +350,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                     .pointerInput(Unit) { detectTapGestures { hideMenu() } }
             ) {
                 HileMenu(
-                    onClose           = { hideMenu() },
-                    moduleVersion     = moduleVersion,
-                    onShortcutChanged = { refreshShortcuts(); refreshCommandShortcuts() },
-                    modifier          = Modifier.align(Alignment.CenterStart)
+                    onClose               = { hideMenu() },
+                    moduleVersion         = moduleVersion,
+                    onShortcutChanged     = { refreshShortcuts(); refreshCommandShortcuts() },
+                    onRequestVolumeCapture = ::requestVolumeKeyCapture,
+                    modifier              = Modifier.align(Alignment.CenterStart)
                 )
             }
         }
@@ -397,6 +406,15 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             setContent(content)
         }
 
+    // Keybind sayfasında "Ses tuşuna ata" bekleniyorken bir sonraki ses tuşu
+    // basışını menüyü açmak yerine bu callback'e yönlendiriyoruz.
+    @Volatile private var pendingVolumeAssignment: ((Int) -> Unit)? = null
+
+    /** KeybindsSection'dan çağrılır: bir sonraki ses tuşu basışını bekle ve ata. */
+    private fun requestVolumeKeyCapture(onCaptured: (Int) -> Unit) {
+        pendingVolumeAssignment = onCaptured
+    }
+
     private fun setupVolumeInterceptor() {
         val max = 20
         val start = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) *
@@ -406,7 +424,19 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             VOLUME_CONTROL_ABSOLUTE, max, start
         ) {
             override fun onAdjustVolume(direction: Int) {
-                if (direction != 0) toggleMenu()
+                if (direction == 0) return
+
+                val pending = pendingVolumeAssignment
+                if (pending != null) {
+                    pendingVolumeAssignment = null
+                    pending(if (direction > 0) KeybindManager.VOLUME_UP else KeybindManager.VOLUME_DOWN)
+                    return
+                }
+
+                val code = if (direction > 0) KeybindManager.VOLUME_UP else KeybindManager.VOLUME_DOWN
+                if (KeybindManager.dispatch(code)) return // ses tuşuna bağlı bir modül varsa onu toggle et
+
+                toggleMenu() // hiçbir şeye bağlı değilse eski davranış: menüyü aç/kapa
             }
         }
 
@@ -675,7 +705,8 @@ private fun CommandEntryButton(text: String, onDrag: (Float, Float) -> Unit, onT
 }
 
 private enum class MenuSection(val displayName: String) {
-    COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"), FRIENDS("Friends"), CONFIG("Config")
+    COMBAT("Combat"), MOVEMENT("Movement"), VISUAL("Visual"), MISC("Misc"),
+    FRIENDS("Friends"), KEYBINDS("Keybinds"), CONFIG("Config")
 }
 
 private fun MenuSection.toModuleCategory(): ModuleCategory? = when (this) {
@@ -684,16 +715,18 @@ private fun MenuSection.toModuleCategory(): ModuleCategory? = when (this) {
     MenuSection.VISUAL   -> ModuleCategory.VISUAL
     MenuSection.MISC     -> ModuleCategory.MISC
     MenuSection.FRIENDS  -> null
+    MenuSection.KEYBINDS -> null
     MenuSection.CONFIG   -> null
 }
 
 
 @Composable
 private fun HileMenu(
-    onClose          : () -> Unit,
-    moduleVersion    : Int,
-    onShortcutChanged: () -> Unit,
-    modifier         : Modifier = Modifier
+    onClose               : () -> Unit,
+    moduleVersion         : Int,
+    onShortcutChanged     : () -> Unit,
+    onRequestVolumeCapture: ((Int) -> Unit) -> Unit,
+    modifier              : Modifier = Modifier
 ) {
     var section by remember { mutableStateOf(MenuSection.COMBAT) }
     val cat  = section.toModuleCategory()
@@ -790,6 +823,8 @@ private fun HileMenu(
                     ConfigSection()
                 } else if (section == MenuSection.FRIENDS) {
                     FriendsSection()
+                } else if (section == MenuSection.KEYBINDS) {
+                    KeybindsSection(onRequestVolumeCapture = onRequestVolumeCapture)
                 } else {
                     LazyColumn(
                         modifier = Modifier
@@ -808,6 +843,167 @@ private fun HileMenu(
     }
 }
 
+
+@Composable
+private fun KeybindsSection(onRequestVolumeCapture: ((Int) -> Unit) -> Unit) {
+    val bindings by KeybindManager.bindings.collectAsState()
+    var listeningFor by remember { mutableStateOf<String?>(null) } // klavye dinleniyor olan modül adı
+    val focusRequester = remember { FocusRequester() }
+
+    // Bu Box menü penceresi zaten focusable=true olduğu için gerçek klavye
+    // KeyEvent'lerini doğrudan Compose seviyesinde yakalayabiliyoruz — ayrı
+    // bir servise ihtiyaç yok. AccessibilityService sadece menü KAPALIYKEN
+    // (Minecraft odaktayken) tuşu dinlemek için gerekiyor.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .focusRequester(focusRequester)
+            .focusable()
+            .onPreviewKeyEvent { keyEvent ->
+                val target = listeningFor
+                if (target != null && keyEvent.type == KeyEventType.KeyDown) {
+                    KeybindManager.assign(keyEvent.nativeKeyEvent.keyCode, target)
+                    listeningFor = null
+                    true
+                } else false
+            }
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            item {
+                Text(
+                    "Bir tuşa atamak için \"Klavye\"ye bas, sonra istediğin tuşa (veya farenin yan tuşuna) bas. Standart sol/sağ tık ve ekran hareketi desteklenmiyor.",
+                    fontSize = 10.sp,
+                    color = RubidiumOnSurfaceDim,
+                    modifier = Modifier.padding(bottom = 4.dp, start = 4.dp, end = 4.dp)
+                )
+            }
+            ModuleCategory.entries.forEach { cat ->
+                val mods = ModuleManager.byCategory(cat)
+                if (mods.isNotEmpty()) {
+                    item {
+                        Text(
+                            cat.displayName.uppercase(),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = RubidiumOnSurfaceDim,
+                            modifier = Modifier.padding(top = 6.dp, start = 4.dp, bottom = 2.dp)
+                        )
+                    }
+                    items(mods) { mod ->
+                        val code = bindings.entries.firstOrNull { it.value.equals(mod.name, true) }?.key
+                        KeybindRow(
+                            moduleName   = mod.name,
+                            label        = code?.let { KeybindManager.labelForKeyCode(it) },
+                            isListening  = listeningFor == mod.name,
+                            onAssignKeyboard = {
+                                listeningFor = mod.name
+                                focusRequester.requestFocus()
+                            },
+                            onAssignVolume = {
+                                listeningFor = null
+                                onRequestVolumeCapture { capturedCode ->
+                                    KeybindManager.assign(capturedCode, mod.name)
+                                }
+                            },
+                            onClear = {
+                                if (listeningFor == mod.name) listeningFor = null
+                                KeybindManager.clearForModule(mod.name)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+}
+
+@Composable
+private fun KeybindRow(
+    moduleName      : String,
+    label           : String?,
+    isListening     : Boolean,
+    onAssignKeyboard: () -> Unit,
+    onAssignVolume  : () -> Unit,
+    onClear         : () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(RubidiumSurfaceVar)
+            .border(1.dp, RubidiumOutline, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            moduleName,
+            fontSize = 12.sp,
+            color = RubidiumOnSurface,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f)
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50.dp))
+                    .background(if (isListening) RubidiumAccent.copy(0.25f) else RubidiumSurface)
+                    .border(1.dp, if (isListening) RubidiumAccentLight else RubidiumOutline, RoundedCornerShape(50.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    if (isListening) "Dinleniyor…" else (label ?: "—"),
+                    fontSize = 10.sp,
+                    color = if (isListening) RubidiumAccentLight else RubidiumOnSurface,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50.dp))
+                    .background(RubidiumSurface)
+                    .border(1.dp, RubidiumOutline, RoundedCornerShape(50.dp))
+                    .clickable { onAssignKeyboard() }
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Text("Klavye", fontSize = 10.sp, color = RubidiumOnSurface)
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50.dp))
+                    .background(RubidiumSurface)
+                    .border(1.dp, RubidiumOutline, RoundedCornerShape(50.dp))
+                    .clickable { onAssignVolume() }
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Text("Ses", fontSize = 10.sp, color = RubidiumOnSurface)
+            }
+
+            if (label != null) {
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(RubidiumError.copy(0.15f))
+                        .border(1.dp, RubidiumError.copy(0.4f), CircleShape)
+                        .clickable { onClear() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("x", color = RubidiumError, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun ConfigSection() {
