@@ -386,7 +386,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         view?.let { try { wm.updateViewLayout(it, params) } catch (_: Exception) {} }
     }
 
-    /** Config.load() sonrası (overlay zaten görünürken) tüm elemanları kaydedilmiş konumlara taşır. */
+    /** After Config.load() (while the overlay is already visible), moves every element to its saved position. */
     private fun applyPositionsToViews() {
         fun snap(view: ComposeView?, pos: Pos) {
             view ?: return
@@ -408,11 +408,11 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
             setContent(content)
         }
 
-    // Keybind sayfasında "Ses tuşuna ata" bekleniyorken bir sonraki ses tuşu
-    // basışını menüyü açmak yerine bu callback'e yönlendiriyoruz.
+    // While the Keybinds page is waiting for a "bind to volume key" capture, route
+    // the next volume key press to this callback instead of opening the menu.
     @Volatile private var pendingVolumeAssignment: ((Int) -> Unit)? = null
 
-    /** KeybindsSection'dan çağrılır: bir sonraki ses tuşu basışını bekle ve ata. */
+    /** Called from KeybindsSection: wait for the next volume key press and bind it. */
     private fun requestVolumeKeyCapture(onCaptured: (Int) -> Unit) {
         pendingVolumeAssignment = onCaptured
     }
@@ -436,9 +436,9 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
                 }
 
                 val code = if (direction > 0) KeybindManager.VOLUME_UP else KeybindManager.VOLUME_DOWN
-                if (KeybindManager.dispatch(code)) return // ses tuşuna bağlı bir modül varsa onu toggle et
+                if (KeybindManager.dispatch(code)) return // a module is bound to this volume key, toggle it
 
-                toggleMenu() // hiçbir şeye bağlı değilse eski davranış: menüyü aç/kapa
+                toggleMenu() // nothing bound: fall back to the old behavior (open/close the menu)
             }
         }
 
@@ -855,13 +855,13 @@ private fun HileMenu(
 @Composable
 private fun KeybindsSection(onRequestVolumeCapture: ((Int) -> Unit) -> Unit) {
     val bindings by KeybindManager.bindings.collectAsState()
-    var listeningFor by remember { mutableStateOf<String?>(null) } // klavye dinleniyor olan modül adı
+    var listeningFor by remember { mutableStateOf<String?>(null) } // name of the module currently listening for a key
     val focusRequester = remember { FocusRequester() }
 
-    // Bu Box menü penceresi zaten focusable=true olduğu için gerçek klavye
-    // KeyEvent'lerini doğrudan Compose seviyesinde yakalayabiliyoruz — ayrı
-    // bir servise ihtiyaç yok. AccessibilityService sadece menü KAPALIYKEN
-    // (Minecraft odaktayken) tuşu dinlemek için gerekiyor.
+    // This Box already has focusable=true (it's the menu window), so we can
+    // capture real keyboard KeyEvents directly at the Compose level — no
+    // separate service needed. AccessibilityService is only needed while the
+    // menu is CLOSED (i.e. Minecraft has focus) to listen for the key.
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -883,7 +883,7 @@ private fun KeybindsSection(onRequestVolumeCapture: ((Int) -> Unit) -> Unit) {
         ) {
             item {
                 Text(
-                    "Bir tuşa atamak için \"Klavye\"ye bas, sonra istediğin tuşa (veya farenin yan tuşuna) bas. Standart sol/sağ tık ve ekran hareketi desteklenmiyor.",
+                    "Tap \"Keyboard\" to bind a key, then press the key you want (or a mouse side button). Standard left/right click and pointer movement aren't supported.",
                     fontSize = 10.sp,
                     color = RubidiumOnSurfaceDim,
                     modifier = Modifier.padding(bottom = 4.dp, start = 4.dp, end = 4.dp)
@@ -967,7 +967,7 @@ private fun KeybindRow(
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
                 Text(
-                    if (isListening) "Dinleniyor…" else (label ?: "—"),
+                    if (isListening) "Listening…" else (label ?: "—"),
                     fontSize = 10.sp,
                     color = if (isListening) RubidiumAccentLight else RubidiumOnSurface,
                     fontWeight = FontWeight.SemiBold
@@ -982,7 +982,7 @@ private fun KeybindRow(
                     .clickable { onAssignKeyboard() }
                     .padding(horizontal = 9.dp, vertical = 5.dp)
             ) {
-                Text("Klavye", fontSize = 10.sp, color = RubidiumOnSurface)
+                Text("Keyboard", fontSize = 10.sp, color = RubidiumOnSurface)
             }
 
             Box(
@@ -993,7 +993,7 @@ private fun KeybindRow(
                     .clickable { onAssignVolume() }
                     .padding(horizontal = 9.dp, vertical = 5.dp)
             ) {
-                Text("Ses", fontSize = 10.sp, color = RubidiumOnSurface)
+                Text("Volume", fontSize = 10.sp, color = RubidiumOnSurface)
             }
 
             if (label != null) {

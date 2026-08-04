@@ -8,25 +8,26 @@ import android.view.accessibility.AccessibilityEvent
 import com.rubidiumclient.module.KeybindManager
 
 /**
- * Rubidium Client'ın klavye/gamepad/ekstra-fare-tuşu keybind'larını,
- * Minecraft'a odak vermeden (yani onun input'unu çalmadan) yakalayabilmesi
- * için kullanılan Accessibility Service.
+ * The Accessibility Service Rubidium Client uses to capture keyboard/gamepad/
+ * extra-mouse-button keybinds without taking focus away from Minecraft (i.e.
+ * without stealing its input).
  *
- * NEDEN ACCESSIBILITY SERVICE:
- * OverlayService'in pencereleri kasıtlı olarak odaklanabilir DEĞİL (FLAG_NOT_FOCUSABLE) —
- * böylece Minecraft kendi input'unu alabiliyor. Ama bunun sonucu olarak normal
- * bir overlay penceresi hiçbir zaman hardware tuş event'i alamaz.
- * FLAG_REQUEST_FILTER_KEY_EVENTS izniyle çalışan bir AccessibilityService ise,
- * hangi pencere fokuslu olursa olsun tüm KeyEvent'leri sistem seviyesinde görebiliyor.
+ * WHY AN ACCESSIBILITY SERVICE:
+ * OverlayService's windows are intentionally NOT focusable (FLAG_NOT_FOCUSABLE)
+ * so Minecraft keeps receiving its own input. The downside is that a normal
+ * overlay window can never receive hardware key events. An AccessibilityService
+ * running with FLAG_REQUEST_FILTER_KEY_EVENTS, however, can see every KeyEvent
+ * system-wide regardless of which window currently has focus.
  *
- * KISITLAMA: Bu yalnızca KeyEvent üreten girdiler için çalışır — fiziksel klavye
- * tuşları, gamepad düğmeleri, çoğu oyuncu faresinin ekstra (ileri/geri/yan) tuşları.
- * Standart sol/sağ mouse tıklaması ve imleç hareketi KeyEvent DEĞİL MotionEvent
- * olarak gelir; bunlar root olmadan başka bir uygulamadan sistem genelinde
- * yakalanamaz. Yani "mouse keybind" sadece ekstra düğmeli farelerde çalışır.
+ * LIMITATION: This only works for inputs that produce a KeyEvent — physical
+ * keyboard keys, gamepad buttons, and most gaming mice's extra (forward/back/
+ * side) buttons. Standard left/right mouse clicks and pointer movement arrive
+ * as MotionEvents, not KeyEvents; those can't be captured system-wide from
+ * another app without root. So "mouse keybinds" only work for mice with extra
+ * buttons.
  *
- * KULLANICI KURULUMU: Bu servis Ayarlar > Erişilebilirlik'ten elle
- * etkinleştirilmelidir (Android bunu otomatik açmaya izin vermiyor).
+ * USER SETUP: This service must be enabled manually under Settings >
+ * Accessibility (Android doesn't allow apps to enable it automatically).
  */
 class KeybindAccessibilityService : AccessibilityService() {
 
@@ -47,25 +48,25 @@ class KeybindAccessibilityService : AccessibilityService() {
             notificationTimeout = 100
         }
         isRunning = true
-        Log.i(TAG, "Keybind accessibility service bağlandı")
+        Log.i(TAG, "Keybind accessibility service connected")
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        // Sadece basma anını say, basılı tutmayı (repeat) sayma — yoksa modül
-        // her tekrar event'inde toggle olur.
+        // Only count the initial key-down, not repeats — otherwise the module
+        // would toggle on every repeat event while the key is held down.
         if (event.action != KeyEvent.ACTION_DOWN) return false
         if (event.repeatCount > 0) return false
 
         return try {
             KeybindManager.dispatch(event.keyCode)
         } catch (e: Exception) {
-            Log.e(TAG, "Keybind dispatch hatası", e)
+            Log.e(TAG, "Keybind dispatch error", e)
             false
         }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Bu servis sadece tuş yakalamak için var, accessibility event'leriyle ilgilenmiyor.
+        // This service only exists to capture key events; accessibility events are unused.
     }
 
     override fun onInterrupt() {}

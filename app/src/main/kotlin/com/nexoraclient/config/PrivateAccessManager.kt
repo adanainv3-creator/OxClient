@@ -26,21 +26,21 @@ private const val BASE_URL = "https://oxclient.com.tr"
 private val Context.privateAccessDataStore: DataStore<Preferences> by preferencesDataStore(name = "ox_private_access")
 
 /**
- * Rubidium Private erişim sistemi.
+ * Rubidium Private access system.
  *
- * Dashboard'a girilen bir lisans anahtarını sunucuya (`/private-key/verify`)
- * doğrulatır; başarılıysa anahtarı, bitiş tarihini ve o anda admin panelde
- * "private" işaretlenmiş modül listesini yerelde (DataStore) önbelleğe alır.
+ * Verifies a license key entered on the Dashboard against the server
+ * (`/private-key/verify`); on success, caches the key, its expiration, and
+ * the current admin-configured list of "private" modules locally (DataStore).
  *
- * Hangi modüllerin private olduğu tamamen admin panelden yönetiliyor — bu
- * obje sadece o listeyi taşıyor. Gerçek kilitleme UI tarafında
- * ([isModuleLocked] kontrol edilerek — OverlayService'in ModuleCard'ında) ve
- * keybind dispatch'inde ([KeybindManager]) uygulanıyor.
+ * Which modules are private is entirely managed from the admin panel — this
+ * object just carries that list around. The actual locking is enforced on
+ * the UI side ([isModuleLocked], checked in OverlayService's module list)
+ * and in keybind dispatch ([KeybindManager]).
  *
- * Anahtar bir kere girildikten sonra, aktif kaldığı sürece (süresi dolana
- * kadar) modül listesi periyodik olarak [refreshModules] ile tazelenir —
- * böylece admin listeye yeni bir modül eklerse/çıkarırsa, kullanıcı anahtarı
- * tekrar girmek zorunda kalmaz.
+ * Once a key is entered, as long as it stays active (not expired) the module
+ * list is periodically refreshed via [refreshModules] — so if the admin
+ * adds/removes a module from the list, the user doesn't have to re-enter
+ * their key.
  */
 object PrivateAccessManager {
     private val KEY_STATE = stringPreferencesKey("state")
@@ -49,7 +49,7 @@ object PrivateAccessManager {
 
     data class State(
         val licenseKey: String? = null,
-        val expiresAt: Long? = null,            // null = süresiz
+        val expiresAt: Long? = null,            // null = lifetime
         val privateModules: Set<String> = emptySet()
     ) {
         val isActive: Boolean get() =
@@ -65,12 +65,12 @@ object PrivateAccessManager {
             val raw = runBlocking { safeCtx().privateAccessDataStore.data.map { it[KEY_STATE] }.first() }
             _state.value = parse(raw)
         } catch (e: Exception) {
-            Log.e(TAG, "Private access state yüklenemedi", e)
+            Log.e(TAG, "Failed to load private access state", e)
         }
     }
 
     private fun safeCtx(): Context =
-        appContext ?: throw IllegalStateException("PrivateAccessManager.init() çağrılmamış!")
+        appContext ?: throw IllegalStateException("PrivateAccessManager.init() was not called!")
 
     private fun parse(raw: String?): State {
         if (raw.isNullOrBlank()) return State()
@@ -83,7 +83,7 @@ object PrivateAccessManager {
             } ?: emptySet()
             State(licenseKey, expiresAt, modules)
         } catch (e: Exception) {
-            Log.e(TAG, "Private access state parse edilemedi", e)
+            Log.e(TAG, "Failed to parse private access state", e)
             State()
         }
     }
@@ -101,13 +101,13 @@ object PrivateAccessManager {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Private access state kaydedilemedi", e)
+            Log.e(TAG, "Failed to save private access state", e)
         }
     }
 
     fun isActive(): Boolean = _state.value.isActive
 
-    /** Modül private listesindeyse VE kullanıcının aktif bir anahtarı yoksa true (kilitli). */
+    /** True (locked) if the module is on the private list AND the user has no active key. */
     fun isModuleLocked(moduleName: String): Boolean {
         val s = _state.value
         return s.privateModules.any { it.equals(moduleName, ignoreCase = true) } && !s.isActive
@@ -121,7 +121,7 @@ object PrivateAccessManager {
         data class NetworkError(val message: String) : RedeemResult()
     }
 
-    /** Sunucuya anahtarı doğrulatır; başarılıysa yerel state'i günceller. IO thread'inde çalışır. */
+    /** Verifies the key against the server; updates local state on success. Runs on the IO thread. */
     suspend fun redeem(key: String): RedeemResult = withContext(Dispatchers.IO) {
         val trimmed = key.trim()
         if (trimmed.isEmpty()) return@withContext RedeemResult.Invalid
@@ -129,7 +129,7 @@ object PrivateAccessManager {
         try {
             val body = JSONObject().put("key", trimmed)
             val (code, text) = httpPostJson("$BASE_URL/private-key/verify", body)
-                ?: return@withContext RedeemResult.NetworkError("Sunucuya bağlanılamadı")
+                ?: return@withContext RedeemResult.NetworkError("Could not reach the server")
 
             if (code == 429) return@withContext RedeemResult.RateLimited
 
@@ -150,12 +150,12 @@ object PrivateAccessManager {
             persist(newState)
             RedeemResult.Success(expiresAt)
         } catch (e: Exception) {
-            Log.e(TAG, "Redeem hatası", e)
-            RedeemResult.NetworkError(e.message ?: "Bilinmeyen hata")
+            Log.e(TAG, "Redeem error", e)
+            RedeemResult.NetworkError(e.message ?: "Unknown error")
         }
     }
 
-    /** Aktif bir anahtar varken private modül listesini sunucudan tazeler (anahtar tekrar girilmeden). */
+    /** Refreshes the private module list from the server while a key is active (no re-entry needed). */
     suspend fun refreshModules() = withContext(Dispatchers.IO) {
         if (!isActive()) return@withContext
         try {
@@ -169,11 +169,11 @@ object PrivateAccessManager {
             _state.value = newState
             persist(newState)
         } catch (e: Exception) {
-            Log.e(TAG, "Private modül listesi tazelenemedi", e)
+            Log.e(TAG, "Failed to refresh private module list", e)
         }
     }
 
-    /** Kullanıcı anahtarı kendi isteğiyle kaldırırsa (örn. "Devre dışı bırak" butonu). */
+    /** Called when the user removes their key themselves (e.g. the "Deactivate" button). */
     fun deactivate() {
         val newState = State()
         _state.value = newState
@@ -195,7 +195,7 @@ object PrivateAccessManager {
             val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
             code to text
         } catch (e: Exception) {
-            Log.e(TAG, "HTTP POST hatası: $urlStr", e)
+            Log.e(TAG, "HTTP POST error: $urlStr", e)
             null
         }
     }
@@ -212,7 +212,7 @@ object PrivateAccessManager {
             val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
             code to text
         } catch (e: Exception) {
-            Log.e(TAG, "HTTP GET hatası: $urlStr", e)
+            Log.e(TAG, "HTTP GET error: $urlStr", e)
             null
         }
     }

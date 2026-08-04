@@ -229,7 +229,7 @@ private suspend fun refreshGatePasswordIfNeeded(context: Context) {
 
 private enum class DashTab { RELAY, CONFIG, ACCOUNTS, SETTINGS }
 
-/** Ayarlar > Erişilebilirlik listesinde KeybindAccessibilityService'in açık olup olmadığını kontrol eder. */
+/** Checks whether KeybindAccessibilityService is enabled under Settings > Accessibility. */
 private fun isAccessibilityServiceEnabled(context: Context): Boolean {
     val expected = "${context.packageName}/com.rubidiumclient.input.KeybindAccessibilityService"
     val enabled = Settings.Secure.getString(
@@ -258,8 +258,8 @@ class DashboardActivity : ComponentActivity() {
     }
 
     private fun requestAccessibilityPermission() {
-        // Android, Erişilebilirlik servislerini bir Intent sonucuyla dönmez —
-        // sadece ayarlar ekranını açabiliyoruz; durumu onResume()'de tekrar okuyoruz.
+        // Android doesn't return accessibility service state via an Intent result —
+        // we can only open the settings screen; we re-check the state in onResume().
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
@@ -359,10 +359,10 @@ class DashboardActivity : ComponentActivity() {
     }
 
     private fun stopRelay() {
-        // SessionManager.stop() artık state'i anında günceller ve ağır Netty
-        // shutdown işini kendi arka plan scope'unda yapar (bkz. SessionManager.kt),
-        // bu yüzden burada main thread'i bloklamaz; lifecycleScope'a sarmaya
-        // gerek yok (onDestroy() içinde zaten iptal olurdu).
+        // SessionManager.stop() now updates state immediately and does the heavy
+        // Netty shutdown work on its own background scope (see SessionManager.kt),
+        // so it doesn't block the main thread here; no need to wrap it in
+        // lifecycleScope (it would be cancelled inside onDestroy() anyway).
         SessionManager.stop()
         PacketEventBus.clear()
         EntityTracker.reset()
@@ -784,12 +784,8 @@ private fun DashboardTab(
         SelectedApplicationCard(packageName = selectedPackage, onClick = onOpenAppPicker)
         Spacer(Modifier.height(16.dp))
 
-        AnimatedVisibility(
-            visible = showServerPanel,
-            enter   = fadeIn(tween(200)) + expandVertically(tween(250)),
-            exit    = fadeOut(tween(150)) + shrinkVertically(tween(200))
-        ) {
-            Column {
+        if (showServerPanel) {
+            Dialog(onDismissRequest = onDismissServerPanel) {
                 ServerSettingsPanel(
                     currentHost   = serverHost,
                     currentPort   = serverPort,
@@ -798,7 +794,6 @@ private fun DashboardTab(
                     onReset       = onResetServer,
                     onDismiss     = onDismissServerPanel
                 )
-                Spacer(Modifier.height(16.dp))
             }
         }
 
@@ -1456,17 +1451,17 @@ private fun SettingsTab(
                         scope.launch {
                             when (val result = PrivateAccessManager.redeem(keyInput)) {
                                 is PrivateAccessManager.RedeemResult.Success -> {
-                                    redeemMsg = "Rubidium Private etkinleştirildi." to false
+                                    redeemMsg = "Rubidium Private activated." to false
                                     keyInput  = ""
                                 }
                                 is PrivateAccessManager.RedeemResult.Invalid ->
-                                    redeemMsg = "Geçersiz anahtar." to true
+                                    redeemMsg = "Invalid key." to true
                                 is PrivateAccessManager.RedeemResult.Expired ->
-                                    redeemMsg = "Bu anahtarın süresi dolmuş." to true
+                                    redeemMsg = "This key has expired." to true
                                 is PrivateAccessManager.RedeemResult.RateLimited ->
-                                    redeemMsg = "Çok fazla deneme yapıldı, biraz sonra tekrar dene." to true
+                                    redeemMsg = "Too many attempts, try again in a bit." to true
                                 is PrivateAccessManager.RedeemResult.NetworkError ->
-                                    redeemMsg = "Bağlantı hatası: ${result.message}" to true
+                                    redeemMsg = "Connection error: ${result.message}" to true
                             }
                             redeemBusy = false
                         }
@@ -1631,9 +1626,9 @@ private fun PrivateKeySection(
                                 java.text.SimpleDateFormat("d MMM yyyy, HH:mm", java.util.Locale.getDefault())
                                     .format(java.util.Date(state.expiresAt))
                             }
-                            "Aktif · $date tarihine kadar"
-                        } else "Aktif · Süresiz"
-                    } else "Bazı modüller sadece geçerli bir anahtarla açılır",
+                            "Active · until $date"
+                        } else "Active · Lifetime"
+                    } else "Some modules require a valid key to unlock",
                     fontSize = 11.sp,
                     color = if (state.isActive) RubidiumSuccess else RubidiumOnSurfaceDim,
                     fontFamily = FontFamily.Monospace
@@ -1662,7 +1657,7 @@ private fun PrivateKeySection(
                     .padding(vertical = 9.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text("Devre Dışı Bırak", fontSize = 12.sp, color = RubidiumError, fontFamily = FontFamily.Monospace)
+                Text("Deactivate", fontSize = 12.sp, color = RubidiumError, fontFamily = FontFamily.Monospace)
             }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1695,7 +1690,7 @@ private fun PrivateKeySection(
                     if (busy) {
                         CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = RubidiumOnSurface)
                     } else {
-                        Text("Aktifleştir", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                        Text("Activate", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
                     }
                 }
             }
@@ -1739,7 +1734,7 @@ private fun AccessibilityPermissionRow(enabled: Boolean, onClick: () -> Unit) {
                 fontFamily = FontFamily.Monospace
             )
             Text(
-                "Klavye/gamepad/yan-tuş keybind'ları için gerekli",
+                "Required for keyboard/gamepad/side-button keybinds",
                 fontSize = 11.sp,
                 color = RubidiumOnSurfaceDim,
                 fontFamily = FontFamily.Monospace

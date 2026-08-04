@@ -21,33 +21,33 @@ private const val TAG = "KeybindManager"
 private val Context.keybindDataStore: DataStore<Preferences> by preferencesDataStore(name = "ox_keybinds")
 
 /**
- * Fiziksel tuş (Bluetooth klavye tuş kodu / bir farenin ekstra düğmesi / ses
- * tuşu) <-> modül eşlemesini tutan merkezi kayıt.
+ * Central registry mapping a physical key (Bluetooth keyboard key code / a
+ * mouse's extra button / a volume key) to a module.
  *
- * Gerçek tuş yakalama işini bu sınıf YAPMIYOR — sadece eşlemeyi tutuyor ve
- * persist ediyor:
- *  - Klavye / gamepad / ekstra fare düğmeleri -> KeybindAccessibilityService
- *    tarafından yakalanıp [dispatch] çağrılıyor.
- *  - Ses tuşları -> OverlayService'in MediaSession tabanlı volume
- *    interceptor'ı tarafından yakalanıp [dispatch] çağrılıyor.
+ * This class does NOT do the actual key capturing — it only holds and
+ * persists the mapping:
+ *  - Keyboard / gamepad / extra mouse buttons -> captured by
+ *    KeybindAccessibilityService, which calls [dispatch].
+ *  - Volume keys -> captured by OverlayService's MediaSession-based volume
+ *    interceptor, which calls [dispatch].
  *
- * Standart sol/sağ mouse tıklaması Android'de KeyEvent değil MotionEvent
- * olarak geldiği için (ve root olmadan başka bir uygulamanın penceresinden
- * sistem genelinde yakalanamadığı için) bu sistemin KAPSAMI DIŞINDA —
- * yalnızca KeyEvent üreten girdiler (klavye tuşları, çoğu farenin
- * ileri/geri/yan tuşları, gamepad düğmeleri, ses tuşları) desteklenir.
+ * Standard left/right mouse clicks arrive on Android as MotionEvents rather
+ * than KeyEvents (and can't be captured system-wide from another app's
+ * window without root), so they're OUT OF SCOPE for this system — only
+ * inputs that produce a KeyEvent (keyboard keys, most mice's forward/back/
+ * side buttons, gamepad buttons, volume keys) are supported.
  */
 object KeybindManager {
     private val KEY_BINDINGS = stringPreferencesKey("bindings")
 
-    /** Ses tuşları gerçek KeyEvent kodu üretmiyor (MediaSession üzerinden yakalanıyor),
-     *  bu yüzden gerçek Android KeyEvent kodlarıyla çakışmayacak sanal kodlar kullanıyoruz. */
+    /** Volume keys don't produce a real KeyEvent code (they're captured via MediaSession),
+     *  so we use virtual codes that won't collide with real Android KeyEvent codes. */
     const val VOLUME_UP = -1
     const val VOLUME_DOWN = -2
 
     @Volatile private var appContext: Context? = null
 
-    // keyCode -> modül adı
+    // keyCode -> module name
     private val _bindings = MutableStateFlow<Map<Int, String>>(emptyMap())
     val bindings: StateFlow<Map<Int, String>> = _bindings.asStateFlow()
 
@@ -57,12 +57,12 @@ object KeybindManager {
             val raw = runBlocking { safeCtx().keybindDataStore.data.map { it[KEY_BINDINGS] }.first() }
             _bindings.value = parse(raw)
         } catch (e: Exception) {
-            Log.e(TAG, "Keybind'lar yüklenemedi", e)
+            Log.e(TAG, "Failed to load keybinds", e)
         }
     }
 
     private fun safeCtx(): Context =
-        appContext ?: throw IllegalStateException("KeybindManager.init() çağrılmamış!")
+        appContext ?: throw IllegalStateException("KeybindManager.init() was not called!")
 
     private fun parse(raw: String?): Map<Int, String> {
         if (raw.isNullOrBlank()) return emptyMap()
@@ -72,7 +72,7 @@ object KeybindManager {
                 .mapNotNull { key -> key.toIntOrNull()?.let { it to json.getString(key) } }
                 .toMap()
         } catch (e: Exception) {
-            Log.e(TAG, "Keybind JSON parse edilemedi", e)
+            Log.e(TAG, "Failed to parse keybind JSON", e)
             emptyMap()
         }
     }
@@ -88,11 +88,11 @@ object KeybindManager {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Keybind'lar kaydedilemedi", e)
+            Log.e(TAG, "Failed to save keybinds", e)
         }
     }
 
-    /** Bir tuşu bir modüle atar. O modülde önceden başka bir tuş bağlıysa onu çözer. */
+    /** Binds a key to a module. If that module already had a different key bound, it's cleared first. */
     fun assign(keyCode: Int, moduleName: String) {
         val updated = _bindings.value.toMutableMap()
         updated.entries.removeAll { it.value.equals(moduleName, ignoreCase = true) }
@@ -123,10 +123,10 @@ object KeybindManager {
     }
 
     /**
-     * Bir tuşa basıldığında çağrılır. Eşleşen bir modül varsa (ve modül
-     * Rubidium Private ile kilitli değilse) onu toggle eder ve true döner
-     * (çağıran taraf event'i tüketebilir); eşleşme yoksa veya modül
-     * kilitliyse false döner.
+     * Called when a key is pressed. If a module is bound to it (and the
+     * module isn't locked behind Rubidium Private), toggles it and returns
+     * true (the caller may consume the event); returns false if there's no
+     * binding or the module is locked.
      */
     fun dispatch(keyCode: Int): Boolean {
         val moduleName = _bindings.value[keyCode] ?: return false

@@ -98,9 +98,9 @@ class RubidiumClientApp : Application() {
             start()
         }
 
-        // Rubidium Private anahtarı aktifken, admin panelde private modül
-        // listesi değişirse anahtar tekrar girilmeden yerel kilit listesinin
-        // güncel kalması için periyodik tazeleme.
+        // While a Rubidium Private key is active, periodically refresh the local
+        // lock list so admin panel changes to the private module list take
+        // effect without the user having to re-enter their key.
         Thread({
             while (true) {
                 try {
