@@ -98,9 +98,10 @@ class RubidiumClientApp : Application() {
             start()
         }
 
-        // While a Rubidium Private key is active, periodically refresh the local
-        // lock list so admin panel changes to the private module list take
-        // effect without the user having to re-enter their key.
+        // Periodically refresh the private module list in the background so
+        // admin panel changes take effect without the user re-entering their
+        // key. The first sync (including retry-until-success if the app
+        // started offline) is already kicked off by PrivateAccessManager.init().
         Thread({
             while (true) {
                 try {

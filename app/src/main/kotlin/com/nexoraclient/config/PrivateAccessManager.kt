@@ -10,6 +10,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,21 @@ import java.net.URL
 private const val TAG = "PrivateAccessManager"
 private const val BASE_URL = "https://oxclient.com.tr"
 
+/**
+ * Fail-closed default. Used only when there's no cached state at all (fresh
+ * install / cleared data) AND the server hasn't been reached yet — e.g. the
+ * app is opened for the very first time with no internet connection. Until
+ * the real list is fetched, these are treated as locked so a user can't get
+ * a window of unrestricted access just by starting offline.
+ *
+ * Keep this in sync with whatever is currently marked private in the admin
+ * panel — it's a safety net, not a substitute for the real list.
+ */
+private val FALLBACK_PRIVATE_MODULES = setOf(
+    "SelfTrap", "AutoTrap", "PistonAura", "BedAura", "AntiBed",
+    "AutoTravel", "AutoScaffold", "ElytraFly", "AutoMapArt", "AutoMine"
+)
+
 private val Context.privateAccessDataStore: DataStore<Preferences> by preferencesDataStore(name = "ox_private_access")
 
 /**
@@ -40,16 +56,21 @@ private val Context.privateAccessDataStore: DataStore<Preferences> by preference
  * the UI side ([isModuleLocked], checked in OverlayService's module list)
  * and in keybind dispatch ([KeybindManager]).
  *
- * Once a key is entered, as long as it stays active (not expired) the module
- * list is periodically refreshed via [refreshModules] — so if the admin
- * adds/removes a module from the list, the user doesn't have to re-enter
- * their key.
+ * The private module list is fetched from the server independent of whether
+ * a key is active — [refreshModules] always runs, since knowing *which*
+ * modules are private isn't sensitive, only unlocking them is. If there's no
+ * cached list yet and the server can't be reached (e.g. first launch,
+ * offline), a bundled fallback list is treated as locked until the real
+ * list is fetched, and fetching is retried with backoff until it succeeds.
  */
 object PrivateAccessManager {
     private val KEY_STATE = stringPreferencesKey("state")
 
     @Volatile private var appContext: Context? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /** True until we've gotten a real module list — either from cache or the server. */
+    @Volatile private var needsSync = true
 
     data class State(
         val licenseKey: String? = null,
@@ -65,13 +86,38 @@ object PrivateAccessManager {
 
     fun init(context: Context) {
         appContext = context.applicationContext
+        var loadedFromCache = false
         try {
             val raw = runBlocking { safeCtx().privateAccessDataStore.data.map { it[KEY_STATE] }.first() }
-            _state.value = parse(raw)
+            if (!raw.isNullOrBlank()) {
+                _state.value = parse(raw)
+                loadedFromCache = true
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load private access state", e)
         }
-        scope.launch { refreshModules() }
+
+        if (!loadedFromCache) {
+            // No cache at all (fresh install / cleared data). Assume the known
+            // private modules are locked until we actually reach the server —
+            // don't let "offline on first launch" mean "everything unlocked".
+            _state.value = _state.value.copy(privateModules = FALLBACK_PRIVATE_MODULES)
+        } else {
+            needsSync = false
+        }
+
+        scope.launch { syncModules() }
+    }
+
+    /** Fetches the module list once; if it still hasn't succeeded, retries with backoff until it does. */
+    private suspend fun syncModules() {
+        var delayMs = 5_000L
+        while (true) {
+            val success = refreshModules()
+            if (success || !needsSync) return
+            delay(delayMs)
+            delayMs = (delayMs * 2).coerceAtMost(60_000L)
+        }
     }
 
     private fun safeCtx(): Context =
@@ -153,6 +199,7 @@ object PrivateAccessManager {
             val newState = State(licenseKey = trimmed.uppercase(), expiresAt = expiresAt, privateModules = modules)
             _state.value = newState
             persist(newState)
+            needsSync = false
             RedeemResult.Success(expiresAt)
         } catch (e: Exception) {
             Log.e(TAG, "Redeem error", e)
@@ -166,20 +213,25 @@ object PrivateAccessManager {
      * Runs regardless of whether the user has an active key — which modules
      * are private isn't secret, it's what [isModuleLocked] needs to know
      * which toggles to lock. Only the key itself gates unlocking.
+     *
+     * @return true if the list was successfully fetched and applied.
      */
-    suspend fun refreshModules() = withContext(Dispatchers.IO) {
+    suspend fun refreshModules(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val (code, text) = httpGetJson("$BASE_URL/private-modules") ?: return@withContext
-            if (code !in 200..299) return@withContext
+            val (code, text) = httpGetJson("$BASE_URL/private-modules") ?: return@withContext false
+            if (code !in 200..299) return@withContext false
             val json = JSONObject(text)
             val modules = json.optJSONArray("modules")?.let { arr ->
                 (0 until arr.length()).map { arr.getString(it) }.toSet()
-            } ?: return@withContext
+            } ?: return@withContext false
             val newState = _state.value.copy(privateModules = modules)
             _state.value = newState
             persist(newState)
+            needsSync = false
+            true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to refresh private module list", e)
+            false
         }
     }
 
