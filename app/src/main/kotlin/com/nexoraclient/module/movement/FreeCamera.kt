@@ -40,7 +40,7 @@ import org.cloudburstmc.protocol.bedrock.packet.UpdateAbilitiesPacket
  * protocol sürümünde de aynı isimle mevcut olmalı.
  */
 class FreeCamera : BaseModule(
-    name        = "FreeCamera",
+    name        = "FreeCam",
     category    = ModuleCategory.MOVEMENT,
     description = "Lokal NOCLIP+uçuş ile serbest kamera; sunucuya dondurulmuş pozisyon gönderilir"
 ) {
@@ -52,6 +52,7 @@ class FreeCamera : BaseModule(
     // gibi Jump/Sneak'e doğrudan SetEntityMotionPacket enjekte ederek garantili
     // bir dikey hız veriyoruz, ability alanına güvenmek yerine.
     private val verticalSpeed = float("Vertical Speed",  1.0f, 0.1f, 3.0f)
+    private val shortcut      = bool ("Shortcut",         false)
 
     @Volatile private var active = false
     @Volatile private var frozenX = 0f
