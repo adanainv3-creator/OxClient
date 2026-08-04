@@ -45,6 +45,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rubidiumclient.config.PrivateAccessManager
 import com.rubidiumclient.module.KeybindManager
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.Lifecycle
@@ -730,7 +731,12 @@ private fun HileMenu(
 ) {
     var section by remember { mutableStateOf(MenuSection.COMBAT) }
     val cat  = section.toModuleCategory()
-    val mods = remember(moduleVersion, cat) { cat?.let { ModuleManager.byCategory(it) } ?: emptyList() }
+    val privateState by PrivateAccessManager.state.collectAsState()
+    val mods = remember(moduleVersion, cat, privateState) {
+        cat?.let { ModuleManager.byCategory(it) }
+            ?.filterNot { PrivateAccessManager.isModuleLocked(it.name) }
+            ?: emptyList()
+    }
     val relayActive by SessionManager.isActive.collectAsState()
 
     Box(
@@ -758,7 +764,8 @@ private fun HileMenu(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Rubidium Client", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold,
+                    Text(if (privateState.isActive) "Rubidium Private" else "Rubidium Client",
+                        fontSize = 18.sp, fontWeight = FontWeight.ExtraBold,
                         color = RubidiumOnBackground)
                     Box(
                         modifier = Modifier
@@ -882,7 +889,7 @@ private fun KeybindsSection(onRequestVolumeCapture: ((Int) -> Unit) -> Unit) {
                 )
             }
             ModuleCategory.entries.forEach { cat ->
-                val mods = ModuleManager.byCategory(cat)
+                val mods = ModuleManager.byCategory(cat).filterNot { PrivateAccessManager.isModuleLocked(it.name) }
                 if (mods.isNotEmpty()) {
                     item {
                         Text(
@@ -1640,6 +1647,7 @@ private fun ComboShortcutPanel(module: ComboShortcut) {
         ModuleCategory.values()
             .flatMap { ModuleManager.byCategory(it) }
             .distinctBy { it.name }
+            .filterNot { PrivateAccessManager.isModuleLocked(it.name) }
             .filter { it.name != module.name }
     }
 
