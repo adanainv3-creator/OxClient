@@ -26,7 +26,7 @@ class AutoTotem : BaseModule(
     description = "Totemi sürekli sol ele takar"
 ) {
     companion object {
-        private const val RESEND_COOLDOWN_MS = 8L
+        private const val RESEND_COOLDOWN_MS = 60L
         private const val TICK_INTERVAL_MS   = 5L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
