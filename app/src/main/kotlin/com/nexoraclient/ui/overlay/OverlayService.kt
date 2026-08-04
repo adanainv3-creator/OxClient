@@ -136,6 +136,7 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
         lcReg.currentState = Lifecycle.State.RESUMED
         OverlayState.setOverlayVisible(true)
         startStatsPoller()
+        startPrivateAccessWatcher()
         return START_STICKY
     }
 
@@ -149,6 +150,12 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun startPrivateAccessWatcher() {
+        serviceScope.launch {
+            PrivateAccessManager.state.collect { refreshShortcuts() }
+        }
+    }
 
     private fun startStatsPoller() {
         serviceScope.launch {
@@ -267,12 +274,14 @@ class OverlayService : Service(), LifecycleOwner, SavedStateRegistryOwner {
     }
 
     private fun refreshShortcuts() {
-        val active = ModuleManager.shortcutModules().map { it.name }.toSet()
+        val unlockedShortcutModules = ModuleManager.shortcutModules()
+            .filterNot { PrivateAccessManager.isModuleLocked(it.name) }
+        val active = unlockedShortcutModules.map { it.name }.toSet()
         shortcutViews.entries.filter { it.key !in active }.forEach { (name, view) ->
             try { wm.removeViewImmediate(view) } catch (_: Exception) {}
             shortcutViews.remove(name)
         }
-        ModuleManager.shortcutModules().forEachIndexed { idx, mod ->
+        unlockedShortcutModules.forEachIndexed { idx, mod ->
             if (mod.name !in shortcutViews) {
                 val pos = OverlayPositions.shortcuts.getOrPut(mod.name) { Pos(50f, 420f + idx * 50f) }
                 val params = overlayParams(
