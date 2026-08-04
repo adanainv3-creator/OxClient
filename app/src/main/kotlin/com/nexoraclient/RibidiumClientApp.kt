@@ -10,6 +10,7 @@ import java.io.File
 import com.rubidiumclient.auth.AccountManager
 import com.rubidiumclient.auth.MicrosoftAuthManager
 import com.rubidiumclient.config.Config
+import com.rubidiumclient.config.PrivateAccessManager
 import com.rubidiumclient.config.ServerConfig
 import com.rubidiumclient.core.relay.Definitions
 import com.rubidiumclient.module.ModuleManager
@@ -84,6 +85,7 @@ class RubidiumClientApp : Application() {
         MicrosoftAuthManager.init(applicationContext)
         FriendManager.init(applicationContext)
         KeybindManager.init(applicationContext)
+        PrivateAccessManager.init(applicationContext)
 
         Thread({
             try {
@@ -92,6 +94,23 @@ class RubidiumClientApp : Application() {
                 Log.e(TAG, "Definitions load error: ${e.message}", e)
             }
         }, "RubidiumDefinitionsLoader").apply {
+            isDaemon = true
+            start()
+        }
+
+        // Rubidium Private anahtarı aktifken, admin panelde private modül
+        // listesi değişirse anahtar tekrar girilmeden yerel kilit listesinin
+        // güncel kalması için periyodik tazeleme.
+        Thread({
+            while (true) {
+                try {
+                    kotlinx.coroutines.runBlocking { PrivateAccessManager.refreshModules() }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Private module refresh error: ${e.message}", e)
+                }
+                Thread.sleep(30 * 60 * 1000L) // 30 dakikada bir
+            }
+        }, "RubidiumPrivateRefresher").apply {
             isDaemon = true
             start()
         }

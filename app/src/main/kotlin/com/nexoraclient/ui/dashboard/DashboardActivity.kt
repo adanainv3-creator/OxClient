@@ -78,6 +78,7 @@ import com.rubidiumclient.auth.MicrosoftAuthManager
 import com.rubidiumclient.auth.SavedAccount
 import com.rubidiumclient.config.ServerConfig
 import com.rubidiumclient.config.Config
+import com.rubidiumclient.config.PrivateAccessManager
 import com.rubidiumclient.config.MapArtPlan
 import com.rubidiumclient.utils.BlockPalette
 import com.rubidiumclient.core.proxy.EntityTracker
@@ -743,7 +744,11 @@ private fun DashboardTab(
     onRequestAccountLogin : () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        DashboardHeader(title = "Rubidium Client V1.3", subtitle = "Made by Oxygen8315")
+        val privateState by PrivateAccessManager.state.collectAsStateWithLifecycle()
+        DashboardHeader(
+            title    = if (privateState.isActive) "Rubidium Private" else "Rubidium Client V1.3",
+            subtitle = "Made by Oxygen8315"
+        )
 
         AnimatedVisibility(
             visible = !accountLoggedIn,
@@ -1421,6 +1426,12 @@ private fun SettingsTab(
 ) {
     val context = LocalContext.current
     var uiStyle by remember { mutableStateOf(OverlayUiStore.get(context)) }
+    val scope = rememberCoroutineScope()
+
+    val privateState by PrivateAccessManager.state.collectAsStateWithLifecycle()
+    var keyInput by remember { mutableStateOf("") }
+    var redeemBusy by remember { mutableStateOf(false) }
+    var redeemMsg by remember { mutableStateOf<Pair<String, Boolean>?>(null) } // text, isError
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(title = "Settings")
@@ -1430,6 +1441,43 @@ private fun SettingsTab(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SettingsSectionLabel("Rubidium Private")
+                PrivateKeySection(
+                    state      = privateState,
+                    keyInput   = keyInput,
+                    onKeyInput = { keyInput = it },
+                    busy       = redeemBusy,
+                    message    = redeemMsg,
+                    onActivate = {
+                        if (keyInput.isBlank()) return@PrivateKeySection
+                        redeemBusy = true
+                        redeemMsg  = null
+                        scope.launch {
+                            when (val result = PrivateAccessManager.redeem(keyInput)) {
+                                is PrivateAccessManager.RedeemResult.Success -> {
+                                    redeemMsg = "Rubidium Private etkinleştirildi." to false
+                                    keyInput  = ""
+                                }
+                                is PrivateAccessManager.RedeemResult.Invalid ->
+                                    redeemMsg = "Geçersiz anahtar." to true
+                                is PrivateAccessManager.RedeemResult.Expired ->
+                                    redeemMsg = "Bu anahtarın süresi dolmuş." to true
+                                is PrivateAccessManager.RedeemResult.RateLimited ->
+                                    redeemMsg = "Çok fazla deneme yapıldı, biraz sonra tekrar dene." to true
+                                is PrivateAccessManager.RedeemResult.NetworkError ->
+                                    redeemMsg = "Bağlantı hatası: ${result.message}" to true
+                            }
+                            redeemBusy = false
+                        }
+                    },
+                    onDeactivate = {
+                        PrivateAccessManager.deactivate()
+                        redeemMsg = null
+                    }
+                )
+            }
+
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SettingsSectionLabel("Permissions")
                 AccessibilityPermissionRow(
@@ -1533,6 +1581,131 @@ private fun UiStyleOption(
                 style.description,
                 fontSize = 11.sp,
                 color = RubidiumOnSurfaceDim,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+    }
+}
+
+@Composable
+private fun PrivateKeySection(
+    state       : PrivateAccessManager.State,
+    keyInput    : String,
+    onKeyInput  : (String) -> Unit,
+    busy        : Boolean,
+    message     : Pair<String, Boolean>?,
+    onActivate  : () -> Unit,
+    onDeactivate: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(RubidiumSurface)
+            .border(
+                1.dp,
+                if (state.isActive) RubidiumAccentLight.copy(0.5f) else RubidiumOutlineStrong,
+                RoundedCornerShape(12.dp)
+            )
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(
+                modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(RubidiumBackground),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("★", fontSize = 16.sp, color = RubidiumAccentLight)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Rubidium Private",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = RubidiumOnSurface,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    if (state.isActive) {
+                        if (state.expiresAt != null) {
+                            val date = remember(state.expiresAt) {
+                                java.text.SimpleDateFormat("d MMM yyyy, HH:mm", java.util.Locale.getDefault())
+                                    .format(java.util.Date(state.expiresAt))
+                            }
+                            "Aktif · $date tarihine kadar"
+                        } else "Aktif · Süresiz"
+                    } else "Bazı modüller sadece geçerli bir anahtarla açılır",
+                    fontSize = 11.sp,
+                    color = if (state.isActive) RubidiumSuccess else RubidiumOnSurfaceDim,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            if (state.isActive) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(RubidiumSuccess.copy(0.2f))
+                        .border(1.dp, RubidiumSuccess.copy(0.5f), RoundedCornerShape(20.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text("Active", fontSize = 9.sp, color = RubidiumSuccess, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+
+        if (state.isActive) {
+            Box(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(RubidiumBackground)
+                    .border(1.dp, RubidiumOutline, RoundedCornerShape(8.dp))
+                    .clickable { onDeactivate() }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Devre Dışı Bırak", fontSize = 12.sp, color = RubidiumError, fontFamily = FontFamily.Monospace)
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = keyInput,
+                    onValueChange = onKeyInput,
+                    singleLine = true,
+                    placeholder = { Text("RBD-XXXX-XXXX-XXXX-XXXX", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = RubidiumOnSurfaceDim) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = RubidiumAccent,
+                        unfocusedBorderColor = RubidiumOutline,
+                        cursorColor = RubidiumAccentLight
+                    ),
+                    textStyle = LocalTextStyle.current.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        color = RubidiumOnSurface
+                    )
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (busy) RubidiumOutline else RubidiumAccent)
+                        .clickable(enabled = !busy) { onActivate() }
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = RubidiumOnSurface)
+                    } else {
+                        Text("Aktifleştir", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        }
+
+        message?.let { (text, isError) ->
+            Text(
+                text,
+                fontSize = 11.sp,
+                color = if (isError) RubidiumError else RubidiumSuccess,
                 fontFamily = FontFamily.Monospace
             )
         }

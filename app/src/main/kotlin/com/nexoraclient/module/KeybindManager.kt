@@ -123,12 +123,15 @@ object KeybindManager {
     }
 
     /**
-     * Bir tuşa basıldığında çağrılır. Eşleşen bir modül varsa onu toggle eder
-     * ve true döner (çağıran taraf event'i tüketebilir); eşleşme yoksa false döner.
+     * Bir tuşa basıldığında çağrılır. Eşleşen bir modül varsa (ve modül
+     * Rubidium Private ile kilitli değilse) onu toggle eder ve true döner
+     * (çağıran taraf event'i tüketebilir); eşleşme yoksa veya modül
+     * kilitliyse false döner.
      */
     fun dispatch(keyCode: Int): Boolean {
         val moduleName = _bindings.value[keyCode] ?: return false
         val module = ModuleManager.byName(moduleName) ?: return false
+        if (com.rubidiumclient.config.PrivateAccessManager.isModuleLocked(module.name)) return false
         ModuleManager.toggle(module)
         return true
     }

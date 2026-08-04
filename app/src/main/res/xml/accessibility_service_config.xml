@@ -5,4 +5,4 @@
     android:accessibilityFlags="flagRequestFilterKeyEvents"
     android:canRequestFilterKeyEvents="true"
     android:notificationTimeout="100"
-    android:description="Rubidium Client'ın klavye/gamepad/ekstra fare tuşu keybind'larını yakalaması için kullanılır." />
+    android:description="@string/keybind_service_description" />
