@@ -36,11 +36,12 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusable
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
@@ -869,7 +870,7 @@ private fun KeybindsSection(onRequestVolumeCapture: ((Int) -> Unit) -> Unit) {
             .onPreviewKeyEvent { keyEvent ->
                 val target = listeningFor
                 if (target != null && keyEvent.type == KeyEventType.KeyDown) {
-                    KeybindManager.assign(keyEvent.nativeKeyEvent.keyCode, target)
+                    KeybindManager.assign(keyEvent.key.nativeKeyCode, target)
                     listeningFor = null
                     true
                 } else false
