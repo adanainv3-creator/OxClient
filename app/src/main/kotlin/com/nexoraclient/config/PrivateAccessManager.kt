@@ -7,12 +7,15 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -46,6 +49,7 @@ object PrivateAccessManager {
     private val KEY_STATE = stringPreferencesKey("state")
 
     @Volatile private var appContext: Context? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     data class State(
         val licenseKey: String? = null,
@@ -67,6 +71,7 @@ object PrivateAccessManager {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load private access state", e)
         }
+        scope.launch { refreshModules() }
     }
 
     private fun safeCtx(): Context =
@@ -155,9 +160,14 @@ object PrivateAccessManager {
         }
     }
 
-    /** Refreshes the private module list from the server while a key is active (no re-entry needed). */
+    /**
+     * Refreshes the private module list from the server.
+     *
+     * Runs regardless of whether the user has an active key — which modules
+     * are private isn't secret, it's what [isModuleLocked] needs to know
+     * which toggles to lock. Only the key itself gates unlocking.
+     */
     suspend fun refreshModules() = withContext(Dispatchers.IO) {
-        if (!isActive()) return@withContext
         try {
             val (code, text) = httpGetJson("$BASE_URL/private-modules") ?: return@withContext
             if (code !in 200..299) return@withContext
@@ -175,7 +185,7 @@ object PrivateAccessManager {
 
     /** Called when the user removes their key themselves (e.g. the "Deactivate" button). */
     fun deactivate() {
-        val newState = State()
+        val newState = _state.value.copy(licenseKey = null, expiresAt = null)
         _state.value = newState
         persist(newState)
     }
