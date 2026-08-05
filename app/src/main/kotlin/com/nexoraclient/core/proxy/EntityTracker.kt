@@ -601,16 +601,16 @@ object EntityTracker : PacketEventBus.PacketListener {
     // uyguluyoruz. ARMOR container'ı burada kasıtlı olarak işlenmiyor — AutoArmor kendi
     // ayrı packet listener'ında aynı sorunu yaşıyor, o ayrı bir fix gerektiriyor.
     //
-    // NOT: ItemStackResponse/ItemStackResponseContainer/ItemStackResponseSlot alan adları
-    // kullandığınız protocol-bedrock sürümüne göre değişebilir (result/status, containers/
-    // containerInfos, items/slots gibi). Derleme hatası verirse gerçek alan adlarını IDE
-    // autocomplete ile kontrol edip burayı ona göre düzelt.
+    // ItemStackResponseContainer.container (deprecated, v712 öncesi) ve .containerName
+    // (v712+, FullContainerName) İÇ İÇE DEĞİL, birbirinden bağımsız iki alan — containerName
+    // varsa onun .container'ı (ContainerSlotType) kullanılıyor, yoksa deprecated alana düşülüyor.
     private fun handleItemStackResponse(p: org.cloudburstmc.protocol.bedrock.packet.ItemStackResponsePacket) {
         for (response in p.entries) {
             if (response.result != org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.response.ItemStackResponseStatus.OK) continue
 
             for (container in response.containers) {
-                val containerType = container.container.container
+                @Suppress("DEPRECATION")
+                val containerType = container.containerName?.container ?: container.container
                 val isTrackedContainer =
                     containerType == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType.HOTBAR_AND_INVENTORY ||
                     containerType == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType.OFFHAND
