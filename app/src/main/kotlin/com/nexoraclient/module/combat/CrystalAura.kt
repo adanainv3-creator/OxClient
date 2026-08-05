@@ -1,1 +1,344 @@
-package com.rubidiumclient.module.combatimport com.rubidiumclient.core.proxy.EntityTrackerimport com.rubidiumclient.core.relay.Definitionsimport com.rubidiumclient.core.relay.RubidiumRelaySessionimport com.rubidiumclient.events.PacketEventimport com.rubidiumclient.events.PacketEventBusimport com.rubidiumclient.module.*import com.rubidiumclient.module.social.isFriendEntityimport com.rubidiumclient.utils.CritLockimport com.rubidiumclient.utils.InventoryUtilimport com.rubidiumclient.utils.MathUtilimport com.rubidiumclient.utils.PacketUtilimport com.rubidiumclient.utils.RotationUtilimport com.rubidiumclient.utils.WorldBlockTrackerimport kotlinx.coroutines.delayimport kotlinx.coroutines.launchimport org.cloudburstmc.math.vector.Vector3fimport org.cloudburstmc.math.vector.Vector3iimport org.cloudburstmc.protocol.bedrock.data.LevelEventimport org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinitionimport org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinitionimport org.cloudburstmc.protocol.bedrock.data.inventory.ContainerIdimport org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotTypeimport org.cloudburstmc.protocol.bedrock.data.inventory.ItemDataimport org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionTypeimport org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransactionimport org.cloudburstmc.protocol.bedrock.packet.*import java.util.concurrent.ConcurrentHashMapimport java.util.concurrent.atomic.AtomicIntegerimport kotlin.math.absimport kotlin.math.floorimport kotlin.math.maxclass CrystalAura : BaseModule(    name        = "CrystalAura",    category    = ModuleCategory.COMBAT,    description = "Çok hedefli otomatik kristal yerleştirme/kırma") {    enum class CritMode { None, MovePacket, Vanilla }    companion object {        private const val SELF_EYE_HEIGHT      = 1.62f        private const val BLOCK_DEF_SCAN_CAP   = 20000        private const val BLOCK_DEF_MISS_LIMIT = 64        private const val CANDIDATE_CACHE_MS   = 100L        private const val PLACE_RETRY_MS       = 150L        private const val BURST_DURATION_MS    = 1500L        private const val SEARCH_Y_BELOW       = 3        private const val SEARCH_Y_ABOVE       = 2        private const val MAX_PLACE_PER_TICK   = 32        private const val MAX_BREAK_PER_TICK   = 20        // Açık arazide arama karesi (searchRadius) büyükken buildCandidates her tick        // (cache süresi dolunca) TÜM hücreleri tarıyordu — her biri birkaç        // WorldBlockTracker lookup'ı ve (yüzey yoksa) bir obsidian denemesi        // demek. Yeterince aday bulununca aramayı erken kesmek hem gereksiz        // CPU'yu hem de kullanılmayacak hücreler için atılan obsidian        // paketlerini önlüyor — genel lag/paket iyileştirmesi.        private const val MAX_CANDIDATES_PER_TARGET = 12        // FIX: obsidian destek blokları hiçbir rate limit'e tabi değildi (bkz.        // tryPlaceObsidianSupportAt) — arama alanındaki her "yüzey yok" adayı        // için sınırsız paket gönderiliyordu, bu da "Too many packets" hatasının        // asıl kaynağıydı. Artık crystal placement'ta olduğu gibi hem tek tick        // başına sabit bir tavan hem de saniyelik token bucket var.        private const val MAX_OBSIDIAN_PER_TICK = 8        private val NON_SOLID = setOf(            "minecraft:air", "minecraft:water", "minecraft:flowing_water",            "minecraft:lava", "minecraft:flowing_lava",            "minecraft:void_air", "minecraft:cave_air"        )        private val CORNER_OFFSETS = arrayOf(            intArrayOf(-1, 0), intArrayOf(1, 0), intArrayOf(0, -1), intArrayOf(0, 1),            intArrayOf(-1,-1), intArrayOf(1,-1), intArrayOf(-1, 1), intArrayOf(1, 1)        )        // searchRadius ayarı 1..6 aralığında; her değer için (dx,dz) ofsetlerini        // MERKEZE UZAKLIĞA GÖRE artan sırada bir kez hesaplayıp cache'liyoruz.        // FIX (zayıf/yanlış kristal yerleşimi): buildCandidates önceden bu        // ofsetleri satır-satır (dx: -r..r, dz: -r..r) sırayla tarıyordu ve        // MAX_CANDIDATES_PER_TARGET'e ulaşınca DURUYORDU. Bu sıra merkeze göre        // değil ızgara sırasına göre olduğu için, hedefe en yakın (en çok hasar        // veren) kareler taranmadan önce cap dolup tarama kesilebiliyordu —        // özellikle searchRadius yüksekken hedefin tam altındaki ideal nokta        // hiç değerlendirilmeden, çok daha uzak bir köşe bloğu seçiliyordu.        // Artık en yakın halkadan başlanıyor, yani cap'e takılsa bile listede        // her zaman en güçlü (en yakın) adaylar var.        private val SPIRAL_OFFSETS_BY_RADIUS: Map<Int, List<IntArray>> = (1..6).associateWith { r ->            val cells = ArrayList<IntArray>((2 * r + 1) * (2 * r + 1))            for (dx in -r..r) for (dz in -r..r) cells.add(intArrayOf(dx, dz))            cells.sortBy { it[0] * it[0] + it[1] * it[1] }            cells        }    }    private val place             = bool("Place",            true)    private val breakCrystals     = bool("Break",            true)    private val multiTarget       = bool("Multi Target",     true)    private val tickIntervalMs    = int ("Speed (ms)",       15, 10, 100)    private val targetRange       = int ("Target Range",     14, 4, 30)    private val friendSkip        = bool("Friend Skip",      true)    private val predictMovement   = bool("Predict",          true)    private val placeRange        = int ("Place Range",      8, 2, 16)    private val searchRadius      = int ("Search Radius",    3, 1, 6)    private val maxPlacePerSec    = int ("Place/Sec",        45, 1, 200)    private val placeDelayMs      = int ("Place Delay",      10, 10, 500)    private val burstOnTotem      = bool("Burst on Totem",   true)    private val burstHealth       = int ("Burst HP",         8, 1, 20)    private val autoObsidian      = bool("Auto Obsidian",    true)    private val obsidianPerSec    = int ("Obsidian/Sec",     12, 1, 60)    private val selfSurround      = bool("Self Surround",    true)    private val breakRange        = int ("Break Range",      10, 2, 20)    private val breakDelayMs      = int ("Break Delay",      10, 10, 300)    private val breakPerSec       = int ("Break/Sec",        15, 1, 60)    private val breakCrit         = enum("Break Crit",       CritMode.MovePacket)    private val noSwitch          = bool("No Switch",        true)    private val crystalSlot       = int ("Crystal Slot",     1, 1, 9)    private val noParticles       = bool("No Particle",      true)    private val silentRotation    = bool("Silent Rotation",  true)    private val shortcut          = bool("Shortcut",         false)    private val pendingPositions  = ConcurrentHashMap<Long, Long>()    private val pendingObsidian   = ConcurrentHashMap<Long, Long>()    private val totemBurstUntil   = ConcurrentHashMap<Long, Long>()    private val lastPlaceMsMap    = ConcurrentHashMap<Long, Long>()    private val blockDefCache     = ConcurrentHashMap<String, BlockDefinition>()    private val candidateCache    = ConcurrentHashMap<Long, TargetCache>()    @Volatile private var lastBreakMs        = 0L    @Volatile private var lastSelfSurroundMs = 0L    private val placeTokens       = AtomicInteger(0)    @Volatile private var tokenWindowStart = 0L    @Volatile private var currentWindowCap = 0    @Volatile private var tickJob: kotlinx.coroutines.Job? = null    // Obsidian için ayrı token bucket (crystal token'larıyla paylaşılmıyor,    // çünkü obsidian daha önce hiçbir rate limit'e tabi değildi).    private val obsidianTokens       = AtomicInteger(0)    @Volatile private var obsidianTokenWindowStart = 0L    @Volatile private var obsidianCurrentWindowCap  = 0    // FIX ("Too many packets" — asıl kaynak): doBreakInRange'in place/obsidian'ın    // aksine hiç saniyelik token bucket'ı yoktu, sadece tek bir global    // breakDelayMs cooldown'u vardı. Bu cooldown her tetiklendiğinde    // MAX_BREAK_PER_TICK'e kadar kristal, her biri ~5 pakete (crit move +    // rotation move + swing + attack) kadar göndererek sınırsız kırılıyordu —    // çok sayıda kristal varken (grup savaşı) saniyede binlerce pakete kadar    // patlayabiliyordu. Artık place/obsidian ile aynı token bucket deseni var.    private val breakTokens          = AtomicInteger(0)    @Volatile private var breakTokenWindowStart = 0L    @Volatile private var breakCurrentWindowCap  = 0    // Bir tick() çağrısı boyunca (multiTarget açıkken TÜM hedefler için    // toplam) kaç obsidian denemesi yapıldığını sayar — MAX_OBSIDIAN_PER_TICK    // ile sınırlanır. tick() tek coroutine içinde sıralı çalıştığı için    // @Volatile gerekmiyor.    private var obsidianAttemptsThisTick = 0    // Aynı tick içinde birden fazla obsidian denemesi olacaksa, her seferinde    // yeniden inventory taratıp hotbar değiştirmek yerine (ekstra paket    // trafiği) hazırlanan item bir kez cache'lenip tick sonunda geri alınır.    private var obsidianPreparedThisTick: PreparedItem? = null    private data class SurfaceHit(val y: Int, val blockId: String, val headLevel: Boolean)    private data class PlacePos(val x: Int, val y: Int, val z: Int, val blockId: String)    private data class Candidate(val bx: Int, val bz: Int, val hitY: Int, val blockId: String, val distSq: Float, val headLevel: Boolean)    private data class TargetCache(val tx: Int, val ty: Int, val tz: Int, val candidates: List<Candidate>, val ts: Long)    private data class PreparedItem(val slot: Int, val item: ItemData, val revertTo: Int?)    private fun takePlaceToken(): Boolean {        val now = System.currentTimeMillis()        val cap = maxPlacePerSec.value        if (now - tokenWindowStart >= 1000L) {            tokenWindowStart = now; currentWindowCap = cap; placeTokens.set(cap)        } else if (cap > currentWindowCap) {            placeTokens.addAndGet(cap - currentWindowCap); currentWindowCap = cap        }        return placeTokens.getAndUpdate { if (it > 0) it - 1 else it } > 0    }    private fun takeObsidianToken(): Boolean {        val now = System.currentTimeMillis()        val cap = obsidianPerSec.value        if (now - obsidianTokenWindowStart >= 1000L) {            obsidianTokenWindowStart = now; obsidianCurrentWindowCap = cap; obsidianTokens.set(cap)        } else if (cap > obsidianCurrentWindowCap) {            obsidianTokens.addAndGet(cap - obsidianCurrentWindowCap); obsidianCurrentWindowCap = cap        }        return obsidianTokens.getAndUpdate { if (it > 0) it - 1 else it } > 0    }    private fun takeBreakToken(): Boolean {        val now = System.currentTimeMillis()        val cap = breakPerSec.value        if (now - breakTokenWindowStart >= 1000L) {            breakTokenWindowStart = now; breakCurrentWindowCap = cap; breakTokens.set(cap)        } else if (cap > breakCurrentWindowCap) {            breakTokens.addAndGet(cap - breakCurrentWindowCap); breakCurrentWindowCap = cap        }        return breakTokens.getAndUpdate { if (it > 0) it - 1 else it } > 0    }    private fun isBurstTarget(target: EntityTracker.TrackedEntity): Boolean {        if (!burstOnTotem.value) return false        if (target.health <= burstHealth.value) return true        return System.currentTimeMillis() < (totemBurstUntil[target.runtimeId] ?: 0L)    }    override fun onEnable() {        super.onEnable()        pendingPositions.clear(); pendingObsidian.clear()        blockDefCache.clear(); lastPlaceMsMap.clear()        totemBurstUntil.clear(); candidateCache.clear()        placeTokens.set(0); tokenWindowStart = 0L        obsidianTokens.set(0); obsidianTokenWindowStart = 0L        breakTokens.set(0); breakTokenWindowStart = 0L        obsidianPreparedThisTick = null        tickJob?.cancel()        tickJob = launchTickLoop(tickIntervalMs.value.toLong()) { tick() }    }    override fun onDisable() {        tickJob?.cancel(); tickJob = null        super.onDisable()        pendingPositions.clear(); pendingObsidian.clear()        lastPlaceMsMap.clear(); candidateCache.clear()        obsidianPreparedThisTick = null    }    override fun onPacket(event: PacketEvent) {        if (!isEnabled) return        when (val pkt = event.packet) {            is AddEntityPacket -> {                if (pkt.identifier.contains("crystal", ignoreCase = true)) {                    pendingPositions.remove(posKey(                        floor(pkt.position.x - 0.5f).toInt(),                        floor(pkt.position.y - 1f).toInt(),                        floor(pkt.position.z - 0.5f).toInt()                    ))                }            }            is UpdateBlockPacket -> {                val id = runCatching { pkt.definition?.runtimeId }.getOrNull()                if (id != null) pendingObsidian.remove(posKey(pkt.blockPosition.x, pkt.blockPosition.y, pkt.blockPosition.z))            }            is LevelEventPacket -> {                if (noParticles.value &&                    (pkt.type == LevelEvent.PARTICLE_EXPLOSION || pkt.type == LevelEvent.PARTICLE_BLOCK_EXPLOSION)                ) event.cancel()            }            is LevelSoundEventPacket -> {                if (noParticles.value) {                    val name = runCatching { pkt.sound?.name }.getOrNull() ?: ""                    if (name.contains("EXPLODE", ignoreCase = true)) event.cancel()                }            }            is CameraShakePacket -> { if (noParticles.value) event.cancel() }            is EntityEventPacket -> {                if (burstOnTotem.value) {                    val typeName = runCatching { pkt.type?.toString()?.uppercase() }.getOrNull() ?: ""                    if (typeName.contains("TOTEM"))                        totemBurstUntil[pkt.runtimeEntityId] = System.currentTimeMillis() + BURST_DURATION_MS                }            }            else -> {}        }    }    private suspend fun tick() {        obsidianAttemptsThisTick = 0        try {            if (selfSurround.value) doSelfSurround()            if (breakCrystals.value) doBreakInRange()            val targets = selectTargets()            if (targets.isEmpty()) { candidateCache.clear(); return }            val liveIds = targets.mapTo(HashSet(targets.size)) { it.runtimeId }            candidateCache.keys.retainAll(liveIds)            if (place.value) {                if (multiTarget.value) doPlaceMulti(targets) else doPlace(targets.first())            }        } finally {            // Tick boyunca paylaşılan obsidian item'ı (varsa) geri seçili slota al —            // her obsidian denemesinde ayrı ayrı revert etmek yerine tek seferde.            obsidianPreparedThisTick?.revertTo?.let { revertSlot ->                PacketEventBus.currentSession?.let { s ->                    InventoryUtil.sendHotbarSelect(s, revertSlot)                    EntityTracker.selfHotbarSlot = revertSlot                }            }            obsidianPreparedThisTick = null        }    }    private fun selectTargets(): List<EntityTracker.TrackedEntity> {        if (EntityTracker.selfRuntimeId <= 0L) return emptyList()        val sx = EntityTracker.selfX; val sy = EntityTracker.selfY; val sz = EntityTracker.selfZ        return EntityTracker.getPlayers(targetRange.value.toFloat())            .asSequence()            .filter { it.runtimeId != EntityTracker.selfRuntimeId }            .filter { !friendSkip.value || !it.isFriendEntity }            .filter { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) > 0.0225f }            .sortedWith(                compareByDescending<EntityTracker.TrackedEntity> { isBurstTarget(it) }                    .thenBy { it.health }                    .thenBy { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) }            )            .toList()    }    private fun predictedPos(target: EntityTracker.TrackedEntity): Triple<Float, Float, Float> {        if (!predictMovement.value) return Triple(target.x, target.y, target.z)        val vx = (target.x - target.prevX) * 3f        val vz = (target.z - target.prevZ) * 3f        return Triple(target.x + vx, target.y, target.z + vz)    }    private fun doPlaceMulti(targets: List<EntityTracker.TrackedEntity>) {        val session  = PacketEventBus.currentSession ?: return        val prepared = prepareItemForUse(session) ?: return        try {            for (t in targets) doPlace(t, session, prepared)        } finally {            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }        }    }    private fun buildCandidates(session: RubidiumRelaySession, target: EntityTracker.TrackedEntity, px: Float, py: Float, pz: Float): List<Candidate> {        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()        val radius = searchRadius.value        val cap = CORNER_OFFSETS.size + (2 * radius + 1) * (2 * radius + 1)        val list = ArrayList<Candidate>(cap)        val seen = HashSet<Int>(cap * 2)        for (off in CORNER_OFFSETS) addCandidateAt(session, tx + off[0], ty, tz + off[1], target, list, seen)        val offsets = SPIRAL_OFFSETS_BY_RADIUS[radius]            ?: (-radius..radius).flatMap { dx -> (-radius..radius).map { dz -> intArrayOf(dx, dz) } }                .sortedBy { it[0] * it[0] + it[1] * it[1] }        outer@ for (off in offsets) {            if (list.size >= MAX_CANDIDATES_PER_TARGET) break@outer            addCandidateAt(session, tx + off[0], ty, tz + off[1], target, list, seen)        }        // Ayak hizası (headLevel=false) her zaman baş hizasından (headLevel=true) önce        // gelir — mesafe sadece aynı seviye grubu içinde sıralamayı belirler. Birden        // fazla ayak-hizası noktası varsa (referans dosyasındaki gibi tek yere değil)        // hepsi bu sırayla döner, doPlace/doPlaceMulti bunların üzerinde teker teker gezer.        list.sortWith(compareBy<Candidate> { it.headLevel }.thenBy { it.distSq })        return list    }    private fun addCandidateAt(session: RubidiumRelaySession, bx: Int, ty: Int, bz: Int, target: EntityTracker.TrackedEntity, list: MutableList<Candidate>, seen: HashSet<Int>) {        val key = bx * 100000 + bz        if (!seen.add(key)) return        val hit = findSurface(bx, ty, bz) ?: run {            if (autoObsidian.value) tryPlaceObsidianSupportAt(session, bx, ty, bz)            return        }        val cx = bx + 0.5f; val cy = hit.y + 1f; val cz = bz + 0.5f        val ddx = cx - target.x; val ddy = cy - (target.y + 0.9f); val ddz = cz - target.z        list.add(Candidate(bx, bz, hit.y, hit.blockId, ddx * ddx + ddy * ddy + ddz * ddz, hit.headLevel))    }    private fun doPlace(target: EntityTracker.TrackedEntity, sharedSession: RubidiumRelaySession? = null, sharedPrepared: PreparedItem? = null) {        val now = System.currentTimeMillis()        if (now - (lastPlaceMsMap[target.runtimeId] ?: 0L) < placeDelayMs.value) return        lastPlaceMsMap[target.runtimeId] = now        val session = sharedSession ?: PacketEventBus.currentSession ?: return        val (px, py, pz) = predictedPos(target)        val tx = floor(px).toInt(); val ty = floor(py).toInt(); val tz = floor(pz).toInt()        val cached = candidateCache[target.runtimeId]        val candidates: List<Candidate> = if (            cached != null && cached.tx == tx && cached.ty == ty && cached.tz == tz && now - cached.ts < CANDIDATE_CACHE_MS        ) cached.candidates else {            val built = buildCandidates(session, target, px, py, pz)            candidateCache[target.runtimeId] = TargetCache(tx, ty, tz, built, now)            built        }        if (candidates.isEmpty()) return        val crystalsSnapshot = EntityTracker.getCrystals(placeRange.value.toFloat() + 2f)        val prepared = sharedPrepared ?: prepareItemForUse(session) ?: return        var placed = 0        for (c in candidates) {            if (placed >= MAX_PLACE_PER_TICK || !takePlaceToken()) break            if (crystalExistsNearCached(crystalsSnapshot, c.bx + 0.5f, c.hitY + 1f, c.bz + 0.5f)) continue            if (tryPlaceCrystalAt(session, prepared, PlacePos(c.bx, c.hitY, c.bz, c.blockId))) placed++        }        if (sharedPrepared == null)            prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }    }    private fun tryPlaceCrystalAt(session: RubidiumRelaySession, prepared: PreparedItem, pos: PlacePos): Boolean {        val now = System.currentTimeMillis()        val key = posKey(pos.x, pos.y, pos.z)        val pending = pendingPositions[key]        if (pending != null) {            if (now - pending < PLACE_RETRY_MS) return false            pendingPositions.remove(key)        }        val cx = pos.x + 0.5f; val cy = pos.y + 1f; val cz = pos.z + 0.5f        if (MathUtil.dist3(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ) > placeRange.value) return false        val ok = sendPlacementUseRaw(session, prepared, Vector3i.from(pos.x, pos.y, pos.z), pos.blockId)        if (ok) pendingPositions[key] = now        return ok    }    private fun tryPlaceObsidianSupportAt(session: RubidiumRelaySession, bx: Int, ty: Int, bz: Int) {        if (obsidianAttemptsThisTick >= MAX_OBSIDIAN_PER_TICK) return        val now = System.currentTimeMillis()        val key = posKey(bx, ty, bz)        if (now - (pendingObsidian[key] ?: 0L) < 100L) return        if (!WorldBlockTracker.hasAnyTerrainData()) return        var supportY: Int? = null        for (by in (ty + 1) downTo (ty - 3)) {            val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue            if (here in NON_SOLID) continue            val above = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)            if (above != null && above !in NON_SOLID) continue            supportY = by            break        }        val sy = supportY ?: return        if (MathUtil.dist3(bx + 0.5f, sy + 1.5f, bz + 0.5f, EntityTracker.selfX, EntityTracker.selfY + SELF_EYE_HEIGHT, EntityTracker.selfZ) > placeRange.value) return        if (!takeObsidianToken()) return        val prepared = getOrPrepareObsidian(session) ?: return        val ok = sendPlacementUseRaw(session, prepared, Vector3i.from(bx, sy, bz), "minecraft:obsidian")        if (ok) { pendingObsidian[key] = now; obsidianAttemptsThisTick++ }    }    // Tick içinde ilk obsidian ihtiyacında item hazırlanır (slot bulunur/hotbar    // seçilir), sonraki denemeler aynı tick içinde bunu tekrar kullanır —    // her denemede ayrı ayrı inventory taratıp hotbar değiştirmenin (ekstra    // paket trafiği) önüne geçer. Revert işlemi tick() sonunda tek seferde yapılır.    private fun getOrPrepareObsidian(session: RubidiumRelaySession): PreparedItem? {        obsidianPreparedThisTick?.let { return it }        val prepared = prepareItemForUse(session, "minecraft:obsidian") ?: return null        obsidianPreparedThisTick = prepared        return prepared    }    private fun doSelfSurround() {        val now = System.currentTimeMillis()        if (now - lastSelfSurroundMs < 150L) return        val session = PacketEventBus.currentSession ?: return        lastSelfSurroundMs = now        val fx = floor(EntityTracker.selfX).toInt(); val fy = floor(EntityTracker.selfY).toInt() - 1; val fz = floor(EntityTracker.selfZ).toInt()        val hasData = WorldBlockTracker.hasAnyTerrainData()        for ((dx, dz) in listOf(1 to 1, 1 to -1, -1 to 1, -1 to -1)) {            if (obsidianAttemptsThisTick >= MAX_OBSIDIAN_PER_TICK) return            val tx = fx + dx; val tz = fz + dz            val existing = if (hasData) WorldBlockTracker.getBlockIdentifier(tx, fy, tz) else null            if (existing != null && existing !in NON_SOLID) continue            val supportId = (if (hasData) WorldBlockTracker.getBlockIdentifier(tx, fy - 1, tz) else null) ?: "minecraft:obsidian"            if (supportId in NON_SOLID) continue            if (!takeObsidianToken()) return            val prepared = getOrPrepareObsidian(session) ?: return            if (sendPlacementUseRaw(session, prepared, Vector3i.from(tx, fy - 1, tz), "minecraft:obsidian")) obsidianAttemptsThisTick++        }    }    private fun doBreakInRange() {        val now = System.currentTimeMillis()        if (now - lastBreakMs < breakDelayMs.value) return        val session = PacketEventBus.currentSession ?: return        val sx = EntityTracker.selfX; val sy = EntityTracker.selfY; val sz = EntityTracker.selfZ        val crystals = EntityTracker.getCrystals(breakRange.value.toFloat())        if (crystals.isEmpty()) return        lastBreakMs = now        val toBreak = crystals            .sortedBy { MathUtil.dist3sq(it.x, it.y, it.z, sx, sy, sz) }            .take(MAX_BREAK_PER_TICK)        scope.launch {            for (c in toBreak) {                if (!takeBreakToken()) break                attackCrystal(c.runtimeId, session)            }        }    }    private suspend fun attackCrystal(rid: Long, session: RubidiumRelaySession) {        val target = EntityTracker.getById(rid) ?: return        val r = RotationUtil.toPoint(target.x, target.y + 0.5f, target.z)        CritLock.tryRun(name) { injectCrit(session) }        if (silentRotation.value) PacketUtil.sendMoveAtSelf(session, r.yaw, r.pitch, onGround = true)        PacketUtil.sendSwing(session)        PacketUtil.sendAttack(session, rid)    }    private suspend fun injectCrit(s: RubidiumRelaySession) {        try {            when (breakCrit.value) {                CritMode.None       -> {}                CritMode.MovePacket -> {                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)                    delay(15L)                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f, onGround = true)                }                CritMode.Vanilla -> {                    listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->                        PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)                        delay(25L)                    }                }            }        } catch (_: Exception) {}    }    // FIX (yanlış hasar seviyesi): eskiden tek bir "for (by in (ty+ABOVE) downTo (ty-BELOW))"    // döngüsüyle yukarıdan aşağı taranıp İLK bulunan yüzey kullanılıyordu — yani baş    // hizasında (ty ve üzeri) rastgele bir çıkıntı/kenar bulunursa, asıl ayak hizasındaki    // (ty-1) doğru zemine hiç bakılmadan o seçiliyordu. Ayak hizasına konan kristal daha    // fazla hasar verdiği için artık önce ayak hizası ve altı taranıyor, orada hiçbir    // yüzey yoksa (örn. uçurum kenarı) baş hizasına doğru yukarı bakılıyor.    private fun findSurface(bx: Int, ty: Int, bz: Int): SurfaceHit? {        if (!WorldBlockTracker.hasAnyTerrainData()) return SurfaceHit(ty - 1, "minecraft:obsidian", headLevel = false)        var sawData = false        fun scan(range: IntProgression, headLevel: Boolean): SurfaceHit? {            for (by in range) {                val here = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue                sawData = true                if (here in NON_SOLID) continue                val above  = WorldBlockTracker.getBlockIdentifier(bx, by + 1, bz)                val above2 = WorldBlockTracker.getBlockIdentifier(bx, by + 2, bz)                if ((above != null && above !in NON_SOLID) || (above2 != null && above2 !in NON_SOLID)) continue                return SurfaceHit(by, here, headLevel)            }            return null        }        // 1) Ayak hizası (by = ty-1 → kristal cy = ty) ve altı: en çok hasarı veren bölge.        scan((ty - 1) downTo (ty - SEARCH_Y_BELOW), headLevel = false)?.let { return it }        // 2) Orada yer yoksa baş hizasına doğru yukarı bak (fallback).        scan(ty..(ty + SEARCH_Y_ABOVE), headLevel = true)?.let { return it }        if (!sawData) return SurfaceHit(ty - 1, "minecraft:obsidian", headLevel = false)        return null    }    private fun crystalExistsNearCached(crystals: List<EntityTracker.TrackedEntity>, cx: Float, cy: Float, cz: Float): Boolean =        crystals.any { abs(it.x - cx) < 0.9f && abs(it.y - cy) < 1.3f && abs(it.z - cz) < 0.9f }    // KRİTİK FIX ("Too many packets" hatasının asıl kaynağı): bu fonksiyon    // parametre olarak identifier almıyordu, HER ZAMAN "minecraft:end_crystal"    // arıyordu — sendPlacementUse(session, "minecraft:obsidian", ...) çağrıldığında    // bile. Yani obsidian destek bloğu koyma denemeleri aslında crystal slotunu    // seçip crystal ile "obsidian" pozisyonuna ITEM_USE göndermeye çalışıyordu.    // Server bunu reddediyor (ya da beklenmedik şekilde davranıyor), pendingObsidian    // yine de set ediliyordu, 100ms sonra tekrar deneniyor ve arama alanındaki    // onlarca "yüzey yok" adayı için bu sonsuza kadar tekrarlanıyordu — rate    // limit'siz bu paket trafiğinin patlamasına sebep oluyordu.    private fun prepareItemForUse(session: RubidiumRelaySession, identifier: String = "minecraft:end_crystal"): PreparedItem? {        if (identifier == "minecraft:end_crystal") {            // Kullaniciya 1-9 gosterilir, dahili index 0-8 (Crystal Slot ayari).            val knownSlot = (crystalSlot.value - 1).coerceIn(0, 8)            val item = EntityTracker.getInventoryItem(knownSlot)            val itemId = item?.let { InventoryUtil.resolveIdentifier(it) }            if (item != null && item.count > 0 && itemId == identifier) {                return if (knownSlot == EntityTracker.selfHotbarSlot) {                    PreparedItem(knownSlot, item, null)                } else {                    val original = EntityTracker.selfHotbarSlot                    InventoryUtil.sendHotbarSelect(session, knownSlot)                    EntityTracker.selfHotbarSlot = knownSlot                    PreparedItem(knownSlot, item, if (noSwitch.value) original else null)                }            }            // Ayarlanan slotta kristal yoksa asagidaki genel arama fallback olarak devam eder.        }        EntityTracker.getHeldItem()?.let { held ->            val id = InventoryUtil.resolveIdentifier(held)            if (id == identifier && held.count > 0) return PreparedItem(EntityTracker.selfHotbarSlot, held, null)        }        for (slot in 0..8) {            val item = EntityTracker.getInventoryItem(slot) ?: continue            if (item.count <= 0) continue            if (InventoryUtil.resolveIdentifier(item) != identifier) continue            val original = EntityTracker.selfHotbarSlot            InventoryUtil.sendHotbarSelect(session, slot)            EntityTracker.selfHotbarSlot = slot            return PreparedItem(slot, item, if (noSwitch.value) original else null)        }        for (slot in 9..35) {            val item = EntityTracker.getInventoryItem(slot) ?: continue            if (item.count <= 0 || InventoryUtil.resolveIdentifier(item) != identifier) continue            val destSlot = findEmptyHotbarSlot() ?: continue            val destItem = EntityTracker.getInventoryItem(destSlot) ?: ItemData.AIR            try {                InventoryUtil.sendInventoryMove(                    session = session,                    sourceContainer = ContainerSlotType.HOTBAR_AND_INVENTORY,                    sourceContainerId = ContainerId.INVENTORY,                    sourceSlot = slot, sourceItem = item,                    destContainer = ContainerSlotType.HOTBAR_AND_INVENTORY,                    destContainerId = ContainerId.INVENTORY,                    destSlot = destSlot, destItem = destItem                )            } catch (_: Exception) { continue }            val original = EntityTracker.selfHotbarSlot            InventoryUtil.sendHotbarSelect(session, destSlot)            EntityTracker.selfHotbarSlot = destSlot            return PreparedItem(destSlot, item, if (noSwitch.value) original else null)        }        return null    }    private fun findEmptyHotbarSlot(): Int? {        for (slot in 0..8) {            val item = EntityTracker.getInventoryItem(slot)            if (item == null || item.count <= 0) return slot        }        return null    }    private fun sendPlacementUse(session: RubidiumRelaySession, identifier: String, blockPos: Vector3i, blockId: String): Boolean {        val prepared = prepareItemForUse(session, identifier) ?: return false        val ok = sendPlacementUseRaw(session, prepared, blockPos, blockId)        prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }        return ok    }    private fun sendPlacementUseRaw(session: RubidiumRelaySession, prepared: PreparedItem, blockPos: Vector3i, blockId: String): Boolean {        val blockDef  = getBlockDefinition(session, blockId) ?: return false        val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)        return try {            session.serverBound(InventoryTransactionPacket().apply {                transactionType          = InventoryTransactionType.ITEM_USE                actionType               = 0                this.blockPosition       = blockPos                blockFace                = 1                hotbarSlot               = prepared.slot                itemInHand               = prepared.item                playerPosition           = playerPos                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)                blockDefinition          = blockDef                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS                clientCooldownState      = 0            })            true        } catch (_: Exception) { false }    }    private fun getBlockDefinition(session: RubidiumRelaySession, targetId: String): BlockDefinition? {        blockDefCache[targetId]?.let { return it }        try {            val blockDefs = session.clientSession.peer.codecHelper.blockDefinitions            if (blockDefs != null) {                var i = 0; var misses = 0                while (i < BLOCK_DEF_SCAN_CAP && misses < BLOCK_DEF_MISS_LIMIT) {                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null }                    if (def == null) { misses++; i++; continue }                    misses = 0                    val id = when (def) {                        is SimpleBlockDefinition -> def.identifier                        is Definitions.NbtBlockDefinitionRegistry.NbtBlockDefinition -> def.tag.getString("name")                        else -> null                    }                    if (id == targetId) { blockDefCache[targetId] = def; return def }                    i++                }            }        } catch (_: Exception) {}        val fallbackId = when (targetId) {            "minecraft:obsidian"    -> 49            "minecraft:bedrock"     -> 7            "minecraft:end_crystal" -> 198            else                    -> return null        }        val fallback = SimpleBlockDefinition(            targetId, fallbackId,            org.cloudburstmc.nbt.NbtMap.builder()                .putString("name", targetId)                .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())                .build()        )        blockDefCache[targetId] = fallback        return fallback    }    private fun posKey(x: Int, y: Int, z: Int): Long =        ((x.toLong() and 0x3FFFFFFL) shl 38) or        ((y.toLong() and 0xFFFL)     shl 26) or        (z.toLong() and 0x3FFFFFFL)}
+package com.rubidiumclient.module.combat
+
+import com.rubidiumclient.core.proxy.EntityTracker
+import com.rubidiumclient.core.relay.RubidiumRelaySession
+import com.rubidiumclient.events.PacketEvent
+import com.rubidiumclient.events.PacketEventBus
+import com.rubidiumclient.module.*
+import com.rubidiumclient.utils.InventoryUtil
+import com.rubidiumclient.utils.MathUtil
+import com.rubidiumclient.utils.PacketUtil
+import com.rubidiumclient.utils.WorldBlockTracker
+import kotlinx.coroutines.*
+import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.math.vector.Vector3i
+import org.cloudburstmc.protocol.bedrock.data.LevelEvent
+import org.cloudburstmc.protocol.bedrock.data.definitions.BlockDefinition
+import org.cloudburstmc.protocol.bedrock.data.definitions.SimpleBlockDefinition
+import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
+import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.ItemUseTransaction
+import org.cloudburstmc.protocol.bedrock.packet.*
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.floor
+
+/**
+ * Attığın (dev.sora.relay tabanlı) ModuleCrystalAura'nın birebir mantığının
+ * RubidiumClient'e portu. O kod `session.level.simulateExplosionDamage(...)`
+ * diye hazır bir fizik/patlama simülasyon kütüphanesine dayanıyordu — bende
+ * öyle bir şey yok, o yüzden aynı vanilla patlama hasarı formülünü
+ * (impact = (1 - mesafe/çap) * exposure; damage = (impact²+impact)/2*7*çap+1)
+ * ve basitleştirilmiş bir line-of-sight exposure hesabını (WorldBlockTracker
+ * üzerinden 5 örnek nokta) burada yeniden kurdum. Mantık — "en çok hasar
+ * veren, kendine en az zarar veren noktayı bul" — birebir aynı.
+ *
+ * Önceki (çok daha büyük) CrystalAura.kt'deki rate-limit/token-bucket,
+ * obsidian auto-support, self-surround, burst-on-totem, crystal slot
+ * override gibi ekstra ayarlar kaldırıldı — attığın orijinal koddaki
+ * sadeliğe göre sadece 5 ayar kaldı.
+ */
+class CrystalAura : BaseModule(
+    name        = "CrystalAura",
+    category    = ModuleCategory.COMBAT,
+    description = "Hasar simülasyonuna göre en iyi noktaya kristal yerleştirir/kırar"
+) {
+    companion object {
+        private const val EXPLOSION_SIZE   = 6f
+        private const val TICK_INTERVAL_MS = 50L
+
+        private val NON_SOLID = setOf(
+            "minecraft:air", "minecraft:water", "minecraft:flowing_water",
+            "minecraft:lava", "minecraft:flowing_lava",
+            "minecraft:void_air", "minecraft:cave_air"
+        )
+    }
+
+    private val range           = float("Range",           5f, 3f, 10f)
+    private val suicide         = bool ("Suicide",          false)
+    private val place           = bool ("Place",            true)
+    private val delayMs         = int  ("Delay",            400, 100, 1000)
+    private val removeParticles = bool ("RemoveParticles",  true)
+
+    @Volatile private var lastExplodeMs = 0L
+    @Volatile private var lastPlaceMs   = 0L
+    private var tickJob: Job? = null
+
+    private val blockDefCache = ConcurrentHashMap<String, BlockDefinition>()
+
+    private data class ExplosionResult(val mostDamage: Float, val selfDamage: Float)
+    private data class PreparedItem(val slot: Int, val item: ItemData, val revertTo: Int?)
+
+    override fun onEnable() {
+        super.onEnable()
+        lastExplodeMs = 0L
+        lastPlaceMs   = 0L
+        PacketEventBus.register(this)
+        tickJob = scope.launch { tickLoop() }
+    }
+
+    override fun onDisable() {
+        tickJob?.cancel()
+        PacketEventBus.unregister(this)
+        super.onDisable()
+    }
+
+    override fun onPacket(event: PacketEvent) {
+        if (!isEnabled) return
+        when (val pkt = event.packet) {
+            // handleEntitySpawn karşılığı: yeni doğan kristal kârlıysa anında patlat.
+            is AddEntityPacket -> {
+                if (!pkt.identifier.contains("crystal", ignoreCase = true)) return
+                val now = System.currentTimeMillis()
+                if (now - lastExplodeMs < delayMs.value) return
+                val cx = pkt.position.x; val cy = pkt.position.y; val cz = pkt.position.z
+                if (MathUtil.dist3(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ) > range.value) return
+                val dmg = simulateExplosionDamage(cx, cy, cz)
+                if (dmg.selfDamage <= dmg.mostDamage || suicide.value) {
+                    val session = PacketEventBus.currentSession ?: return
+                    explodeCrystal(session, pkt.runtimeEntityId)
+                    lastExplodeMs = now
+                }
+            }
+            is LevelEventPacket -> {
+                if (removeParticles.value && pkt.type == LevelEvent.PARTICLE_EXPLOSION) event.cancel()
+            }
+            else -> {}
+        }
+    }
+
+    private suspend fun tickLoop() {
+        while (currentCoroutineContext().isActive) {
+            if (isEnabled) tick()
+            delay(TICK_INTERVAL_MS)
+        }
+    }
+
+    private fun tick() {
+        val session = PacketEventBus.currentSession ?: return
+        val now = System.currentTimeMillis()
+
+        if (now - lastExplodeMs >= delayMs.value) tryExplodeBest(session, now)
+        if (place.value && now - lastPlaceMs >= delayMs.value) tryPlaceBest(session, now)
+    }
+
+    // onTickExplode karşılığı: menzildeki tüm kristalleri (kendinki de dahil,
+    // rakibinki de dahil) tara, en çok net hasar vereni patlat.
+    private fun tryExplodeBest(session: RubidiumRelaySession, now: Long) {
+        val crystals = EntityTracker.getCrystals(range.value)
+        if (crystals.isEmpty()) return
+
+        var bestId: Long? = null
+        var bestDamage = -1f
+
+        for (c in crystals) {
+            val dmg = simulateExplosionDamage(c.x, c.y, c.z)
+            val effective = if (dmg.selfDamage > dmg.mostDamage && !suicide.value) -1f else dmg.mostDamage
+            if (effective > bestDamage) { bestDamage = effective; bestId = c.runtimeId }
+        }
+
+        if (bestId != null && bestDamage != -1f) {
+            explodeCrystal(session, bestId)
+            lastExplodeMs = now
+        }
+    }
+
+    // onTickPlace karşılığı: menzildeki obsidian/bedrock tabanları tara,
+    // en çok net hasar verecek noktaya kristal koy.
+    private fun tryPlaceBest(session: RubidiumRelaySession, now: Long) {
+        val bases = searchPlaceBase()
+        if (bases.isEmpty()) return
+
+        var bestPos: Triple<Int, Int, Int>? = null
+        var bestDamage = -1f
+
+        for (pos in bases) {
+            val cx = pos.first + 0.5f; val cy = pos.second + 2f; val cz = pos.third + 0.5f
+            val dmg = simulateExplosionDamage(cx, cy, cz)
+            val effective = if (dmg.selfDamage > dmg.mostDamage && !suicide.value) -1f else dmg.mostDamage
+            if (effective > bestDamage) { bestDamage = effective; bestPos = pos }
+        }
+
+        val pos = bestPos ?: return
+        if (bestDamage <= 0f) return
+
+        if (placeCrystalAt(session, pos)) lastPlaceMs = now
+    }
+
+    // ---------- Vanilla patlama hasarı simülasyonu ----------
+
+    private fun simulateExplosionDamage(cx: Float, cy: Float, cz: Float): ExplosionResult {
+        val diameter = EXPLOSION_SIZE * 2f
+        var selfDamage = 0f
+        var mostDamage = 0f
+
+        val selfDist = MathUtil.dist3(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY + 0.9f, EntityTracker.selfZ)
+        if (selfDist <= diameter) {
+            val exposure = exposureTo(cx, cy, cz, EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+            selfDamage = explosionDamage(selfDist, diameter, exposure)
+        }
+
+        for (p in EntityTracker.getPlayers(diameter)) {
+            if (p.runtimeId == EntityTracker.selfRuntimeId) continue
+            val dist = MathUtil.dist3(cx, cy, cz, p.x, p.y + 0.9f, p.z)
+            if (dist > diameter) continue
+            val exposure = exposureTo(cx, cy, cz, p.x, p.y, p.z)
+            val dmg = explosionDamage(dist, diameter, exposure)
+            if (dmg > mostDamage) mostDamage = dmg
+        }
+
+        return ExplosionResult(mostDamage, selfDamage)
+    }
+
+    // Vanilla formülü: impact = (1 - mesafe/çap) * exposure
+    // damage = (impact² + impact) / 2 * 7 * çap + 1
+    private fun explosionDamage(distance: Float, diameter: Float, exposure: Float): Float {
+        if (distance > diameter) return 0f
+        val impact = (1f - distance / diameter) * exposure
+        return (impact * impact + impact) / 2f * 7f * diameter + 1f
+    }
+
+    // Vanilla'nın 1287 ray'lik tam "getSeenPercent" hesabının basitleştirilmiş
+    // hâli: hedefin gövdesinde 5 örnek noktaya (ayak/orta/kafa + iki yan) ray
+    // atıp kaçının blok tarafından engellenmediğine bakıyoruz.
+    private fun exposureTo(cx: Float, cy: Float, cz: Float, tx: Float, ty: Float, tz: Float): Float {
+        if (!WorldBlockTracker.hasAnyTerrainData()) return 1f
+        val samples = arrayOf(
+            Triple(tx, ty + 0.1f, tz),
+            Triple(tx, ty + 0.9f, tz),
+            Triple(tx, ty + 1.6f, tz),
+            Triple(tx + 0.3f, ty + 0.9f, tz),
+            Triple(tx - 0.3f, ty + 0.9f, tz)
+        )
+        var clear = 0
+        for ((sx, sy, sz) in samples) {
+            if (!isRayBlocked(cx, cy, cz, sx, sy, sz)) clear++
+        }
+        return clear.toFloat() / samples.size
+    }
+
+    private fun isRayBlocked(x0: Float, y0: Float, z0: Float, x1: Float, y1: Float, z1: Float): Boolean {
+        val dist = MathUtil.dist3(x0, y0, z0, x1, y1, z1)
+        if (dist < 0.01f) return false
+        val steps = (dist * 2f).toInt().coerceIn(1, 40)
+        for (i in 1 until steps) {
+            val t = i.toFloat() / steps
+            val bx = floor(x0 + (x1 - x0) * t).toInt()
+            val by = floor(y0 + (y1 - y0) * t).toInt()
+            val bz = floor(z0 + (z1 - z0) * t).toInt()
+            val id = WorldBlockTracker.getBlockIdentifier(bx, by, bz) ?: continue
+            if (id !in NON_SOLID) return true
+        }
+        return false
+    }
+
+    // ---------- Yerleştirme tabanı arama (searchPlaceBase portu) ----------
+    // Not: orijinal kod gibi bu da menzil küpünü (2r+1)³ olarak tarıyor —
+    // range=10'da ~9000 hücre. Aynı yaklaşım, aynı maliyet.
+    private fun searchPlaceBase(): List<Triple<Int, Int, Int>> {
+        if (!WorldBlockTracker.hasAnyTerrainData()) return emptyList()
+        val r  = floor(range.value).toInt()
+        val cx = floor(EntityTracker.selfX).toInt()
+        val cy = floor(EntityTracker.selfY).toInt()
+        val cz = floor(EntityTracker.selfZ).toInt()
+        val bases = ArrayList<Triple<Int, Int, Int>>()
+        for (x in cx - r..cx + r) {
+            for (y in cy - r..cy + r) {
+                for (z in cz - r..cz + r) {
+                    val id = WorldBlockTracker.getBlockIdentifier(x, y, z) ?: continue
+                    if (id != "minecraft:obsidian" && id != "minecraft:bedrock") continue
+                    val above = WorldBlockTracker.getBlockIdentifier(x, y + 1, z)
+                    if (above != null && above !in NON_SOLID) continue
+                    bases.add(Triple(x, y, z))
+                }
+            }
+        }
+        return bases
+    }
+
+    // ---------- Kristal yerleştirme / kırma paketleri ----------
+
+    private fun explodeCrystal(session: RubidiumRelaySession, runtimeId: Long) {
+        PacketUtil.sendSwing(session)
+        PacketUtil.sendAttack(session, runtimeId)
+    }
+
+    private fun placeCrystalAt(session: RubidiumRelaySession, pos: Triple<Int, Int, Int>): Boolean {
+        val prepared = prepareItemForUse(session) ?: return false
+        val ok = sendPlacementUseRaw(session, prepared, Vector3i.from(pos.first, pos.second, pos.third))
+        prepared.revertTo?.let { InventoryUtil.sendHotbarSelect(session, it); EntityTracker.selfHotbarSlot = it }
+        return ok
+    }
+
+    private fun prepareItemForUse(session: RubidiumRelaySession): PreparedItem? {
+        EntityTracker.getHeldItem()?.let { held ->
+            if (InventoryUtil.resolveIdentifier(held) == "minecraft:end_crystal" && held.count > 0) {
+                return PreparedItem(EntityTracker.selfHotbarSlot, held, null)
+            }
+        }
+        for (slot in 0..8) {
+            val item = EntityTracker.getInventoryItem(slot) ?: continue
+            if (item.count <= 0 || InventoryUtil.resolveIdentifier(item) != "minecraft:end_crystal") continue
+            val original = EntityTracker.selfHotbarSlot
+            InventoryUtil.sendHotbarSelect(session, slot)
+            EntityTracker.selfHotbarSlot = slot
+            return PreparedItem(slot, item, original)
+        }
+        return null
+    }
+
+    private fun sendPlacementUseRaw(session: RubidiumRelaySession, prepared: PreparedItem, blockPos: Vector3i): Boolean {
+        val blockDef = getBlockDefinition(session) ?: return false
+        val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
+        return try {
+            session.serverBound(InventoryTransactionPacket().apply {
+                transactionType          = InventoryTransactionType.ITEM_USE
+                actionType               = 0
+                this.blockPosition       = blockPos
+                blockFace                = 1
+                hotbarSlot               = prepared.slot
+                itemInHand               = prepared.item
+                playerPosition           = playerPos
+                clickPosition            = Vector3f.from(0.5f, 1.0f, 0.5f)
+                blockDefinition          = blockDef
+                triggerType              = ItemUseTransaction.TriggerType.PLAYER_INPUT
+                clientInteractPrediction = ItemUseTransaction.PredictedResult.SUCCESS
+                clientCooldownState      = 0
+            })
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // Yerleştirilecek zeminin (obsidian/bedrock) blockDefinition'ı — server'a
+    // ITEM_USE paketinde gönderilmesi gerekiyor, bilinmeyen bir taban tipinde
+    // yerleşim reddedilir. searchPlaceBase zaten sadece obsidian/bedrock kabul
+    // ettiği için burada sabit "minecraft:obsidian" fallback'i yeterli.
+    private fun getBlockDefinition(session: RubidiumRelaySession): BlockDefinition? {
+        val targetId = "minecraft:obsidian"
+        blockDefCache[targetId]?.let { return it }
+        try {
+            val blockDefs = session.clientSession.peer.codecHelper.blockDefinitions
+            if (blockDefs != null) {
+                var i = 0; var misses = 0
+                while (i < 20000 && misses < 64) {
+                    val def = try { blockDefs.getDefinition(i) } catch (_: Exception) { null }
+                    if (def == null) { misses++; i++; continue }
+                    misses = 0
+                    val id = (def as? SimpleBlockDefinition)?.identifier
+                    if (id == targetId) { blockDefCache[targetId] = def; return def }
+                    i++
+                }
+            }
+        } catch (_: Exception) {}
+        val fallback = SimpleBlockDefinition(
+            targetId, 49,
+            org.cloudburstmc.nbt.NbtMap.builder()
+                .putString("name", targetId)
+                .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())
+                .build()
+        )
+        blockDefCache[targetId] = fallback
+        return fallback
+    }
+}

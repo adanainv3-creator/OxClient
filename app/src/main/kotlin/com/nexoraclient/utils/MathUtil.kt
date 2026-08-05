@@ -29,9 +29,13 @@ object MathUtil {
     fun randomInt(lo: Int, hi: Int): Int =
         (lo..hi).random()
 
+    // FIX: bu fonksiyon 1..20 aralığına clamp ediyordu ama KillAura/KillAuraPro
+    // CPS Min/Max ayarları 1..30 aralığında. 28-30 CPS ayarlasan bile burası
+    // sessizce 20'ye düşürüyordu — gerçek saldırı hızın hiçbir zaman ayarladığın
+    // değere ulaşmıyordu. Üst sınır artık modüllerle aynı: 30.
     fun cpsToDelayMs(cpsLo: Int, cpsHi: Int): Long {
-        val lo = cpsLo.coerceIn(1, 20)
-        val hi = cpsHi.coerceIn(lo, 20)
+        val lo = cpsLo.coerceIn(1, 30)
+        val hi = cpsHi.coerceIn(lo, 30)
         return 1000L / (lo..hi).random()
     }
 
@@ -61,36 +65,27 @@ object MathUtil {
         fov: Float = 110f
     ): Pair<Float, Float>? {
 
-        // Göz yüksekliği offseti — selfY ayak pozisyonu, göz +1.62f yukarıda
         val eyeY = selfY + 1.62f
 
-        // Hedefe vektör (kamera → hedef)
         val dx = (wx - selfX).toDouble()
         val dy = (wy - eyeY).toDouble()
         val dz = (wz - selfZ).toDouble()
 
-        // Bedrock yaw: 0=Güney(+Z), pozitif=Batı
-        // Rotation: önce yaw etrafında Y ekseni, sonra pitch etrafında X ekseni
-        val yawR   = Math.toRadians(-yaw.toDouble())   // negatif: sağ-el → sol-el dönüşümü
-        val pitchR = Math.toRadians(-pitch.toDouble())  // negatif: Bedrock pitch pozitif = aşağı
+        val yawR   = Math.toRadians(-yaw.toDouble())
+        val pitchR = Math.toRadians(-pitch.toDouble())
 
         val sinY = sin(yawR);  val cosY = cos(yawR)
         val sinP = sin(pitchR); val cosP = cos(pitchR)
 
-        // Kamera uzayına döndür
-        // Önce yaw (Y ekseni etrafında):
         val rx0 = -dx * cosY + dz * sinY
         val rz0 =  dx * sinY + dz * cosY
 
-        // Sonra pitch (X ekseni etrafında):
         val rx =  rx0
         val ry =  dy * cosP - rz0 * sinP
-        val rz =  dy * sinP + rz0 * cosP   // ileri eksen: pozitif = kamera önü
+        val rz =  dy * sinP + rz0 * cosP
 
-        // Kamera arkası → görünmez
         if (rz <= 0.1) return null
 
-        // fov DİKEY sabit → yatay FOV aspect ile türetilir (Minecraft convention'ı)
         val aspect      = screenW.toDouble() / screenH.toDouble()
         val tanHalfFovY = tan(Math.toRadians(fov / 2.0))
         val tanHalfFovX = tanHalfFovY * aspect

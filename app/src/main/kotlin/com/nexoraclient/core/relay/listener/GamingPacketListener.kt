@@ -5,6 +5,7 @@ import com.rubidiumclient.core.relay.ConnectionManager
 import com.rubidiumclient.core.relay.RubidiumRelaySession
 import com.rubidiumclient.utils.BlockTracker
 import com.rubidiumclient.utils.ChunkParser
+import com.rubidiumclient.utils.WorldBlockTracker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,11 +60,20 @@ class GamingPacketListener : RubidiumPacketListener {
     override fun onSessionStart(session: RubidiumRelaySession) {
         active = true
         itemDefMap.clear()
+        // WorldBlockTracker bir Kotlin object olduğu için init{} bloğu sadece
+        // ilk referansta bir kez çalışır. PacketEventBus reconnect'te temizleniyorsa
+        // WorldBlockTracker bir daha kendini kaydetmez ve chunk verisi hiç dolmaz
+        // (AutoMapArt "No chunk data" hatası). Her session start'ta reset+init
+        // çağırarak hem eski dünyanın stale section'larını temizliyoruz hem de
+        // listener kaydını garantiye alıyoruz.
+        WorldBlockTracker.reset()
+        WorldBlockTracker.init()
     }
 
     override fun onSessionEnd(session: RubidiumRelaySession) {
         active = false
         EntityTracker.reset()
+        WorldBlockTracker.reset()
         parserScope.coroutineContext[Job]?.cancelChildren()
     }
 

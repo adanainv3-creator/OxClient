@@ -1,4 +1,3 @@
-
 package com.rubidiumclient.module.combat
 
 import com.rubidiumclient.core.proxy.EntityTracker
@@ -20,7 +19,7 @@ class KillAura : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "Otomatik saldırı (GUARANTEED CRIT)"
 ), PacketEventBus.PacketListener {
-    
+
     enum class AttackMode   { Single, Multi, Switch, Closest }
     enum class RotationMode { Lock, Approximate, Silent, None }
     enum class SwingMode    { Client, Server, Both, None }
@@ -30,21 +29,23 @@ class KillAura : BaseModule(
     companion object {
         private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
         private const val TICK_INTERVAL_MS = 5L
-        // Hedef yoksa ya da CPS kapısı açık kalıp saldırı henüz gerçekleşmediyse
-        // lastAttackMs güncellenmiyordu — bu da her 5ms'de bir (saniyede 200 kez)
-        // tüm entity'leri tarayan selectTargets()'in tekrar tekrar çalışmasına
-        // sebep oluyordu (asıl lag kaynağı). Tarama artık en fazla bu aralıkla
-        // yapılıp sonuç cache'leniyor, tick 5ms'de kalsa da tarama 20Hz'e düşüyor.
         private const val SCAN_INTERVAL_MS = 50L
     }
 
     private val cpsMin          = int  ("CPS Min",          28,   1,  30)
     private val cpsMax          = int  ("CPS Max",          30,   1,  30)
-    private val range           = float("Range",            10f, 1f,  10f)
+    // Menzil üst sınırı 12 -> 18. Vanilla reach zaten 3 blok, 18 çok agresif —
+    // sunucuda herhangi bir reach-check/anticheat varsa neredeyse anında
+    // yakalanır. Değeri 18'e kadar açtım ama pratikte 10-13 arası kullanman
+    // daha güvenli, üst uçları "gerekirse" diye bırakıyorum.
+    private val range           = float("Range",            10f, 1f,  18f)
     private val fov             = int  ("FOV",              360,  30, 360)
     private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
-    private val maxTargets      = int  ("Max Targets",      1,    1,  10)
-    private val attackMode      = enum ("Attack Mode",      AttackMode.Single)
+    // Max hasar için varsayılan: Multi + birden fazla hedef — menzildeki
+    // herkese aynı tick'te vurur, tek hedefe kilitlenip diğerlerini boşa
+    // geçirmez.
+    private val maxTargets      = int  ("Max Targets",      3,    1,  10)
+    private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
     private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
@@ -57,11 +58,17 @@ class KillAura : BaseModule(
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
     private val autoWeapon      = bool ("AutoWeapon",       true)
-    // AutoWeapon artık InventoryHelper'ın envanter taramasına/konfigürasyonuna
-    // bağımlı değil — kılıcın ve tridentin hangi hotbar slotunda olduğu
-    // doğrudan burada belirtiliyor. InventoryHelper modülü olmasa bile çalışır.
     private val swordSlot       = int  ("Sword Slot",       0,     0,    8)
     private val tridentSlot     = int  ("Trident Slot",     1,     0,    8)
+
+    // Paket bazlı seçenek: her saldırıda ITEM_USE_ON_ENTITY isteği kaç kez
+    // gönderilsin. Paket kaybı / yüksek ping durumunda hit-register şansını
+    // artırır (wclient'teki "Packets" ayarının karşılığı).
+    private val packetCount     = int  ("Packet Count",     2,    1,    5)
+
+    // AntiBot: isim/uuid'si boş ya da geçersiz olan sahte entity'leri hedef
+    // listesinden eler, boşa swing atmayı önler.
+    private val antiBot         = bool ("Anti Bot",         true)
 
     @Volatile private var currentTargetId    = 0L
     @Volatile private var lastSwitchMs       = 0L
@@ -115,7 +122,7 @@ class KillAura : BaseModule(
     private suspend fun tick() {
         val now = System.currentTimeMillis()
         val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
-        
+
         if (now - lastAttackMs < delayMs) return
 
         if (now - lastScanMs >= SCAN_INTERVAL_MS) {
@@ -174,22 +181,11 @@ class KillAura : BaseModule(
         headLockYaw = newYaw
         headLockPitch = newPitch
 
-        // ÖNEMLİ FIX: eskiden burada ayrı bir sahte MovePlayerPacket gönderiliyordu.
-        // Ama bu paket, hemen ardından iletilen GERÇEK PlayerAuthInputPacket
-        // (telefonun gerçek baktığın yönüyle) tarafından anında eziliyordu —
-        // yani kilit hiç tutmuyordu. Artık gönderilecek olan GERÇEK paketin
-        // rotasyonunu doğrudan burada değiştiriyoruz, böylece sunucuya giden
-        // tek ve nihai rotasyon zaten kilitli olan rotasyon oluyor.
         pkt.rotation = Vector3f.from(newPitch, newYaw, newYaw)
 
         EntityTracker.selfYaw = newYaw
         EntityTracker.selfPitch = newPitch
 
-        // KRİTİK FIX: RubidiumRelaySession.ServerSession.onPacket, event iptal/replace
-        // edilmediği sürece ham wire byte buffer'ını (decode edilmemiş orijinal paket)
-        // server'a gönderiyor — yukarıdaki mutation'lar cancelAndReplace çağrılmadan
-        // hiçbir zaman server'a ulaşmıyordu. Bu satır olmadan headlock görsel olarak
-        // hesaplanıyor ama gerçek pakette hiç etkisi olmuyordu.
         event.cancelAndReplace(pkt)
     }
 
@@ -214,6 +210,7 @@ class KillAura : BaseModule(
             .filter { it.isPlayer }
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
+            .let { if (antiBot.value) it.filterNot { e -> e.isLikelyBot() } else it }
         return selectTarget(candidates)
     }
 
@@ -222,7 +219,18 @@ class KillAura : BaseModule(
             .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
+            .let { if (antiBot.value) it.filterNot { e -> e.isLikelyBot() } else it }
             .toMutableList()
+    }
+
+    // EntityTracker.kt'ye göre düzeltildi: TrackedEntity'de `uuid` yok, kimlik
+    // `name` (String) ve `uniqueId` (Long) üzerinden. Gerçek oyuncularda ikisi
+    // de dolu gelir; sahte/bot entity'lerde nametag paketi hiç gelmemiş ya da
+    // uniqueId 0 kalmış olur.
+    private fun EntityTracker.TrackedEntity.isLikelyBot(): Boolean {
+        if (name.isBlank()) return true
+        if (uniqueId == 0L) return true
+        return false
     }
 
     private fun selectTarget(candidates: List<EntityTracker.TrackedEntity>): EntityTracker.TrackedEntity? {
@@ -261,13 +269,28 @@ class KillAura : BaseModule(
 
         val predPos = e.predictedPosition(predictDelay.value)
         val clickPos = Vector3f.from(
-            predPos.first, 
-            (predPos.second + 1.62f).coerceIn(predPos.second - 0.5f, predPos.second + 2f), 
+            predPos.first,
+            (predPos.second + 1.62f).coerceIn(predPos.second - 0.5f, predPos.second + 2f),
             predPos.third
         )
         val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.62f, predPos.third)
 
-        CritLock.tryRun { injectCrit(session) }
+        // FIX #1 (timing): crit enjeksiyonu artık "onGround=true" (yere indi)
+        // paketini kendi içinde göndermiyor — bu, gerçek attack paketinden ÖNCE
+        // server'ın seni "yerde" görmesine sebep oluyordu, crit şartını hit
+        // anından önce bozuyordu. Landing artık attack'tan SONRA gönderiliyor.
+        //
+        // FIX #2 (CritLock API): CritLock.tryRun Boolean değil Unit döndürüyor —
+        // eskiki `val didCrit = CritLock.tryRun {...}` derlenmiyordu. Başarıyı
+        // artık lambda içinden local değişkene yazarak öğreniyoruz.
+        //
+        // FIX #3 (lock contention): global (moduleName'siz) tryRun tek paylaşımlı
+        // kilit kullanıyor — KillAura + KillAuraPro aynı anda açıksa birbirinin
+        // crit'ini sessizce iptal ediyordu. Artık modül adıyla ayrı kilit alıyoruz.
+        var didCrit = false
+        CritLock.tryRun("KillAura") {
+            didCrit = injectCrit(session)
+        }
 
         if (rotationMode.value != RotationMode.None) {
             val rot = when (rotationMode.value) {
@@ -275,7 +298,7 @@ class KillAura : BaseModule(
                 RotationMode.Approximate -> RotationUtil.approximate(targetRot)
                 else -> targetRot
             }
-            PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = true)
+            PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = false)
         }
 
         when (swingMode.value) {
@@ -283,19 +306,17 @@ class KillAura : BaseModule(
             else -> {}
         }
 
-        // Silah seçimi: yağmur/su varsa ve AutoWeapon açıksa Trident Slot'tan,
-        // değilse (havadayken) Sword Slot'tan saldır. AutoWeapon kapalıysa
-        // hiçbir slot zorlaması yapılmaz, seçili slot kullanılır.
         val hotbarSlot = resolveWeaponSlot()
-        PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
+        repeat(packetCount.value.coerceAtLeast(1)) {
+            PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
+        }
+
+        if (didCrit == true) {
+            delay(15L)
+            PacketUtil.sendMoveAtSelf(session, dyOffset = 0f, onGround = true)
+        }
     }
 
-    // ---------- Silah slotu seçimi ----------
-    // AutoWeapon kapalıysa dokunulmaz (mevcut seçili slot kullanılır).
-    // Açıksa: yağmur/suda Trident Slot, aksi halde Sword Slot kullanılır.
-    // Artık InventoryHelper'a ya da envanterde canlı "_sword"/"trident"
-    // identifier taramasına hiç bakmıyor — direkt kullanıcının belirttiği
-    // sabit slot numarasını döndürüyor.
     private fun resolveWeaponSlot(): Int {
         val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
         if (!autoWeapon.value) return fallback
@@ -304,30 +325,37 @@ class KillAura : BaseModule(
         return if (wet) tridentSlot.value.coerceIn(0, 8) else swordSlot.value.coerceIn(0, 8)
     }
 
-    private suspend fun injectCrit(s: com.rubidiumclient.core.relay.RubidiumRelaySession) {
-        try {
+    // FIX: landing paketi burada artık gönderilmiyor — bkz. performAttackSequence.
+    // injectCrit sadece "düşüyor" durumunu set edip geri dönüyor, true/false
+    // döndürerek çağıran yere landing'i ne zaman göndereceğini bildiriyor.
+    private suspend fun injectCrit(s: RubidiumRelaySession): Boolean {
+        return try {
             when (critMode.value) {
                 CritMode.MovePacket -> {
-                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0.11f, onGround = false)
-                    delay(15L)
-                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f,    onGround = true)
+                    // 0.11f çok küçüktü — server'ın "düşüyor" sayması için gereken
+                    // eşiğe yakın/altında kalıyordu, ping jitter'ıyla kolayca
+                    // normal hareket düzeltmesi sanılıp yutuluyordu. 0.42f,
+                    // KillAuraPro'da zaten güvenilir çalışan değerle aynı —
+                    // gerçek bir 1-tick düşüş mesafesini simüle ediyor.
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
+                    delay(10L)
                 }
-                
                 CritMode.Vanilla -> {
-                    listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f, 0f).forEach { dy ->
+                    listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f).forEach { dy ->
                         PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
                         delay(25L)
                     }
                 }
-                
                 CritMode.Jump -> {
-                    listOf(0.0625f, 0f, 0.0625f, 0f).forEach { dy ->
+                    listOf(0.0625f, 0f, 0.0625f).forEach { dy ->
                         PacketUtil.sendMoveAtSelf(s, dyOffset = dy, onGround = false)
                         delay(25L)
                     }
                 }
             }
+            true
         } catch (e: Exception) {
+            false
         }
     }
 
