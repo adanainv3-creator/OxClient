@@ -27,6 +27,9 @@ class AutoTotem : BaseModule(
 ) {
     companion object {
         private const val RESEND_COOLDOWN_MS = 60L
+        private const val CRITICAL_RESEND_COOLDOWN_MS = 15L
+        private const val RESPONSE_TIMEOUT_MS = 40L
+        private const val CRITICAL_HEALTH_THRESHOLD = 0.35f
         private const val TICK_INTERVAL_MS   = 5L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
@@ -41,12 +44,14 @@ class AutoTotem : BaseModule(
     @Volatile private var totemSlot = -1
     @Volatile private var offhandHasTotem = false
     @Volatile private var lastSendMs = 0L
+    @Volatile private var pendingSince = 0L
     @Volatile private var consecutiveSendsWithoutChange = 0
 
     override fun onEnable() {
         super.onEnable()
         totemSlot = -1
         offhandHasTotem = false
+        pendingSince = 0L
         consecutiveSendsWithoutChange = 0
         refreshFromSnapshot()
         if (!offhandHasTotem && totemSlot >= 0) {
@@ -86,6 +91,7 @@ class AutoTotem : BaseModule(
         offhandHasTotem = hasTotemNow
         if (hasTotemNow) {
             consecutiveSendsWithoutChange = 0
+            pendingSince = 0L
             return
         }
 
@@ -95,7 +101,17 @@ class AutoTotem : BaseModule(
         if (totemSlot < 0) return
 
         val now = System.currentTimeMillis()
-        if (now - lastSendMs < RESEND_COOLDOWN_MS) return
+
+        // Timeout-based resend: istek attık ama RESPONSE_TIMEOUT_MS içinde offhand'a
+        // hiç yansımadı (server yanıtı gecikti/kayboldu/reddedildi) — normal cooldown'u
+        // beklemeden hemen tekrar dene.
+        val timedOut = pendingSince != 0L && (now - pendingSince) >= RESPONSE_TIMEOUT_MS
+
+        // Kritik canda (<=%35) cooldown'u düşürüp daha agresif spam yap.
+        val cooldown = if (EntityTracker.getHealthPercent() <= CRITICAL_HEALTH_THRESHOLD)
+            CRITICAL_RESEND_COOLDOWN_MS else RESEND_COOLDOWN_MS
+
+        if (!timedOut && now - lastSendMs < cooldown) return
 
         equipTotem()
     }
@@ -116,7 +132,7 @@ class AutoTotem : BaseModule(
                         val item = pkt.contents.firstOrNull()
                         val nowHasTotem = InventoryUtil.isTotem(item)
                         offhandHasTotem = nowHasTotem
-                        if (nowHasTotem) consecutiveSendsWithoutChange = 0
+                        if (nowHasTotem) { consecutiveSendsWithoutChange = 0; pendingSince = 0L }
                         if (!nowHasTotem && totemSlot >= 0) equipTotem()
                     }
                 }
@@ -126,7 +142,7 @@ class AutoTotem : BaseModule(
                 if (pkt.containerId == InventoryUtil.OFFHAND_SLOT) {
                     val nowHasTotem = InventoryUtil.isTotem(pkt.item)
                     offhandHasTotem = nowHasTotem
-                    if (nowHasTotem) consecutiveSendsWithoutChange = 0
+                    if (nowHasTotem) { consecutiveSendsWithoutChange = 0; pendingSince = 0L }
                     if (!nowHasTotem && totemSlot >= 0) equipTotem()
                 } else if (pkt.containerId == 0) {
                     if (InventoryUtil.isTotem(pkt.item)) {
@@ -174,6 +190,7 @@ class AutoTotem : BaseModule(
         val offhandItem = EntityTracker.getInventoryItem(InventoryUtil.OFFHAND_SLOT) ?: ItemData.AIR
 
         lastSendMs = System.currentTimeMillis()
+        pendingSince = lastSendMs
         InventoryUtil.sendInventoryMove(
             session           = session,
             sourceContainer   = ContainerSlotType.HOTBAR_AND_INVENTORY,

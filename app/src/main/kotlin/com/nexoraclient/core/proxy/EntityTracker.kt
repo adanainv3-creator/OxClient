@@ -100,6 +100,23 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     private val selfInventory = ConcurrentHashMap<Int, ItemData>()
 
+    // ItemStackResponsePacket sadece stackNetworkId + count taşıyor, tam ItemData
+    // (definition/identifier) taşımıyor — çünkü gerçek client zaten o item'ı daha
+    // önce başka bir yerde (chest/shulker InventoryContentPacket'i, mob equipment vs.)
+    // görmüş oluyor. Relay bu bilgiye sahip olmadığı için ItemStackResponsePacket'i
+    // uygulayamıyordu ve manuel container->envanter taşımaları (shulker'dan elle item
+    // çekmek gibi) selfInventory'e hiç yansımıyordu — AutoTotem/AutoArmor'ın "ghost item"
+    // görmesinin asıl sebebi buydu. Artık hangi container'dan geldiğine bakmaksızın
+    // görülen HER item netId'siyle burada cache'leniyor; response geldiğinde bu cache'ten
+    // çözülüyor.
+    private val netIdCache = ConcurrentHashMap<Int, ItemData>()
+
+    private fun cacheByNetId(item: ItemData?) {
+        if (item == null || isEmptyItem(item)) return
+        val netId = item.netId
+        if (netId != 0) netIdCache[netId] = item
+    }
+
     @Volatile var selfRuntimeId  : Long    = 0L
     @Volatile var selfUniqueId   : Long    = 0L
     @Volatile var selfX          : Float   = 0f
@@ -225,6 +242,9 @@ object EntityTracker : PacketEventBus.PacketListener {
             }
             is InventorySlotPacket      -> {
                 handleInventorySlot(p)
+            }
+            is org.cloudburstmc.protocol.bedrock.packet.ItemStackResponsePacket -> {
+                handleItemStackResponse(p)
             }
             is org.cloudburstmc.protocol.bedrock.packet.UnknownPacket -> {
             }
@@ -539,6 +559,10 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleInventoryContent(p: InventoryContentPacket) {
+        // containerId 0/119 dışındaki paketler (açık chest/shulker gibi) selfInventory'e
+        // yazılmıyor ama içindeki item'lar netId cache'ine besleniyor — bkz. netIdCache yorumu.
+        p.contents.forEach { cacheByNetId(it) }
+
         when (p.containerId) {
             0 -> {
                 for (s in 0..35) selfInventory.remove(s)
@@ -560,6 +584,8 @@ object EntityTracker : PacketEventBus.PacketListener {
     }
 
     private fun handleInventorySlot(p: InventorySlotPacket) {
+        cacheByNetId(p.item)
+
         if (p.containerId != 0 && p.containerId != 119) return
         val slotKey = if (p.containerId == 119) 119 else p.slot
         val item = p.item
@@ -567,6 +593,48 @@ object EntityTracker : PacketEventBus.PacketListener {
             selfInventory.remove(slotKey)
         } else {
             selfInventory[slotKey] = item
+        }
+    }
+
+    // ItemStackResponsePacket: OK sonuçlu her container girişi için, o container HOTBAR_
+    // AND_INVENTORY veya OFFHAND ise ilgili slotu netIdCache'ten çözüp selfInventory'e
+    // uyguluyoruz. ARMOR container'ı burada kasıtlı olarak işlenmiyor — AutoArmor kendi
+    // ayrı packet listener'ında aynı sorunu yaşıyor, o ayrı bir fix gerektiriyor.
+    //
+    // NOT: ItemStackResponse/ItemStackResponseContainer/ItemStackResponseSlot alan adları
+    // kullandığınız protocol-bedrock sürümüne göre değişebilir (result/status, containers/
+    // containerInfos, items/slots gibi). Derleme hatası verirse gerçek alan adlarını IDE
+    // autocomplete ile kontrol edip burayı ona göre düzelt.
+    private fun handleItemStackResponse(p: org.cloudburstmc.protocol.bedrock.packet.ItemStackResponsePacket) {
+        for (response in p.entries) {
+            if (response.result != org.cloudburstmc.protocol.bedrock.data.inventory.itemstack.response.ItemStackResponseStatus.OK) continue
+
+            for (container in response.containers) {
+                val containerType = container.container.container
+                val isTrackedContainer =
+                    containerType == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType.HOTBAR_AND_INVENTORY ||
+                    containerType == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType.OFFHAND
+                if (!isTrackedContainer) continue
+
+                for (slotInfo in container.items) {
+                    val slotKey = if (containerType == org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType.OFFHAND) 119 else slotInfo.slot
+
+                    if (slotInfo.count <= 0) {
+                        selfInventory.remove(slotKey)
+                        continue
+                    }
+
+                    val cached = netIdCache[slotInfo.stackNetworkId]
+                    if (cached == null) {
+                        // Daha önce hiç görmediğimiz bir netId (ör. sunucu tarafında yeni
+                        // üretilen bir item) — elimizde definition yok, en iyi ihtimalle
+                        // eski slotu bırakıyoruz, üzerine yanlış veri yazmıyoruz.
+                        continue
+                    }
+
+                    selfInventory[slotKey] = cached.toBuilder().count(slotInfo.count).build()
+                }
+            }
         }
     }
 
