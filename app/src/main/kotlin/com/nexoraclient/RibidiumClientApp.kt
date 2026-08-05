@@ -63,6 +63,7 @@ import com.rubidiumclient.module.movement.AntiPiston
 import com.rubidiumclient.module.combat.BedAura
 import com.rubidiumclient.module.combat.AntiBed
 import com.rubidiumclient.module.misc.AutoMine
+import com.rubidiumclient.module.misc.FakePlayer
 import com.rubidiumclient.utils.WorldBlockTracker
 import com.rubidiumclient.utils.OreTracker
 
@@ -204,7 +205,8 @@ class RubidiumClientApp : Application() {
             AutoMapArt(),
             BypassFly(),
             AutoScaffold(),
-            CommandHelper()
+            CommandHelper(),
+            FakePlayer()
         )
     }
 }
