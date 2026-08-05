@@ -52,17 +52,25 @@ object PacketUtil {
         sendAttack(session, targetRid, hotbarSlot)
     }
 
+    // mirrorToClient: paketi sunucuya EK OLARAK client'a da geri gönderir, yani
+    // telefonun kendi render pozisyonunu da günceller. Gerçek bir pozisyon
+    // değişimi (TP, ışınlanma) için ŞART — aksi halde sunucu seni yeni yerde
+    // görür ama client'ın kendi fizik motoru eski pozisyona geri "düzeltir" ve
+    // hareket görsel olarak hiç çalışmıyormuş gibi durur (KillAuraPro TP bug'ı
+    // buydu). Crit enjeksiyonu gibi sahte mikro-hareketlerde bunu KAPALI
+    // tutmak gerekir — o hareketlerin client'ta görünmesi istenmez.
     fun sendMove(
-        session  : RubidiumRelaySession,
-        x        : Float,
-        y        : Float,
-        z        : Float,
-        yaw      : Float,
-        pitch    : Float,
-        onGround : Boolean = true,
-        teleport : Boolean = false
+        session        : RubidiumRelaySession,
+        x              : Float,
+        y              : Float,
+        z              : Float,
+        yaw            : Float,
+        pitch          : Float,
+        onGround       : Boolean = true,
+        teleport       : Boolean = false,
+        mirrorToClient : Boolean = false
     ) {
-        session.serverBound(MovePlayerPacket().apply {
+        val movePacket = MovePlayerPacket().apply {
             runtimeEntityId       = EntityTracker.selfRuntimeId
             position              = Vector3f.from(x, y, z)
             rotation              = Vector3f.from(pitch, yaw, yaw)
@@ -70,21 +78,24 @@ object PacketUtil {
                                     else          MovePlayerPacket.Mode.NORMAL
             isOnGround            = onGround
             ridingRuntimeEntityId = 0L
-        })
+        }
+        session.serverBound(movePacket)
+        if (mirrorToClient) session.clientBound(movePacket)
     }
 
     fun sendMoveAtSelf(
-        session  : RubidiumRelaySession,
-        yaw      : Float   = EntityTracker.selfYaw,
-        pitch    : Float   = EntityTracker.selfPitch,
-        dyOffset : Float   = 0f,
-        onGround : Boolean = true,
-        teleport : Boolean = false
+        session        : RubidiumRelaySession,
+        yaw            : Float   = EntityTracker.selfYaw,
+        pitch          : Float   = EntityTracker.selfPitch,
+        dyOffset       : Float   = 0f,
+        onGround       : Boolean = true,
+        teleport       : Boolean = false,
+        mirrorToClient : Boolean = false
     ) = sendMove(
         session,
         EntityTracker.selfX,
         EntityTracker.selfY + dyOffset,
         EntityTracker.selfZ,
-        yaw, pitch, onGround, teleport
+        yaw, pitch, onGround, teleport, mirrorToClient
     )
 }

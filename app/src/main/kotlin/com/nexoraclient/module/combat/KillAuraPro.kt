@@ -52,7 +52,6 @@ class KillAuraPro : BaseModule(
     private val swordSlot     = int  ("Sword Slot",    0,    0,  8)
     private val tridentSlot   = int  ("Trident Slot",  1,    0,  8)
 
-    private val packetCount   = int  ("Packet Count",  2,    1,  5)
     private val antiBot       = bool ("Anti Bot",      true)
 
     // Kendi TP sistemi (ayrı TPAura modülüne bağımlı değil)
@@ -219,7 +218,13 @@ class KillAuraPro : BaseModule(
 
         val rot = RotationUtil.toEntity(target)
 
-        PacketUtil.sendMove(session, newX, newY, newZ, rot.yaw, rot.pitch, onGround = false, teleport = true)
+        // FIX: mirrorToClient=true eklendi. Öncesinde bu paket sadece
+        // serverBound gidiyordu — sunucu seni yeni yerde görüyordu ama
+        // client'ın kendi render pozisyonu güncellenmediği için telefonda
+        // hiçbir hareket olmuyormuş gibi duruyordu (TP tamamen "çalışmıyor"
+        // gibi görünmesinin sebebi buydu). TPAura zaten aynı şekilde hem
+        // serverBound hem clientBound gönderiyor, burada da eşitledik.
+        PacketUtil.sendMove(session, newX, newY, newZ, rot.yaw, rot.pitch, onGround = false, teleport = true, mirrorToClient = true)
 
         EntityTracker.selfX = newX
         EntityTracker.selfY = newY
@@ -262,10 +267,11 @@ class KillAuraPro : BaseModule(
 
         PacketUtil.sendSwing(session)
 
+        // KillAura ile tutarlı olsun diye "Packet Count" slider'ı kaldırıldı,
+        // sabit double-attack (2x) yapıyoruz.
         val hotbarSlot = resolveWeaponSlot()
-        repeat(packetCount.value.coerceAtLeast(1)) {
-            PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
-        }
+        PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
+        PacketUtil.sendAttack(session, target.runtimeId, hotbarSlot, clickPos)
 
         // FIX: landing paketi artık attack'tan SONRA gönderiliyor. Öncesinde
         // injectCritTimed kendi içinde onGround=true ile bitiyordu ve bu,

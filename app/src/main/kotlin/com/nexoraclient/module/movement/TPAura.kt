@@ -21,20 +21,41 @@ class TPAura : BaseModule(
     description = "Rakip etrafında hareket eder"
 ), PacketEventBus.PacketListener {
 
-    enum class MoveMode { Random, Strafe, Behind, Aggressive }
+    // Quake: Klasik "Quake Aura" / "Spider" pattern (LiquidBounce, Impact,
+    // eski hacked client'larda görülen) — sürekli/öngörülebilir bir daire
+    // yerine, belirli aralıklarla ANİ ve yarı-rastgele açı sıçramaları +
+    // hızlı dikey sekme (bounce) yapıyor. Rakip nişan alıp vurmaya çalışırken
+    // pozisyon zaten değişmiş oluyor — çok daha zor hedef, ama radius sabit
+    // kaldığı için KillAura'nın menzilinden hiç çıkmıyorsun. Anti-cheat
+    // kaygısı olmayan sunucularda en agresif/en güçlü seçenek bu.
+    enum class MoveMode { Random, Strafe, Behind, Aggressive, Quake }
+
+    // Anti-cheat önemsiz (anarşi sunucusu) -> Instant varsayılan: her tick hedefe
+    // %100 kilitli, gecikme yok. Smooth/Legit modları hâlâ mevcut, istersen
+    // seçebilirsin ama gerek yoksa en iyi/en tutarlı olan bu.
+    enum class RotationMode { Off, Instant, Smooth, Legit }
 
     private val moveMode        = enum ("Mode",             MoveMode.Aggressive)
     private val detectRange     = float("Detect Range",     500f, 10f,  500f)
     private val range           = float("Range",            1.52f, 1f,   8f)
-    private val horizontalSpeed = float("Horizontal Speed", 3.29f, 0.5f, 8f)
-    private val verticalSpeed   = float("Vertical Speed",   1.8f, 0.1f, 8f)
-    private val strafeSpeed     = float("Strafe Speed",     6.21f, 0.1f, 50f)
+    // Anti-cheat kaygısı yok -> hızları maksimuma çektim. Eskiden 3.29/1.8/6.21
+    // idi (legit görünmek için yavaştı). Şimdi hedefin etrafında çok daha
+    // agresif/hızlı dönüyor, kaçmasını zorlaştırıyor.
+    private val horizontalSpeed = float("Horizontal Speed", 5f,   0.5f, 12f)
+    private val verticalSpeed   = float("Vertical Speed",   2.4f, 0.1f, 10f)
+    private val strafeSpeed     = float("Strafe Speed",     9f,   0.1f, 80f)
     private val yOffset         = float("Y Offset",         0.8f, -2f,  2f)
-    private val rotateToTarget  = bool ("Rotate To Target", true)
+    private val rotationMode    = enum ("Rotation Mode",    RotationMode.Instant)
+    private val rotationSmooth  = float("Rotation Smooth",  0.28f, 0.02f, 1f)
+    private val quakeHopTicks   = int  ("Quake Hop Ticks",  4, 1, 15)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
 
     private var strafeAngle = 0.0
+    private var quakeAngleOffset = 0.0
+    private var quakeTicksLeft = 0
+    @Volatile private var curYaw = 0f
+    @Volatile private var curPitch = 0f
 
     @Volatile private var lastTargetId = 0L
     @Volatile private var lastFindMs   = 0L
@@ -45,9 +66,13 @@ class TPAura : BaseModule(
     override fun onEnable() {
         super.onEnable()
         strafeAngle  = Random.nextDouble(0.0, Math.PI * 2)
+        quakeAngleOffset = 0.0
+        quakeTicksLeft = 0
         lastTargetId = 0L
         lastFindMs   = 0L
         cachedTarget = null
+        curYaw       = EntityTracker.selfYaw
+        curPitch     = EntityTracker.selfPitch
         PacketEventBus.register(this)
     }
 
@@ -102,7 +127,7 @@ class TPAura : BaseModule(
             calculatePosition(selfX, selfZ, targetPos)
         }
 
-        val rot = if (rotateToTarget.value) RotationUtil.toEntity(target) else null
+        val rot = computeRotation(target)
 
         try {
             val movePacket = MovePlayerPacket().apply {
@@ -125,6 +150,32 @@ class TPAura : BaseModule(
                 EntityTracker.selfPitch = rot.pitch
             }
         } catch (_: Exception) {}
+    }
+
+    private fun computeRotation(target: EntityTracker.TrackedEntity): RotationUtil.Rotation? {
+        return when (rotationMode.value) {
+            RotationMode.Off -> null
+            RotationMode.Instant -> RotationUtil.toEntity(target).also {
+                curYaw = it.yaw; curPitch = it.pitch
+            }
+            RotationMode.Smooth -> {
+                val targetRot = RotationUtil.toEntity(target)
+                val factor = rotationSmooth.value.coerceIn(0.02f, 1f)
+                var diff = targetRot.yaw - curYaw
+                if (diff > 180f) diff -= 360f
+                if (diff < -180f) diff += 360f
+                curYaw = RotationUtil.normalize(curYaw + diff * factor)
+                curPitch = (curPitch + (targetRot.pitch - curPitch) * factor).coerceIn(-90f, 90f)
+                RotationUtil.Rotation(curYaw, curPitch)
+            }
+            RotationMode.Legit -> {
+                val targetRot = RotationUtil.toEntity(target)
+                val result = RotationUtil.smoothTo(curYaw, curPitch, targetRot, baseFactor = rotationSmooth.value)
+                curYaw = result.yaw
+                curPitch = result.pitch
+                result
+            }
+        }
     }
 
     private fun stepTowardTarget(selfX: Float, selfY: Float, selfZ: Float, targetPos: Vector3f): Vector3f {
@@ -180,6 +231,29 @@ class TPAura : BaseModule(
                     targetPos.x + (cos(angle) * horizontalOffset).toFloat(),
                     targetPos.y + verticalOffset,
                     targetPos.z + (sin(angle) * horizontalOffset).toFloat()
+                )
+            }
+            MoveMode.Quake -> {
+                strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.05
+
+                // Belirli tick aralığında ani, yarı-rastgele açı sıçraması —
+                // rakip vuruşa hazırlanırken pozisyon zaten değişmiş oluyor.
+                quakeTicksLeft--
+                if (quakeTicksLeft <= 0) {
+                    quakeAngleOffset = Random.nextDouble(-1.4, 1.4)
+                    quakeTicksLeft = quakeHopTicks.value
+                }
+                val hopAngle = strafeAngle + quakeAngleOffset
+
+                // Hızlı, düzensiz dikey sekme (sinüsün karesi -> daha keskin/ani
+                // zıplama hissi, klasik "spider bounce")
+                val bounceRaw = sin(strafeAngle * 2.3f).toFloat()
+                val bounce = (bounceRaw * bounceRaw) * verticalSpeed.value * (if (bounceRaw < 0) -1f else 1f)
+
+                Vector3f.from(
+                    targetPos.x + (cos(hopAngle) * radius).toFloat(),
+                    targetPos.y + bounce,
+                    targetPos.z + (sin(hopAngle) * radius).toFloat()
                 )
             }
         }

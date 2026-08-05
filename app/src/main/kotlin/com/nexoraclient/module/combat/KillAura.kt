@@ -61,11 +61,6 @@ class KillAura : BaseModule(
     private val swordSlot       = int  ("Sword Slot",       0,     0,    8)
     private val tridentSlot     = int  ("Trident Slot",     1,     0,    8)
 
-    // Paket bazlı seçenek: her saldırıda ITEM_USE_ON_ENTITY isteği kaç kez
-    // gönderilsin. Paket kaybı / yüksek ping durumunda hit-register şansını
-    // artırır (wclient'teki "Packets" ayarının karşılığı).
-    private val packetCount     = int  ("Packet Count",     2,    1,    5)
-
     // AntiBot: isim/uuid'si boş ya da geçersiz olan sahte entity'leri hedef
     // listesinden eler, boşa swing atmayı önler.
     private val antiBot         = bool ("Anti Bot",         true)
@@ -306,10 +301,13 @@ class KillAura : BaseModule(
             else -> {}
         }
 
+        // Ayarlanabilir "Packet Count" kaldırıldı — kafa karıştırıcı bir slider
+        // olarak durmasın diye sabit 2x (double-attack) gönderiyoruz. Bu paket
+        // kaybına karşı yeterli güvenlik payı; 3+ göndermek ekstra hasar
+        // katmıyor, sadece trafiği artırıp lag riskini büyütüyordu.
         val hotbarSlot = resolveWeaponSlot()
-        repeat(packetCount.value.coerceAtLeast(1)) {
-            PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
-        }
+        PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
+        PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
 
         if (didCrit == true) {
             delay(15L)
