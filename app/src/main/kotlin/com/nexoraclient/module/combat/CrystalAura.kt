@@ -143,9 +143,25 @@ class CrystalAura : BaseModule(
     }
 
     // onTickPlace karşılığı: menzildeki obsidian/bedrock tabanları tara,
-    // en çok net hasar verecek noktaya kristal koy.
+    // en çok net hasar verecek noktaya kristal koy. Obsidian bulunmazsa
+    // rakip etrafında fallback pozisyonlara (ayakları altı) kristal koy.
     private fun tryPlaceBest(session: RubidiumRelaySession, now: Long) {
-        val bases = searchPlaceBase()
+        val bases = searchPlaceBase().toMutableList()
+        
+        // Obsidian bulunamazsa rakip etrafında fallback pozisyonları ekle
+        if (bases.isEmpty()) {
+            val targets = EntityTracker.getPlayers(range.value)
+            for (target in targets) {
+                if (target.runtimeId == EntityTracker.selfRuntimeId) continue
+                val tx = floor(target.x).toInt()
+                val ty = floor(target.y).toInt() - 1
+                val tz = floor(target.z).toInt()
+                for ((dx, dz) in listOf(0 to 1, 0 to -1, 1 to 0, -1 to 0, 1 to 1, 1 to -1, -1 to 1, -1 to -1)) {
+                    bases.add(Triple(tx + dx, ty, tz + dz))
+                }
+            }
+        }
+        
         if (bases.isEmpty()) return
 
         var bestPos: Triple<Int, Int, Int>? = null
@@ -159,7 +175,6 @@ class CrystalAura : BaseModule(
         }
 
         val pos = bestPos ?: return
-        if (bestDamage <= 0f) return
 
         if (placeCrystalAt(session, pos)) lastPlaceMs = now
     }
@@ -270,14 +285,20 @@ class CrystalAura : BaseModule(
     }
 
     private fun prepareItemForUse(session: RubidiumRelaySession): PreparedItem? {
+        // 1. Elinde kristal varsa onu kullan
         EntityTracker.getHeldItem()?.let { held ->
             if (InventoryUtil.resolveIdentifier(held) == "minecraft:end_crystal" && held.count > 0) {
                 return PreparedItem(EntityTracker.selfHotbarSlot, held, null)
             }
         }
+        
+        // 2. Hotbar (0-8) tara
         for (slot in 0..8) {
             val item = EntityTracker.getInventoryItem(slot) ?: continue
             if (item.count <= 0 || InventoryUtil.resolveIdentifier(item) != "minecraft:end_crystal") continue
+            if (slot == EntityTracker.selfHotbarSlot) {
+                return PreparedItem(slot, item, null)
+            }
             val original = EntityTracker.selfHotbarSlot
             InventoryUtil.sendHotbarSelect(session, slot)
             EntityTracker.selfHotbarSlot = slot
@@ -287,7 +308,14 @@ class CrystalAura : BaseModule(
     }
 
     private fun sendPlacementUseRaw(session: RubidiumRelaySession, prepared: PreparedItem, blockPos: Vector3i): Boolean {
-        val blockDef = getBlockDefinition(session) ?: return false
+        // Fallback pozisyonlar için blockDef'i önce WorldTracker'dan al, yoksa obsidian kullan
+        val targetId = if (WorldBlockTracker.hasAnyTerrainData()) {
+            WorldBlockTracker.getBlockIdentifier(blockPos.x, blockPos.y, blockPos.z) ?: "minecraft:obsidian"
+        } else {
+            "minecraft:obsidian"
+        }
+        
+        val blockDef = getBlockDefinition(session, targetId) ?: return false
         val playerPos = Vector3f.from(EntityTracker.selfX, EntityTracker.selfY, EntityTracker.selfZ)
         return try {
             session.serverBound(InventoryTransactionPacket().apply {
@@ -310,12 +338,10 @@ class CrystalAura : BaseModule(
         }
     }
 
-    // Yerleştirilecek zeminin (obsidian/bedrock) blockDefinition'ı — server'a
-    // ITEM_USE paketinde gönderilmesi gerekiyor, bilinmeyen bir taban tipinde
-    // yerleşim reddedilir. searchPlaceBase zaten sadece obsidian/bedrock kabul
-    // ettiği için burada sabit "minecraft:obsidian" fallback'i yeterli.
-    private fun getBlockDefinition(session: RubidiumRelaySession): BlockDefinition? {
-        val targetId = "minecraft:obsidian"
+    // Yerleştirilecek zeminin blockDefinition'ı — server'a ITEM_USE paketinde
+    // gönderilmesi gerekiyor. Önce cache'i kontrol et, yoksa server'ın block
+    // definitions'ını tara. Bulunamazsa targetId'ye göre fallback oluştur.
+    private fun getBlockDefinition(session: RubidiumRelaySession, targetId: String = "minecraft:obsidian"): BlockDefinition? {
         blockDefCache[targetId]?.let { return it }
         try {
             val blockDefs = session.clientSession.peer.codecHelper.blockDefinitions
@@ -331,8 +357,16 @@ class CrystalAura : BaseModule(
                 }
             }
         } catch (_: Exception) {}
+        
+        val runtimeId = when (targetId) {
+            "minecraft:obsidian"    -> 49
+            "minecraft:bedrock"     -> 7
+            "minecraft:air"         -> 0
+            else                    -> 49
+        }
+        
         val fallback = SimpleBlockDefinition(
-            targetId, 49,
+            targetId, runtimeId,
             org.cloudburstmc.nbt.NbtMap.builder()
                 .putString("name", targetId)
                 .putCompound("states", org.cloudburstmc.nbt.NbtMap.builder().build())
