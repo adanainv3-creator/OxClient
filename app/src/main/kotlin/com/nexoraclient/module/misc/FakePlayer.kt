@@ -60,8 +60,10 @@ class FakePlayer : BaseModule(
         super.onEnable()
         spawnedPlayers.clear()
         PacketEventBus.register(this)
-        tickJob = scope.launch { tickLoop() }
-        spawnFakePlayers()
+        tickJob = scope.launch {
+            spawnFakePlayers()
+            tickLoop()
+        }
     }
 
     override fun onDisable() {
@@ -71,7 +73,7 @@ class FakePlayer : BaseModule(
         super.onDisable()
     }
 
-    private fun spawnFakePlayers() {
+    private suspend fun spawnFakePlayers() {
         val session = PacketEventBus.currentSession ?: return
         repeat(count.value) { i ->
             val runtimeId = nextRuntimeId++
@@ -88,20 +90,14 @@ class FakePlayer : BaseModule(
             val posZ = EntityTracker.selfZ + dz
 
             val packet = AddPlayerPacket().apply {
-                this.runtimeEntityId = runtimeId
-                this.uuid = uuid.toString()
+                this.uuid = uuid
                 this.username = "FakePlayer_$i"
+                this.uniqueEntityId = runtimeId
+                this.runtimeEntityId = runtimeId
                 this.position = Vector3f.from(posX, posY, posZ)
                 this.rotation = Vector3f.from(0f, angle, angle)
+                this.motion = Vector3f.ZERO
                 this.gameType = GameType.SURVIVAL
-                this.handItem = org.cloudburstmc.protocol.bedrock.data.inventory.ItemData.AIR
-                this.armorItems = arrayOf(
-                    org.cloudburstmc.protocol.bedrock.data.inventory.ItemData.AIR,
-                    org.cloudburstmc.protocol.bedrock.data.inventory.ItemData.AIR,
-                    org.cloudburstmc.protocol.bedrock.data.inventory.ItemData.AIR,
-                    org.cloudburstmc.protocol.bedrock.data.inventory.ItemData.AIR
-                )
-                this.isOnGround = true
             }
             session.serverBound(packet)
 
@@ -109,7 +105,7 @@ class FakePlayer : BaseModule(
             spawnedPlayers.add(fakeData)
 
             try {
-                Thread.sleep(50L)
+                delay(50L)
             } catch (_: Exception) {}
         }
     }
@@ -118,7 +114,7 @@ class FakePlayer : BaseModule(
         val session = PacketEventBus.currentSession ?: return
         for (fake in spawnedPlayers) {
             val packet = RemoveEntityPacket().apply {
-                runtimeEntityId = fake.runtimeId
+                uniqueEntityId = fake.runtimeId
             }
             session.serverBound(packet)
         }
