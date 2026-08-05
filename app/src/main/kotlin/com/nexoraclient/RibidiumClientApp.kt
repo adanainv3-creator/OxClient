@@ -27,6 +27,7 @@ import com.rubidiumclient.module.misc.PopCounter
 import com.rubidiumclient.module.movement.BypassFly
 import com.rubidiumclient.module.combat.KillAura
 import com.rubidiumclient.module.combat.KillAuraPro
+import com.rubidiumclient.module.combat.AnchorAura
 import com.rubidiumclient.module.misc.ChatSpammer
 import com.rubidiumclient.module.misc.ChatAdvertiser
 import com.rubidiumclient.module.misc.ComboShortcut
@@ -196,6 +197,7 @@ class RubidiumClientApp : Application() {
             AutoTrap(),
             PistonAura(),
             AntiPiston(),
+            AnchorAura(),
             BedAura(),
             AntiBed(),
             AutoMine(),
