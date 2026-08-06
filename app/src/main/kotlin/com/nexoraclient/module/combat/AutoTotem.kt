@@ -30,12 +30,22 @@ class AutoTotem : BaseModule(
         private const val CRITICAL_RESEND_COOLDOWN_MS = 15L
         private const val RESPONSE_TIMEOUT_MS = 40L
         private const val CRITICAL_HEALTH_THRESHOLD = 0.35f
-        private const val TICK_INTERVAL_MS   = 5L
+        // FIX: 5ms (200Hz) + Thread.MAX_PRIORITY birlikte kritik hataydı.
+        // MAX_PRIORITY'li bir thread Android'de OS scheduler'ı tarafından
+        // agresif önceliklendirilir; saniyede 200 kez uyanan böyle bir thread
+        // network/UI thread'lerini CPU'dan aç bırakabilir. Sonuç: hem genel
+        // client lag'i hem de (ironik biçimde) AutoTotem'in kendisi -
+        // paketler network thread'inde gecikmeli gittiği için "yavaş"
+        // hissediliyordu. Tick 10ms'ye indi (critical cooldown 15ms'nin hâlâ
+        // rahat altında), priority NORM+1'e düşürüldü — reaktif event'ler
+        // (EntityEventPacket/UpdateAttributesPacket) zaten anlık tetikleniyor,
+        // bu tick sadece backstop.
+        private const val TICK_INTERVAL_MS   = 10L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
 
     private val totemDispatcher = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "AutoTotem-Tick").apply { isDaemon = true; priority = Thread.MAX_PRIORITY }
+        Thread(r, "AutoTotem-Tick").apply { isDaemon = true; priority = Thread.NORM_PRIORITY + 1 }
     }.asCoroutineDispatcher()
 
     private val totemScope = CoroutineScope(totemDispatcher + SupervisorJob())

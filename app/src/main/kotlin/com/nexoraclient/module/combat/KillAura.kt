@@ -28,7 +28,13 @@ class KillAura : BaseModule(
 
     companion object {
         private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
-        private const val TICK_INTERVAL_MS = 5L
+        // FIX: 5ms (saniyede 200 kontrol) idi. CPS max 30 -> en hızlı gerçek
+        // saldırı aralığı zaten 33ms. 200Hz'lik gereksiz uyanma, KillAuraPro +
+        // AutoTotem ile AYNI ANDA çalışınca (3 ayrı coroutine/thread saniyede
+        // 400-600+ kez uyanıp kontrol ediyor) telefonun CPU'sunu boşuna
+        // meşgul edip genel "aşırı lag" hissine sebep oluyordu. 15ms hâlâ
+        // 33ms'lik gerçek aralığı 2x oversample ediyor, fazlası gereksizdi.
+        private const val TICK_INTERVAL_MS = 15L
         private const val SCAN_INTERVAL_MS = 50L
     }
 

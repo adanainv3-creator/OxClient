@@ -73,7 +73,9 @@ class KillAuraPro : BaseModule(
 
     companion object {
         private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
-        private const val TICK_INTERVAL_MS = 5L
+        // FIX: 5ms (200Hz) idi -> KillAura + AutoTotem ile birlikte çalışınca
+        // asıl "aşırı lag" sebebiydi. 15ms yeterli hassasiyeti koruyor.
+        private const val TICK_INTERVAL_MS = 15L
         private const val SCAN_INTERVAL_MS = 50L
     }
 
