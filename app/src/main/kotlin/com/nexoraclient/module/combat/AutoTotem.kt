@@ -6,19 +6,10 @@ import com.rubidiumclient.events.PacketEvent
 import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.*
 import com.rubidiumclient.utils.InventoryUtil
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerId
 import org.cloudburstmc.protocol.bedrock.data.inventory.ContainerSlotType
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
 import org.cloudburstmc.protocol.bedrock.packet.*
-import java.util.concurrent.Executors
 
 class AutoTotem : BaseModule(
     name        = "AutoTotem",
@@ -26,55 +17,26 @@ class AutoTotem : BaseModule(
     description = "Totemi sürekli sol ele takar"
 ) {
     companion object {
-        private const val RESEND_COOLDOWN_MS = 60L
-        private const val CRITICAL_RESEND_COOLDOWN_MS = 15L
-        private const val RESPONSE_TIMEOUT_MS = 40L
-        private const val CRITICAL_HEALTH_THRESHOLD = 0.35f
-        // FIX: 5ms (200Hz) + Thread.MAX_PRIORITY birlikte kritik hataydı.
-        // MAX_PRIORITY'li bir thread Android'de OS scheduler'ı tarafından
-        // agresif önceliklendirilir; saniyede 200 kez uyanan böyle bir thread
-        // network/UI thread'lerini CPU'dan aç bırakabilir. Sonuç: hem genel
-        // client lag'i hem de (ironik biçimde) AutoTotem'in kendisi -
-        // paketler network thread'inde gecikmeli gittiği için "yavaş"
-        // hissediliyordu. Tick 10ms'ye indi (critical cooldown 15ms'nin hâlâ
-        // rahat altında), priority NORM+1'e düşürüldü — reaktif event'ler
-        // (EntityEventPacket/UpdateAttributesPacket) zaten anlık tetikleniyor,
-        // bu tick sadece backstop.
-        private const val TICK_INTERVAL_MS   = 10L
+        private const val RESEND_COOLDOWN_MS = 40L
         private const val NO_RESPONSE_WARN_AFTER = 15
     }
 
-    private val totemDispatcher = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "AutoTotem-Tick").apply { isDaemon = true; priority = Thread.NORM_PRIORITY + 1 }
-    }.asCoroutineDispatcher()
-
-    private val totemScope = CoroutineScope(totemDispatcher + SupervisorJob())
-
-    @Volatile private var tickJob: Job? = null
+    @Volatile private var tickJob: kotlinx.coroutines.Job? = null
     @Volatile private var totemSlot = -1
     @Volatile private var offhandHasTotem = false
     @Volatile private var lastSendMs = 0L
-    @Volatile private var pendingSince = 0L
     @Volatile private var consecutiveSendsWithoutChange = 0
 
     override fun onEnable() {
         super.onEnable()
         totemSlot = -1
         offhandHasTotem = false
-        pendingSince = 0L
         consecutiveSendsWithoutChange = 0
         refreshFromSnapshot()
         if (!offhandHasTotem && totemSlot >= 0) {
             equipTotem()
         }
-        tickJob = totemScope.launch {
-            while (currentCoroutineContext().isActive) {
-                if (isEnabled) {
-                    try { tickCheck() } catch (e: Exception) { }
-                }
-                delay(TICK_INTERVAL_MS)
-            }
-        }
+        tickJob = launchTickLoop(20L) { tickCheck() }
     }
 
     override fun onDisable() {
@@ -101,7 +63,6 @@ class AutoTotem : BaseModule(
         offhandHasTotem = hasTotemNow
         if (hasTotemNow) {
             consecutiveSendsWithoutChange = 0
-            pendingSince = 0L
             return
         }
 
@@ -111,17 +72,7 @@ class AutoTotem : BaseModule(
         if (totemSlot < 0) return
 
         val now = System.currentTimeMillis()
-
-        // Timeout-based resend: istek attık ama RESPONSE_TIMEOUT_MS içinde offhand'a
-        // hiç yansımadı (server yanıtı gecikti/kayboldu/reddedildi) — normal cooldown'u
-        // beklemeden hemen tekrar dene.
-        val timedOut = pendingSince != 0L && (now - pendingSince) >= RESPONSE_TIMEOUT_MS
-
-        // Kritik canda (<=%35) cooldown'u düşürüp daha agresif spam yap.
-        val cooldown = if (EntityTracker.getHealthPercent() <= CRITICAL_HEALTH_THRESHOLD)
-            CRITICAL_RESEND_COOLDOWN_MS else RESEND_COOLDOWN_MS
-
-        if (!timedOut && now - lastSendMs < cooldown) return
+        if (now - lastSendMs < RESEND_COOLDOWN_MS) return
 
         equipTotem()
     }
@@ -142,7 +93,7 @@ class AutoTotem : BaseModule(
                         val item = pkt.contents.firstOrNull()
                         val nowHasTotem = InventoryUtil.isTotem(item)
                         offhandHasTotem = nowHasTotem
-                        if (nowHasTotem) { consecutiveSendsWithoutChange = 0; pendingSince = 0L }
+                        if (nowHasTotem) consecutiveSendsWithoutChange = 0
                         if (!nowHasTotem && totemSlot >= 0) equipTotem()
                     }
                 }
@@ -152,7 +103,7 @@ class AutoTotem : BaseModule(
                 if (pkt.containerId == InventoryUtil.OFFHAND_SLOT) {
                     val nowHasTotem = InventoryUtil.isTotem(pkt.item)
                     offhandHasTotem = nowHasTotem
-                    if (nowHasTotem) { consecutiveSendsWithoutChange = 0; pendingSince = 0L }
+                    if (nowHasTotem) consecutiveSendsWithoutChange = 0
                     if (!nowHasTotem && totemSlot >= 0) equipTotem()
                 } else if (pkt.containerId == 0) {
                     if (InventoryUtil.isTotem(pkt.item)) {
@@ -174,13 +125,6 @@ class AutoTotem : BaseModule(
                     if (totemSlot >= 0) equipTotem()
                 }
             }
-
-            is UpdateAttributesPacket -> {
-                if (pkt.runtimeEntityId != EntityTracker.selfRuntimeId) return
-                if (offhandHasTotem) return
-                val health = pkt.attributes.firstOrNull { it.name == "minecraft:health" } ?: return
-                if (health.value <= health.maximum * 0.35f && totemSlot >= 0) equipTotem()
-            }
         }
     }
 
@@ -200,7 +144,6 @@ class AutoTotem : BaseModule(
         val offhandItem = EntityTracker.getInventoryItem(InventoryUtil.OFFHAND_SLOT) ?: ItemData.AIR
 
         lastSendMs = System.currentTimeMillis()
-        pendingSince = lastSendMs
         InventoryUtil.sendInventoryMove(
             session           = session,
             sourceContainer   = ContainerSlotType.HOTBAR_AND_INVENTORY,
