@@ -48,6 +48,16 @@ class AutoMapArt : BaseModule(
 
         private const val CHEST_INTERACT_RANGE   = 4f
         private const val CONTAINER_OPEN_TIMEOUT_MS = 3000L
+        // FIX: eskiden onEnable()'da ANINDA hasAnyTerrainData() kontrol edilip
+        // "No chunk data" uyarısı basılıyordu. Chunk verisi sunucudan ASENKRON
+        // akıyor — dünyaya yeni girildiyse/modül bağlantı sonrası hemen
+        // açıldıysa terrain data henüz hiç gelmemiş olabilir (bu normal),
+        // ama uyarı "bağlantı sorunu var" gibi görünüyordu. tick() zaten
+        // veriyi sessizce bekliyor (satır ~287) — asıl kod hiçbir zaman
+        // kırılmıyordu, sadece mesaj yanlış zamanda/yanlış yorumla çıkıyordu.
+        // Artık gerçekten kalıcı bir sorun (5 saniye sonra hâlâ veri yoksa)
+        // varsa TEK SEFER uyarıyoruz.
+        private const val CHUNK_DATA_GRACE_MS = 5000L
 
         private const val SCHEMATIC_MAX_PX  = 240f
         private const val SCHEMATIC_MARGIN  = 28f
@@ -137,6 +147,9 @@ class AutoMapArt : BaseModule(
     @Volatile private var lastContainerContents: List<ItemData>? = null
     private var containerAwaitSinceMs = 0L
 
+    private var enabledAtMs = 0L
+    private var chunkWarningShown = false
+
     @Volatile var availableBlocks: Set<String> = emptySet()
         set(value) {
             val changed = field != value
@@ -156,9 +169,8 @@ class AutoMapArt : BaseModule(
         if (MapArtPlan.grid.value == null) {
             sendMessage("§eAutoMapArt: No image analyzed yet. Pick one from Dashboard > Configs > AutoMapArt.")
         }
-        if (!WorldBlockTracker.hasAnyTerrainData()) {
-            sendMessage("§eAutoMapArt: No chunk data — are you connected and in a world?")
-        }
+        enabledAtMs = System.currentTimeMillis()
+        chunkWarningShown = false
 
         originSet   = false
         paused      = false
@@ -284,7 +296,13 @@ class AutoMapArt : BaseModule(
         }
 
         if (!originSet) {
-            if (!WorldBlockTracker.hasAnyTerrainData()) return
+            if (!WorldBlockTracker.hasAnyTerrainData()) {
+                if (!chunkWarningShown && System.currentTimeMillis() - enabledAtMs >= CHUNK_DATA_GRACE_MS) {
+                    chunkWarningShown = true
+                    sendMessage("§eAutoMapArt: No chunk data — are you connected and in a world?")
+                }
+                return
+            }
             originX = floor(EntityTracker.selfX).toInt()
             originY = floor(EntityTracker.selfY - 1f).toInt()
             originZ = floor(EntityTracker.selfZ).toInt()
