@@ -19,13 +19,17 @@ class ChatAdvertiser : BaseModule(
     category    = ModuleCategory.MISC,
     description = "Chat Spam (TPA/TpaHere/PVP/Ads)"
 ) {
-    enum class Mode { TPA, TpaHere, PVP, Ads }
+    enum class Mode { TPA, TpaHere, PVP, Ads, Spammer }
 
     private val mode              = enum("Mode", Mode.PVP)
     private val shortcut          = bool("Shortcut", false)
 
     private val adsMessages = listOf(
-        "> @here Use Best Mobile Client | discord.gg\\At5VHua7ZP | %RANDOM% | Rubidium Client"
+        "> @here Use Best Mobile Client | discord.gg\\At5VHua7ZP | %RANDOM% | Rubidium Client",
+        "> @here Best PvP Client for Bedrock | discord.gg\\At5VHua7ZP | %RANDOM% | Rubidium Client",
+        "> @here Free Download Rubidium Client | discord.gg\\At5VHua7ZP | %RANDOM% | Rubidium Client",
+        "> @here Join our Discord for updates | discord.gg\\At5VHua7ZP | %RANDOM% | Rubidium Client",
+        "> @here Rubidium Client trusted by hundreds | discord.gg\\At5VHua7ZP | %RANDOM% | Rubidium Client"
     )
 
     private val pvpMessages = listOf(
@@ -45,16 +49,41 @@ class ChatAdvertiser : BaseModule(
         "> @here tpa pvp all skill issue if you decline | %RANDOM% | Rubidium Client"
     )
 
+    private val spammerMessages = listOf(
+        "> nobody in this lobby can touch my pvp | Rubidium v1.4 | %RANDOM%",
+        "> crystal pvp on point today | Rubidium v1.4 | %RANDOM%",
+        "> combos hitting different with Rubidium | Rubidium v1.4 | %RANDOM%",
+        "> clean w keys clean hits | Rubidium v1.4 | %RANDOM%",
+        "> outplaying everyone in this server | Rubidium v1.4 | %RANDOM%",
+        "> best pvp client on bedrock hands down | Rubidium v1.4 | %RANDOM%",
+        "> another easy win in the books | Rubidium v1.4 | %RANDOM%",
+        "> totem popping never looked this smooth | Rubidium v1.4 | %RANDOM%",
+        "> ping doesnt matter when your pvp is clean | Rubidium v1.4 | %RANDOM%",
+        "> running this lobby with Rubidium | Rubidium v1.4 | %RANDOM%",
+        "> knockback reads on point every fight | Rubidium v1.4 | %RANDOM%",
+        "> tpa me if you think you can win | Rubidium v1.4 | %RANDOM%",
+        "> crystal aura carrying every fight | Rubidium v1.4 | %RANDOM%",
+        "> movement smooth combos smoother | Rubidium v1.4 | %RANDOM%",
+        "> undefeated on this account today | Rubidium v1.4 | %RANDOM%",
+        "> bedrock pvp solved with Rubidium | Rubidium v1.4 | %RANDOM%",
+        "> another opponent another totem cancel | Rubidium v1.4 | %RANDOM%",
+        "> this server hasnt seen pvp like this | Rubidium v1.4 | %RANDOM%",
+        "> Rubidium users just built different | Rubidium v1.4 | %RANDOM%",
+        "> come test your pvp against the best | Rubidium v1.4 | %RANDOM%"
+    )
+
     private val junkChars = "abcdefghjklmnopqrstuvwxyz0123456789"
     private var scheduler: ScheduledExecutorService? = null
-    private var currentPvpMessageIndex = 0
-    private var currentAdsMessageIndex = 0
+    private var lastSpammerMessageIndex = -1
+    private var lastPvpMessageIndex = -1
+    private var lastAdsMessageIndex = -1
     private var activeSession: RubidiumRelaySession? = null
 
     override fun onEnable() {
         super.onEnable()
-        currentPvpMessageIndex = 0
-        currentAdsMessageIndex = 0
+        lastSpammerMessageIndex = -1
+        lastPvpMessageIndex = -1
+        lastAdsMessageIndex = -1
 
         scheduler = Executors.newSingleThreadScheduledExecutor().also { exec ->
             when (mode.value) {
@@ -65,10 +94,13 @@ class ChatAdvertiser : BaseModule(
                     exec.scheduleAtFixedRate({ sendTpaHereCommand() }, 0, 2000, TimeUnit.MILLISECONDS)
                 }
                 Mode.PVP -> {
-                    exec.scheduleAtFixedRate({ sendPvpMessage() }, 0, 3000, TimeUnit.MILLISECONDS)
+                    exec.scheduleAtFixedRate({ sendPvpMessage() }, 0, 22000, TimeUnit.MILLISECONDS)
                 }
                 Mode.Ads -> {
                     exec.scheduleAtFixedRate({ sendAdsMessage() }, 0, 10000, TimeUnit.MILLISECONDS) // 10 saniyeye değiştirildi
+                }
+                Mode.Spammer -> {
+                    exec.scheduleAtFixedRate({ sendSpammerMessage() }, 0, 25000, TimeUnit.MILLISECONDS)
                 }
             }
         }
@@ -109,9 +141,14 @@ class ChatAdvertiser : BaseModule(
 
     private fun sendPvpMessage() {
         val session = activeSession ?: return
-        val message = pvpMessages[currentPvpMessageIndex]
-            .replace("%RANDOM%", randomJunk())
-        currentPvpMessageIndex = (currentPvpMessageIndex + 1) % pvpMessages.size
+
+        var index: Int
+        do {
+            index = Random.nextInt(pvpMessages.size)
+        } while (index == lastPvpMessageIndex && pvpMessages.size > 1)
+        lastPvpMessageIndex = index
+
+        val message = pvpMessages[index].replace("%RANDOM%", randomJunk())
 
         try {
             session.sendToServer(buildTextPacket(message))
@@ -121,9 +158,31 @@ class ChatAdvertiser : BaseModule(
 
     private fun sendAdsMessage() {
         val session = activeSession ?: return
-        val message = adsMessages[currentAdsMessageIndex]
-            .replace("%RANDOM%", randomJunk())
-        currentAdsMessageIndex = (currentAdsMessageIndex + 1) % adsMessages.size
+
+        var index: Int
+        do {
+            index = Random.nextInt(adsMessages.size)
+        } while (index == lastAdsMessageIndex && adsMessages.size > 1)
+        lastAdsMessageIndex = index
+
+        val message = adsMessages[index].replace("%RANDOM%", randomJunk())
+
+        try {
+            session.sendToServer(buildTextPacket(message))
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun sendSpammerMessage() {
+        val session = activeSession ?: return
+
+        var index: Int
+        do {
+            index = Random.nextInt(spammerMessages.size)
+        } while (index == lastSpammerMessageIndex && spammerMessages.size > 1)
+        lastSpammerMessageIndex = index
+
+        val message = spammerMessages[index].replace("%RANDOM%", randomJunk())
 
         try {
             session.sendToServer(buildTextPacket(message))
