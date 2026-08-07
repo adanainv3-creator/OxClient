@@ -6,9 +6,7 @@ import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.BaseModule
 import com.rubidiumclient.module.ModuleCategory
 import com.rubidiumclient.module.social.isFriendEntity
-import org.cloudburstmc.protocol.bedrock.data.inventory.transaction.InventoryTransactionType
 import org.cloudburstmc.protocol.bedrock.packet.EntityEventPacket
-import org.cloudburstmc.protocol.bedrock.packet.InventoryTransactionPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerListPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import java.util.concurrent.ConcurrentHashMap
@@ -24,12 +22,11 @@ class ChatSpammer : BaseModule(
     description = "Chat prefix + öldürme/logout spam"
 ) {
     companion object {
-        private const val VERSION      = "v1.3"
-        private const val TAG_LINE     = "Rubidium Client $VERSION"
+        private const val VERSION      = "v1.4"
+        private const val TAG_LINE     = "Rubidium  $VERSION"
         private const val QUEUE_DELAY_MS = 600L
         private const val MAX_QUEUE_SIZE = 30
         private const val LOGOUT_RANGE = 256f
-        private const val SELF_HIT_WINDOW_MS = 3000L
         private const val SNAPSHOT_INTERVAL_MS = 1000L
 
         private val JUNK_CHARS = "abcdefghjklmnopqrstuvwxyz0123456789"
@@ -41,12 +38,10 @@ class ChatSpammer : BaseModule(
     private val killSpammer = bool("KillSpammer", true)    // Öldürme mesajlarını aç/kapa
 
     // ---------- Durum tabloları ----------
-    private data class HitInfo(val name: String, val timeMs: Long)
-
     private val recentDeathMs    = ConcurrentHashMap<Long, Long>()
-    private val recentHitsByMe   = ConcurrentHashMap<Long, HitInfo>()   // vuruş anındaki ismi de saklıyoruz — ölüm anında entity tracker'dan silinmiş olabilir
     private val recentLogoutMs   = ConcurrentHashMap<Long, Long>()
     private val knownPlayerNames = ConcurrentHashMap<Long, String>()
+    private val runtimeIdNames   = ConcurrentHashMap<Long, String>() // entity tracker'dan silinmiş olsa bile isim çözebilmek için
 
     private val messageQueue = ConcurrentLinkedQueue<String>()
     private var scheduler: ScheduledExecutorService? = null
@@ -81,19 +76,6 @@ class ChatSpammer : BaseModule(
 
                 val typeStr = runCatching { p.type?.toString()?.uppercase() ?: "" }.getOrElse { "" }
                 if (typeStr.contains("DEATH")) handleDeath(p.runtimeEntityId)
-            }
-
-            // ---------- InventoryTransaction (Kendi vuruşumuzu takip) ----------
-            is InventoryTransactionPacket -> {
-                if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-                if (p.transactionType != InventoryTransactionType.ITEM_USE_ON_ENTITY) return
-                if (p.actionType != 1) return
-
-                // İsim burada, vuruş anında yakalanıyor — ölüm event'i geldiğinde
-                // entity zaten tracker'dan silinmiş olabiliyor.
-                val target = EntityTracker.getById(p.runtimeEntityId)
-                val name   = target?.name?.takeIf { it.isNotEmpty() } ?: return
-                recentHitsByMe[p.runtimeEntityId] = HitInfo(name, System.currentTimeMillis())
             }
 
             // ---------- PlayerListPacket (Oyuncu çıkışı – logout) ----------
@@ -150,9 +132,9 @@ class ChatSpammer : BaseModule(
         super.onEnable()
         recentDeathMs.clear()
         recentLogoutMs.clear()
-        recentHitsByMe.clear()
         knownPlayerNames.clear()
         playerSnapshots.clear()
+        runtimeIdNames.clear()
         messageQueue.clear()
 
         scheduler = Executors.newSingleThreadScheduledExecutor().also {
@@ -165,9 +147,9 @@ class ChatSpammer : BaseModule(
         super.onDisable()
         recentDeathMs.clear()
         recentLogoutMs.clear()
-        recentHitsByMe.clear()
         knownPlayerNames.clear()
         playerSnapshots.clear()
+        runtimeIdNames.clear()
         messageQueue.clear()
 
         scheduler?.shutdownNow()
@@ -179,6 +161,7 @@ class ChatSpammer : BaseModule(
         EntityTracker.getPlayers().forEach { e ->
             if (e.runtimeId == EntityTracker.selfRuntimeId) return@forEach
             playerSnapshots[e.uniqueId] = PlayerSnapshot(e.name, e.x, e.y, e.z, e.isFriendEntity)
+            if (e.name.isNotEmpty()) runtimeIdNames[e.runtimeId] = e.name
         }
     }
 
@@ -195,24 +178,28 @@ class ChatSpammer : BaseModule(
     }
 
     // ---------- Ölüm işleyicisi ----------
+    // Not: Artık "bu ölüm bize mi ait" filtresi yok — sunucudan gelen HER
+    // oyuncu ölümünde (kim öldürürse öldürsün) mesaj atılır. Bu filtre
+    // kaldırılmadan önce mesaj sadece InventoryTransactionPacket ile
+    // yakaladığımız kendi vuruşumuza bağlıydı; bazı sunucularda vuruşlar artık
+    // PlayerAuthInputPacket üzerinden geldiği için bu paket hiç gelmiyor ve
+    // ölüm mesajı asla tetiklenmiyordu.
     private fun handleDeath(runtimeId: Long) {
         if (!killSpammer.value) return
 
-        // Vuruş kaydı yoksa (ya da penceresi geçmişse) bu ölüm bize ait değil.
-        val hit = recentHitsByMe.remove(runtimeId) ?: return
         val now = System.currentTimeMillis()
-        if (now - hit.timeMs > SELF_HIT_WINDOW_MS) return
-
         val last = recentDeathMs[runtimeId]
         if (last != null && now - last < 1500L) return
         recentDeathMs[runtimeId] = now
 
-        // Entity hâlâ tracker'daysa arkadaş kontrolünü yap; silinmişse
-        // (çoğu ölüm durumunda olduğu gibi) vuruş anındaki isimle devam et.
         val entity = EntityTracker.getById(runtimeId)
         if (entity?.isFriendEntity == true) return
 
-        enqueue("> @here EZ @${hit.name} killed by Rubidium Client | ${randomJunk()}")
+        val name = entity?.name?.takeIf { it.isNotEmpty() }
+            ?: runtimeIdNames[runtimeId]
+            ?: return
+
+        enqueue("> GGS @$name  | ${randomJunk()}")
     }
 
     // ---------- Logout işleyicisi ----------
