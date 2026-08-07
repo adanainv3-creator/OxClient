@@ -8,7 +8,6 @@ import com.rubidiumclient.module.social.isFriendEntity
 import com.rubidiumclient.utils.MathUtil
 import com.rubidiumclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
-import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -71,12 +70,11 @@ class TPAura : BaseModule(
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        if (event.packet !is PlayerAuthInputPacket) return
+        val pkt = event.packet as? PlayerAuthInputPacket ?: return
         val target = getCachedTarget() ?: return
 
-        event.cancel()
-
-        moveAroundTarget(target)
+        moveAroundTarget(pkt, target)
+        event.cancelAndReplace(pkt)
     }
 
     private fun getCachedTarget(): EntityTracker.TrackedEntity? {
@@ -100,9 +98,7 @@ class TPAura : BaseModule(
         return target
     }
 
-    private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
-        val session = PacketEventBus.currentSession ?: return
-
+    private fun moveAroundTarget(pkt: PlayerAuthInputPacket, target: EntityTracker.TrackedEntity) {
         val selfX = EntityTracker.selfX
         val selfY = EntityTracker.selfY
         val selfZ = EntityTracker.selfZ
@@ -118,29 +114,19 @@ class TPAura : BaseModule(
 
         val rot = computeRotation(target)
 
-        try {
-            val movePacket = MovePlayerPacket().apply {
-                runtimeEntityId       = EntityTracker.selfRuntimeId
-                position              = newPos
-                rotation              = if (rot != null)
-                    Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
-                else
-                    Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, 0f)
-                mode                  = MovePlayerPacket.Mode.NORMAL
-                isOnGround            = true
-                ridingRuntimeEntityId = 0L
-            }
-            session.serverBound(movePacket)
-            session.clientBound(movePacket)
+        pkt.position = newPos
+        pkt.rotation = if (rot != null)
+            Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
+        else
+            Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, 0f)
 
-            EntityTracker.selfX = newPos.x
-            EntityTracker.selfY = newPos.y
-            EntityTracker.selfZ = newPos.z
-            if (rot != null) {
-                EntityTracker.selfYaw   = rot.yaw
-                EntityTracker.selfPitch = rot.pitch
-            }
-        } catch (_: Exception) {}
+        EntityTracker.selfX = newPos.x
+        EntityTracker.selfY = newPos.y
+        EntityTracker.selfZ = newPos.z
+        if (rot != null) {
+            EntityTracker.selfYaw   = rot.yaw
+            EntityTracker.selfPitch = rot.pitch
+        }
     }
 
     private fun computeRotation(target: EntityTracker.TrackedEntity): RotationUtil.Rotation? {
