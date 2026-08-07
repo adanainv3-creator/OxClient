@@ -8,6 +8,7 @@ import com.rubidiumclient.module.social.isFriendEntity
 import com.rubidiumclient.utils.MathUtil
 import com.rubidiumclient.utils.RotationUtil
 import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
 import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -20,27 +21,20 @@ class TPAura : BaseModule(
     description = "Rakip etrafında hareket eder"
 ), PacketEventBus.PacketListener {
 
-    enum class MoveMode    { Random, Strafe, Behind, Aggressive, Quake }
-    enum class RotationMode { Off, Instant, Smooth, Legit }
+    enum class MoveMode { Random, Strafe, Behind, Aggressive }
 
-    private val moveMode        = enum("Mode",             MoveMode.Aggressive)
+    private val moveMode        = enum ("Mode",             MoveMode.Aggressive)
     private val detectRange     = float("Detect Range",     500f, 10f,  500f)
     private val range           = float("Range",            1.52f, 1f,   8f)
-    private val horizontalSpeed = float("Horizontal Speed", 5f,   0.5f, 12f)
-    private val verticalSpeed   = float("Vertical Speed",   2.4f, 0.1f, 10f)
-    private val strafeSpeed     = float("Strafe Speed",     9f,   0.1f, 80f)
+    private val horizontalSpeed = float("Horizontal Speed", 3.29f, 0.5f, 8f)
+    private val verticalSpeed   = float("Vertical Speed",   1.8f, 0.1f, 8f)
+    private val strafeSpeed     = float("Strafe Speed",     6.21f, 0.1f, 50f)
     private val yOffset         = float("Y Offset",         0.8f, -2f,  2f)
-    private val rotationMode    = enum("Rotation Mode",    RotationMode.Instant)
-    private val rotationSmooth  = float("Rotation Smooth",  0.28f, 0.02f, 1f)
-    private val quakeHopTicks   = int("Quake Hop Ticks",  4, 1, 15)
-    private val ignoreFriends   = bool("Ignore Friends",   true)
-    private val shortcut        = bool("Shortcut",         false)
+    private val rotateToTarget  = bool ("Rotate To Target", true)
+    private val ignoreFriends   = bool ("Ignore Friends",   true)
+    private val shortcut        = bool ("Shortcut",         false)
 
-    private var strafeAngle      = 0.0
-    private var quakeAngleOffset = 0.0
-    private var quakeTicksLeft   = 0
-    @Volatile private var curYaw   = 0f
-    @Volatile private var curPitch = 0f
+    private var strafeAngle = 0.0
 
     @Volatile private var lastTargetId = 0L
     @Volatile private var lastFindMs   = 0L
@@ -50,14 +44,10 @@ class TPAura : BaseModule(
 
     override fun onEnable() {
         super.onEnable()
-        strafeAngle       = Random.nextDouble(0.0, Math.PI * 2)
-        quakeAngleOffset  = 0.0
-        quakeTicksLeft    = 0
-        lastTargetId      = 0L
-        lastFindMs        = 0L
-        cachedTarget      = null
-        curYaw            = EntityTracker.selfYaw
-        curPitch          = EntityTracker.selfPitch
+        strafeAngle  = Random.nextDouble(0.0, Math.PI * 2)
+        lastTargetId = 0L
+        lastFindMs   = 0L
+        cachedTarget = null
         PacketEventBus.register(this)
     }
 
@@ -70,11 +60,9 @@ class TPAura : BaseModule(
     override fun onPacket(event: PacketEvent) {
         if (!isEnabled) return
         if (event.direction != PacketEvent.Direction.CLIENT_TO_SERVER) return
-        val pkt = event.packet as? PlayerAuthInputPacket ?: return
+        if (event.packet !is PlayerAuthInputPacket) return
         val target = getCachedTarget() ?: return
-
-        moveAroundTarget(pkt, target)
-        event.cancelAndReplace(pkt)
+        moveAroundTarget(target)
     }
 
     private fun getCachedTarget(): EntityTracker.TrackedEntity? {
@@ -98,7 +86,9 @@ class TPAura : BaseModule(
         return target
     }
 
-    private fun moveAroundTarget(pkt: PlayerAuthInputPacket, target: EntityTracker.TrackedEntity) {
+    private fun moveAroundTarget(target: EntityTracker.TrackedEntity) {
+        val session = PacketEventBus.currentSession ?: return
+
         val selfX = EntityTracker.selfX
         val selfY = EntityTracker.selfY
         val selfZ = EntityTracker.selfZ
@@ -112,46 +102,29 @@ class TPAura : BaseModule(
             calculatePosition(selfX, selfZ, targetPos)
         }
 
-        val rot = computeRotation(target)
+        val rot = if (rotateToTarget.value) RotationUtil.toEntity(target) else null
 
-        pkt.position = newPos
-        pkt.rotation = if (rot != null)
-            Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
-        else
-            Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, 0f)
+        try {
+            val movePacket = MovePlayerPacket().apply {
+                runtimeEntityId       = EntityTracker.selfRuntimeId
+                position              = newPos
+                rotation              = if (rot != null) Vector3f.from(rot.pitch, rot.yaw, rot.yaw)
+                                        else Vector3f.from(EntityTracker.selfPitch, EntityTracker.selfYaw, 0f)
+                mode                  = MovePlayerPacket.Mode.NORMAL
+                isOnGround            = true
+                ridingRuntimeEntityId = 0L
+            }
+            session.serverBound(movePacket)
+            session.clientBound(movePacket)
 
-        EntityTracker.selfX = newPos.x
-        EntityTracker.selfY = newPos.y
-        EntityTracker.selfZ = newPos.z
-        if (rot != null) {
-            EntityTracker.selfYaw   = rot.yaw
-            EntityTracker.selfPitch = rot.pitch
-        }
-    }
-
-    private fun computeRotation(target: EntityTracker.TrackedEntity): RotationUtil.Rotation? {
-        return when (rotationMode.value) {
-            RotationMode.Off -> null
-            RotationMode.Instant -> RotationUtil.toEntity(target).also {
-                curYaw = it.yaw; curPitch = it.pitch
+            EntityTracker.selfX = newPos.x
+            EntityTracker.selfY = newPos.y
+            EntityTracker.selfZ = newPos.z
+            if (rot != null) {
+                EntityTracker.selfYaw   = rot.yaw
+                EntityTracker.selfPitch = rot.pitch
             }
-            RotationMode.Smooth -> {
-                val targetRot = RotationUtil.toEntity(target)
-                val factor = rotationSmooth.value.coerceIn(0.02f, 1f)
-                var diff = targetRot.yaw - curYaw
-                if (diff > 180f) diff -= 360f
-                if (diff < -180f) diff += 360f
-                curYaw   = RotationUtil.normalize(curYaw + diff * factor)
-                curPitch = (curPitch + (targetRot.pitch - curPitch) * factor).coerceIn(-90f, 90f)
-                RotationUtil.Rotation(curYaw, curPitch)
-            }
-            RotationMode.Legit -> {
-                val targetRot = RotationUtil.toEntity(target)
-                val result = RotationUtil.smoothTo(curYaw, curPitch, targetRot, baseFactor = rotationSmooth.value)
-                curYaw = result.yaw; curPitch = result.pitch
-                result
-            }
-        }
+        } catch (_: Exception) {}
     }
 
     private fun stepTowardTarget(selfX: Float, selfY: Float, selfZ: Float, targetPos: Vector3f): Vector3f {
@@ -159,6 +132,7 @@ class TPAura : BaseModule(
             (targetPos.z - selfZ).toDouble(),
             (targetPos.x - selfX).toDouble()
         ) - Math.toRadians(90.0)
+
         val newX = selfX - (sin(direction) * horizontalSpeed.value).toFloat()
         val newZ = selfZ + (cos(direction) * horizontalSpeed.value).toFloat()
         val newY = targetPos.y.coerceIn(selfY - verticalSpeed.value, selfY + verticalSpeed.value)
@@ -167,6 +141,7 @@ class TPAura : BaseModule(
 
     private fun calculatePosition(selfX: Float, selfZ: Float, targetPos: Vector3f): Vector3f {
         val radius = range.value
+
         return when (moveMode.value) {
             MoveMode.Aggressive -> {
                 strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.05
@@ -205,22 +180,6 @@ class TPAura : BaseModule(
                     targetPos.x + (cos(angle) * horizontalOffset).toFloat(),
                     targetPos.y + verticalOffset,
                     targetPos.z + (sin(angle) * horizontalOffset).toFloat()
-                )
-            }
-            MoveMode.Quake -> {
-                strafeAngle += horizontalSpeed.value * strafeSpeed.value * 0.05
-                quakeTicksLeft--
-                if (quakeTicksLeft <= 0) {
-                    quakeAngleOffset = Random.nextDouble(-1.4, 1.4)
-                    quakeTicksLeft   = quakeHopTicks.value
-                }
-                val hopAngle = strafeAngle + quakeAngleOffset
-                val bounceRaw = sin(strafeAngle * 2.3f).toFloat()
-                val bounce = (bounceRaw * bounceRaw) * verticalSpeed.value * (if (bounceRaw < 0) -1f else 1f)
-                Vector3f.from(
-                    targetPos.x + (cos(hopAngle) * radius).toFloat(),
-                    targetPos.y + bounce,
-                    targetPos.z + (sin(hopAngle) * radius).toFloat()
                 )
             }
         }
