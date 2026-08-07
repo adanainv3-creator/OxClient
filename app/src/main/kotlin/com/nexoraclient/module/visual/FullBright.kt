@@ -62,7 +62,7 @@ class FullBright : BaseModule(
             is SetTimePacket -> {
                 val needsTime = mode.value == FbMode.TimeForce || mode.value == FbMode.Both
                 if (needsTime && event.direction == PacketEvent.Direction.SERVER_TO_CLIENT)
-                    event.replacementPacket = SetTimePacket().apply { time = forceTime.value }
+                    event.cancelAndReplace(SetTimePacket().apply { time = forceTime.value })
             }
             else -> {}
         }
