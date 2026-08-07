@@ -284,8 +284,31 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         val header = buf.readUnsignedByte().toInt()
         val bitsPerBlock = header ushr 1
         val isPersistent = (header and 1) == 1
-        if (isPersistent) return null
         if (bitsPerBlock !in intArrayOf(0, 1, 2, 3, 4, 5, 6, 8, 16)) return null
+
+        // FIX: persistent (NBT) paletli subchunk'larda eskiden direkt `return null`
+        // yapılıyordu. Bu, tryDecode() -> handleLevelChunkPacket() zincirinde
+        // "break"e sebep oluyordu — yani bu subchunk'ın ÜSTÜNDEKİ tüm subchunk'lar
+        // da (aynı sütunda) hiç okunmadan atlanıyordu, buffer hizası bozulacağı
+        // için değil, sadece "decode başarısız" sayılıp erken çıkıldığı için.
+        // Artık bu bloğu (içeriğini sections'a yazmadan) doğru NBT reader ile
+        // atlayıp buffer'ı hizalı tutuyoruz — böylece üstteki subchunk'lar normal
+        // şekilde okunmaya devam ediyor. Sadece bu TEK subchunk'ın kendi verisi
+        // (nadir, özel bloklar) hâlâ eksik kalıyor, ama sütunun geri kalanı artık
+        // kaybolmuyor.
+        if (isPersistent) {
+            return try {
+                skipPersistentPalette(buf, bitsPerBlock)
+                // null DEĞİL — placeholder IntArray dönüyoruz. tryDecode()'daki
+                // `readBlockStorage(buf) ?: return null` null görürse yine aynı
+                // break'e sebep olurdu. -1 = "bilinmiyor" sentinel; getBlockIdentifier
+                // bu bloklar için null döner (resolveIdentifier(-1) registry'de
+                // bulunamaz), ama en azından ÜSTTEKİ subchunk'lar okunmaya devam eder.
+                IntArray(SECTION_BLOCKS) { -1 }
+            } catch (_: Exception) {
+                null
+            }
+        }
 
         if (bitsPerBlock == 0) {
 
@@ -316,6 +339,29 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         return IntArray(SECTION_BLOCKS) { i ->
             val p = indices[i]
             if (p < palette.size) palette[p] else 0
+        }
+    }
+
+    // Persistent format: index dizisi normal (word-packed) formatla aynı şekilde
+    // kodlanır, ama paletin kendisi runtimeId VarInt listesi değil, N adet NBT
+    // compound tag'idir (her biri bir blok state'ini doğrudan tanımlar). İçeriği
+    // sections'a yazmıyoruz (ayrı bir string-bazlı depoya ihtiyaç duyar) — sadece
+    // buffer'ı doğru NBT reader ile ileri sararak sonraki subchunk'ların
+    // hizasını koruyoruz.
+    private fun skipPersistentPalette(buf: ByteBuf, bitsPerBlock: Int) {
+        if (bitsPerBlock > 0) {
+            val blocksPerWord = 32 / bitsPerBlock
+            val wordCount = (SECTION_BLOCKS + blocksPerWord - 1) / blocksPerWord
+            buf.skipBytes(wordCount * 4)
+        }
+        val paletteSize = readUnsignedVarInt(buf)
+        if (paletteSize <= 0 || paletteSize > 8192) throw IllegalStateException("Geçersiz persistent palette boyutu")
+        repeat(paletteSize) {
+            io.netty.buffer.ByteBufInputStream(buf).use { stream ->
+                org.cloudburstmc.nbt.NbtUtils.createNetworkReader(stream).use { reader ->
+                    reader.readTag()
+                }
+            }
         }
     }
 

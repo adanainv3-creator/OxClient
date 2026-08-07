@@ -37,7 +37,9 @@ object PlacementUtil {
         "minecraft:piston"      to 33,
         "minecraft:sticky_piston" to 29,
         "minecraft:lever"       to 69,
-        "minecraft:red_bed"     to 26
+        "minecraft:red_bed"     to 26,
+        "minecraft:respawn_anchor" to 502,
+        "minecraft:glowstone"   to 89
     )
 
     fun findItemInInventory(identifier: String): Pair<Int, ItemData>? {

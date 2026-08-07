@@ -16,33 +16,32 @@ class AutoTotem : BaseModule(
     category    = ModuleCategory.COMBAT,
     description = "Totemi sürekli sol ele takar"
 ) {
+    // En yüksek öncelik — KillAura/TPAura/Pro'dan önce işlenir
+    override val priority = 0
+
     companion object {
-        private const val RESEND_COOLDOWN_MS = 40L
-        private const val NO_RESPONSE_WARN_AFTER = 15
+        private const val RESEND_COOLDOWN_MS = 25L
     }
 
     @Volatile private var tickJob: kotlinx.coroutines.Job? = null
-    @Volatile private var totemSlot = -1
+    @Volatile private var totemSlot      = -1
     @Volatile private var offhandHasTotem = false
-    @Volatile private var lastSendMs = 0L
-    @Volatile private var consecutiveSendsWithoutChange = 0
+    @Volatile private var lastSendMs      = 0L
 
     override fun onEnable() {
         super.onEnable()
-        totemSlot = -1
+        totemSlot     = -1
         offhandHasTotem = false
-        consecutiveSendsWithoutChange = 0
+        lastSendMs    = 0L
         refreshFromSnapshot()
-        if (!offhandHasTotem && totemSlot >= 0) {
-            equipTotem()
-        }
-        tickJob = launchTickLoop(20L) { tickCheck() }
+        if (!offhandHasTotem && totemSlot >= 0) equipTotem()
+        tickJob = launchTickLoop(10L) { tickCheck() }
     }
 
     override fun onDisable() {
-        super.onDisable()
         tickJob?.cancel()
         tickJob = null
+        super.onDisable()
     }
 
     private fun refreshFromSnapshot() {
@@ -50,30 +49,21 @@ class AutoTotem : BaseModule(
         offhandHasTotem = InventoryUtil.isTotem(snapshot[InventoryUtil.OFFHAND_SLOT])
         totemSlot = -1
         for (slot in InventoryUtil.HOTBAR_START..InventoryUtil.INV_END) {
-            if (InventoryUtil.isTotem(snapshot[slot])) {
-                totemSlot = slot
-                break
-            }
+            if (InventoryUtil.isTotem(snapshot[slot])) { totemSlot = slot; break }
         }
     }
 
     private fun tickCheck() {
-        val snapshot = EntityTracker.getInventorySnapshot()
+        val snapshot    = EntityTracker.getInventorySnapshot()
         val hasTotemNow = InventoryUtil.isTotem(snapshot[InventoryUtil.OFFHAND_SLOT])
         offhandHasTotem = hasTotemNow
-        if (hasTotemNow) {
-            consecutiveSendsWithoutChange = 0
-            return
-        }
+        if (hasTotemNow) return
 
-        if (totemSlot < 0 || !InventoryUtil.isTotem(snapshot[totemSlot])) {
-            refreshFromSnapshot()
-        }
+        if (totemSlot < 0 || !InventoryUtil.isTotem(snapshot[totemSlot])) refreshFromSnapshot()
         if (totemSlot < 0) return
 
         val now = System.currentTimeMillis()
         if (now - lastSendMs < RESEND_COOLDOWN_MS) return
-
         equipTotem()
     }
 
@@ -88,12 +78,11 @@ class AutoTotem : BaseModule(
                         pkt.contents.forEachIndexed { slot, item ->
                             if (totemSlot == -1 && InventoryUtil.isTotem(item)) totemSlot = slot
                         }
+                        if (!offhandHasTotem && totemSlot >= 0) equipTotem()
                     }
                     InventoryUtil.OFFHAND_SLOT -> {
-                        val item = pkt.contents.firstOrNull()
-                        val nowHasTotem = InventoryUtil.isTotem(item)
+                        val nowHasTotem = InventoryUtil.isTotem(pkt.contents.firstOrNull())
                         offhandHasTotem = nowHasTotem
-                        if (nowHasTotem) consecutiveSendsWithoutChange = 0
                         if (!nowHasTotem && totemSlot >= 0) equipTotem()
                     }
                 }
@@ -103,7 +92,6 @@ class AutoTotem : BaseModule(
                 if (pkt.containerId == InventoryUtil.OFFHAND_SLOT) {
                     val nowHasTotem = InventoryUtil.isTotem(pkt.item)
                     offhandHasTotem = nowHasTotem
-                    if (nowHasTotem) consecutiveSendsWithoutChange = 0
                     if (!nowHasTotem && totemSlot >= 0) equipTotem()
                 } else if (pkt.containerId == 0) {
                     if (InventoryUtil.isTotem(pkt.item)) {
@@ -122,6 +110,7 @@ class AutoTotem : BaseModule(
                     offhandHasTotem = false
                     totemSlot = -1
                     refreshFromSnapshot()
+                    // Totem tüketildi — gecikme olmadan anında tak
                     if (totemSlot >= 0) equipTotem()
                 }
             }
@@ -134,16 +123,13 @@ class AutoTotem : BaseModule(
 
         val snapshot = EntityTracker.getInventorySnapshot()
         val itemData = snapshot[slot]
-        if (itemData == null || !InventoryUtil.isTotem(itemData)) {
-            totemSlot = -1
-            return
-        }
+        if (itemData == null || !InventoryUtil.isTotem(itemData)) { totemSlot = -1; return }
 
         val session = PacketEventBus.currentSession ?: return
-
         val offhandItem = EntityTracker.getInventoryItem(InventoryUtil.OFFHAND_SLOT) ?: ItemData.AIR
 
         lastSendMs = System.currentTimeMillis()
+
         InventoryUtil.sendInventoryMove(
             session           = session,
             sourceContainer   = ContainerSlotType.HOTBAR_AND_INVENTORY,
@@ -155,7 +141,5 @@ class AutoTotem : BaseModule(
             destSlot          = 0,
             destItem          = offhandItem
         )
-
-        consecutiveSendsWithoutChange++
     }
 }

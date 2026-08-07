@@ -5,8 +5,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 object PacketEventBus {
 
-    private const val TAG = "PacketEventBus"
-
     private val listeners = CopyOnWriteArrayList<PacketListener>()
 
     @Volatile var currentSession: RubidiumRelaySession? = null
@@ -32,14 +30,12 @@ object PacketEventBus {
     }
 
     fun publish(event: PacketEvent) {
-        for (l in listeners) {
-            try {
-                l.onPacket(event)
-            } catch (_: Exception) {
-            }
-            if (event.isCancelled) {
-                break
-            }
+        val snapshot = listeners.toArray()
+        for (raw in snapshot) {
+            val l = raw as PacketListener
+            try { l.onPacket(event) } catch (_: Exception) {}
+            // cancelAndReplace: replacementPacket set edilmişse da dur
+            if (event.isCancelled || event.replacementPacket != null) break
         }
     }
 
