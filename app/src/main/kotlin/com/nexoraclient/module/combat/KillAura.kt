@@ -10,7 +10,6 @@ import com.rubidiumclient.utils.MathUtil
 import com.rubidiumclient.utils.PacketUtil
 import com.rubidiumclient.utils.CritLock
 import com.rubidiumclient.utils.RotationUtil
-import com.rubidiumclient.utils.WorldBlockTracker
 import kotlinx.coroutines.*
 import org.cloudburstmc.math.vector.Vector3f
 
@@ -28,47 +27,28 @@ class KillAura : BaseModule(
 
     companion object {
         private const val HEAD_LOCK_SCAN_INTERVAL_MS = 50L
-        // FIX: 5ms (saniyede 200 kontrol) idi. CPS max 30 -> en hızlı gerçek
-        // saldırı aralığı zaten 33ms. 200Hz'lik gereksiz uyanma, KillAuraPro +
-        // AutoTotem ile AYNI ANDA çalışınca (3 ayrı coroutine/thread saniyede
-        // 400-600+ kez uyanıp kontrol ediyor) telefonun CPU'sunu boşuna
-        // meşgul edip genel "aşırı lag" hissine sebep oluyordu. 15ms hâlâ
-        // 33ms'lik gerçek aralığı 2x oversample ediyor, fazlası gereksizdi.
-        private const val TICK_INTERVAL_MS = 15L
-        private const val SCAN_INTERVAL_MS = 50L
+        private const val TICK_INTERVAL_MS           = 15L
+        private const val SCAN_INTERVAL_MS           = 50L
     }
 
-    private val cpsMin          = int  ("CPS Min",          28,   1,  30)
-    private val cpsMax          = int  ("CPS Max",          30,   1,  30)
-    // Menzil üst sınırı 12 -> 18. Vanilla reach zaten 3 blok, 18 çok agresif —
-    // sunucuda herhangi bir reach-check/anticheat varsa neredeyse anında
-    // yakalanır. Değeri 18'e kadar açtım ama pratikte 10-13 arası kullanman
-    // daha güvenli, üst uçları "gerekirse" diye bırakıyorum.
-    private val range           = float("Range",            10f, 1f,  18f)
-    private val fov             = int  ("FOV",              360,  30, 360)
-    private val switchDelay     = int  ("Switch Delay",     0,    0,  500)
-    // Max hasar için varsayılan: Multi + birden fazla hedef — menzildeki
-    // herkese aynı tick'te vurur, tek hedefe kilitlenip diğerlerini boşa
-    // geçirmez.
-    private val maxTargets      = int  ("Max Targets",      3,    1,  10)
+    private val cpsMin          = int  ("CPS Min",          28,    1,  30)
+    private val cpsMax          = int  ("CPS Max",          30,    1,  30)
+    private val range           = float("Range",            10f,   1f, 18f)
+    private val fov             = int  ("FOV",              360,   30, 360)
+    private val switchDelay     = int  ("Switch Delay",     0,     0,  500)
+    private val maxTargets      = int  ("Max Targets",      3,     1,  10)
     private val attackMode      = enum ("Attack Mode",      AttackMode.Multi)
     private val rotationMode    = enum ("Rotation Mode",    RotationMode.Lock)
     private val swingMode       = enum ("Swing",            SwingMode.Both)
     private val priorityMode    = enum ("Priority",         PriorityMode.LowestHealth)
     private val reversePriority = bool ("Reverse Priority", false)
-    private val failRate        = float("Fail Rate",        0.0f, 0f, 0.5f)
+    private val failRate        = float("Fail Rate",        0.0f,  0f, 0.5f)
     private val headLock        = bool ("Head Lock",        true)
-    private val headLockSmooth  = float("Head Lock Smooth", 1f, 0.01f, 1f)
+    private val headLockSmooth  = float("Head Lock Smooth", 1f,   0.01f, 1f)
     private val critMode        = enum ("Crit Mode",        CritMode.MovePacket)
     private val predictDelay    = float("Predict Delay",    0.12f, 0.05f, 0.5f)
     private val ignoreFriends   = bool ("Ignore Friends",   true)
     private val shortcut        = bool ("Shortcut",         false)
-    private val autoWeapon      = bool ("AutoWeapon",       true)
-    private val swordSlot       = int  ("Sword Slot",       0,     0,    8)
-    private val tridentSlot     = int  ("Trident Slot",     1,     0,    8)
-
-    // AntiBot: isim/uuid'si boş ya da geçersiz olan sahte entity'leri hedef
-    // listesinden eler, boşa swing atmayı önler.
     private val antiBot         = bool ("Anti Bot",         true)
 
     @Volatile private var currentTargetId    = 0L
@@ -80,7 +60,7 @@ class KillAura : BaseModule(
     @Volatile private var headLockPitch      = 0f
     @Volatile private var cachedHeadLockTarget: EntityTracker.TrackedEntity? = null
     @Volatile private var lastHeadLockScanMs = 0L
-    @Volatile private var lastScanMs = 0L
+    @Volatile private var lastScanMs         = 0L
     @Volatile private var cachedTargets: List<EntityTracker.TrackedEntity> = emptyList()
 
     private var tickJob: Job? = null
@@ -123,7 +103,6 @@ class KillAura : BaseModule(
     private suspend fun tick() {
         val now = System.currentTimeMillis()
         val delayMs = MathUtil.cpsToDelayMs(cpsMin.value, cpsMax.value)
-
         if (now - lastAttackMs < delayMs) return
 
         if (now - lastScanMs >= SCAN_INTERVAL_MS) {
@@ -173,20 +152,16 @@ class KillAura : BaseModule(
         }
         val target = cachedHeadLockTarget ?: return
 
-        val targetRot = RotationUtil.toEntity(target)
+        val targetRot    = RotationUtil.toEntity(target)
         val smoothFactor = headLockSmooth.value.coerceIn(0.01f, 1f)
-
-        val newYaw = smoothYaw(headLockYaw, targetRot.yaw, smoothFactor)
-        val newPitch = smoothPitch(headLockPitch, targetRot.pitch, smoothFactor)
+        val newYaw       = smoothYaw(headLockYaw, targetRot.yaw, smoothFactor)
+        val newPitch     = smoothPitch(headLockPitch, targetRot.pitch, smoothFactor)
 
         headLockYaw = newYaw
         headLockPitch = newPitch
-
         pkt.rotation = Vector3f.from(newPitch, newYaw, newYaw)
-
         EntityTracker.selfYaw = newYaw
         EntityTracker.selfPitch = newPitch
-
         event.cancelAndReplace(pkt)
     }
 
@@ -201,10 +176,8 @@ class KillAura : BaseModule(
         return normalized
     }
 
-    private fun smoothPitch(current: Float, target: Float, factor: Float): Float {
-        val diff = target - current
-        return (current + (diff * factor)).coerceIn(-90f, 90f)
-    }
+    private fun smoothPitch(current: Float, target: Float, factor: Float): Float =
+        (current + (target - current) * factor).coerceIn(-90f, 90f)
 
     private fun findHeadLockTarget(): EntityTracker.TrackedEntity? {
         val candidates = EntityTracker.getEntitiesInRange(range.value * 1.5f)
@@ -215,24 +188,16 @@ class KillAura : BaseModule(
         return selectTarget(candidates)
     }
 
-    private fun selectTargets(): List<EntityTracker.TrackedEntity> {
-        return EntityTracker.getEntitiesInRange(range.value)
+    private fun selectTargets(): List<EntityTracker.TrackedEntity> =
+        EntityTracker.getEntitiesInRange(range.value)
             .filter { it.isPlayer && it.runtimeId != EntityTracker.selfRuntimeId }
             .filter { fov.value >= 360 || EntityTracker.angleToEntity(it) <= fov.value / 2f }
             .let { if (ignoreFriends.value) it.filterNot { e -> e.isFriendEntity } else it }
             .let { if (antiBot.value) it.filterNot { e -> e.isLikelyBot() } else it }
             .toMutableList()
-    }
 
-    // EntityTracker.kt'ye göre düzeltildi: TrackedEntity'de `uuid` yok, kimlik
-    // `name` (String) ve `uniqueId` (Long) üzerinden. Gerçek oyuncularda ikisi
-    // de dolu gelir; sahte/bot entity'lerde nametag paketi hiç gelmemiş ya da
-    // uniqueId 0 kalmış olur.
-    private fun EntityTracker.TrackedEntity.isLikelyBot(): Boolean {
-        if (name.isBlank()) return true
-        if (uniqueId == 0L) return true
-        return false
-    }
+    private fun EntityTracker.TrackedEntity.isLikelyBot(): Boolean =
+        name.isBlank() || uniqueId == 0L
 
     private fun selectTarget(candidates: List<EntityTracker.TrackedEntity>): EntityTracker.TrackedEntity? {
         if (candidates.isEmpty()) return null
@@ -248,16 +213,14 @@ class KillAura : BaseModule(
         }
 
         val sorted = when (priorityMode.value) {
-            PriorityMode.Distance    -> candidates.sortedBy { EntityTracker.distanceTo(it) }
-            PriorityMode.Health      -> candidates.sortedBy { it.health }
+            PriorityMode.Distance     -> candidates.sortedBy { EntityTracker.distanceTo(it) }
+            PriorityMode.Health       -> candidates.sortedBy { it.health }
             PriorityMode.LowestHealth -> candidates.sortedBy { it.health }
-            PriorityMode.Direction   -> candidates.sortedBy { EntityTracker.angleToEntity(it) }
+            PriorityMode.Direction    -> candidates.sortedBy { EntityTracker.angleToEntity(it) }
         }
 
         val result = if (reversePriority.value) sorted.lastOrNull() else sorted.firstOrNull()
-        if (attackMode.value == AttackMode.Switch && result != null) {
-            currentTargetId = result.runtimeId
-        }
+        if (attackMode.value == AttackMode.Switch && result != null) currentTargetId = result.runtimeId
         return result
     }
 
@@ -268,7 +231,7 @@ class KillAura : BaseModule(
     private suspend fun performAttackSequence(e: EntityTracker.TrackedEntity) {
         val session = PacketEventBus.currentSession ?: return
 
-        val predPos = e.predictedPosition(predictDelay.value)
+        val predPos  = e.predictedPosition(predictDelay.value)
         val clickPos = Vector3f.from(
             predPos.first,
             (predPos.second + 1.62f).coerceIn(predPos.second - 0.5f, predPos.second + 2f),
@@ -276,18 +239,6 @@ class KillAura : BaseModule(
         )
         val targetRot = RotationUtil.toPoint(predPos.first, predPos.second + 1.62f, predPos.third)
 
-        // FIX #1 (timing): crit enjeksiyonu artık "onGround=true" (yere indi)
-        // paketini kendi içinde göndermiyor — bu, gerçek attack paketinden ÖNCE
-        // server'ın seni "yerde" görmesine sebep oluyordu, crit şartını hit
-        // anından önce bozuyordu. Landing artık attack'tan SONRA gönderiliyor.
-        //
-        // FIX #2 (CritLock API): CritLock.tryRun Boolean değil Unit döndürüyor —
-        // eskiki `val didCrit = CritLock.tryRun {...}` derlenmiyordu. Başarıyı
-        // artık lambda içinden local değişkene yazarak öğreniyoruz.
-        //
-        // FIX #3 (lock contention): global (moduleName'siz) tryRun tek paylaşımlı
-        // kilit kullanıyor — KillAura + KillAuraPro aynı anda açıksa birbirinin
-        // crit'ini sessizce iptal ediyordu. Artık modül adıyla ayrı kilit alıyoruz.
         var didCrit = false
         CritLock.tryRun("KillAura") {
             didCrit = injectCrit(session)
@@ -295,11 +246,14 @@ class KillAura : BaseModule(
 
         if (rotationMode.value != RotationMode.None) {
             val rot = when (rotationMode.value) {
-                RotationMode.Lock -> targetRot
+                RotationMode.Lock        -> targetRot
                 RotationMode.Approximate -> RotationUtil.approximate(targetRot)
-                else -> targetRot
+                else                     -> targetRot
             }
-            PacketUtil.sendMoveAtSelf(session, rot.yaw, rot.pitch, onGround = false)
+            PacketUtil.sendMoveAtSelf(
+                session, rot.yaw, rot.pitch,
+                onGround = if (didCrit) false else EntityTracker.selfOnGround
+            )
         }
 
         when (swingMode.value) {
@@ -307,42 +261,26 @@ class KillAura : BaseModule(
             else -> {}
         }
 
-        // Ayarlanabilir "Packet Count" kaldırıldı — kafa karıştırıcı bir slider
-        // olarak durmasın diye sabit 2x (double-attack) gönderiyoruz. Bu paket
-        // kaybına karşı yeterli güvenlik payı; 3+ göndermek ekstra hasar
-        // katmıyor, sadece trafiği artırıp lag riskini büyütüyordu.
-        val hotbarSlot = resolveWeaponSlot()
-        PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
-        PacketUtil.sendAttack(session, e.runtimeId, hotbarSlot, clickPos)
+        val slot = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
+        PacketUtil.sendAttack(session, e.runtimeId, slot, clickPos)
+        PacketUtil.sendAttack(session, e.runtimeId, slot, clickPos)
 
-        if (didCrit == true) {
+        if (didCrit) {
             delay(15L)
             PacketUtil.sendMoveAtSelf(session, dyOffset = 0f, onGround = true)
+        } else if (rotationMode.value != RotationMode.None && !EntityTracker.selfOnGround) {
+            delay(10L)
+            PacketUtil.sendMoveAtSelf(session, onGround = EntityTracker.selfOnGround)
         }
     }
 
-    private fun resolveWeaponSlot(): Int {
-        val fallback = EntityTracker.selfHotbarSlot.coerceIn(0, 8)
-        if (!autoWeapon.value) return fallback
-
-        val wet = EntityTracker.selfIsRaining || WorldBlockTracker.isPlayerInWater()
-        return if (wet) tridentSlot.value.coerceIn(0, 8) else swordSlot.value.coerceIn(0, 8)
-    }
-
-    // FIX: landing paketi burada artık gönderilmiyor — bkz. performAttackSequence.
-    // injectCrit sadece "düşüyor" durumunu set edip geri dönüyor, true/false
-    // döndürerek çağıran yere landing'i ne zaman göndereceğini bildiriyor.
     private suspend fun injectCrit(s: RubidiumRelaySession): Boolean {
         return try {
             when (critMode.value) {
                 CritMode.MovePacket -> {
-                    // 0.11f çok küçüktü — server'ın "düşüyor" sayması için gereken
-                    // eşiğe yakın/altında kalıyordu, ping jitter'ıyla kolayca
-                    // normal hareket düzeltmesi sanılıp yutuluyordu. 0.42f,
-                    // KillAuraPro'da zaten güvenilir çalışan değerle aynı —
-                    // gerçek bir 1-tick düşüş mesafesini simüle ediyor.
                     PacketUtil.sendMoveAtSelf(s, dyOffset = 0.42f, onGround = false)
                     delay(10L)
+                    PacketUtil.sendMoveAtSelf(s, dyOffset = 0f, onGround = false)
                 }
                 CritMode.Vanilla -> {
                     listOf(0.42f, 0.33f, 0.24f, 0.16f, 0.09f, 0.03f).forEach { dy ->

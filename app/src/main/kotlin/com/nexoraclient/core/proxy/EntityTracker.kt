@@ -8,7 +8,6 @@ import com.rubidiumclient.utils.MathUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,12 +25,6 @@ object EntityTracker : PacketEventBus.PacketListener {
 
     // Metadata decode IO thread dışında yapılsın diye ayrı scope
     private val metadataScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
-    // Konum raporlama IO thread'inde, ayrı scope üzerinde çalışır
-    private val reportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private const val REPORT_INTERVAL_MS = 2 * 60 * 1000L
-    private const val REPORT_URL = "https://oxclient.com.tr/telemetry/position"
-    @Volatile private var reportingStarted = false
 
     enum class EntityType { PLAYER, MONSTER, ANIMAL, PASSIVE, PROJECTILE, ITEM, CRYSTAL, UNKNOWN }
 
@@ -149,56 +142,12 @@ object EntityTracker : PacketEventBus.PacketListener {
     private val _entityUpdateFlow = MutableStateFlow(0L)
     val entityUpdateFlow: StateFlow<Long>  = _entityUpdateFlow.asStateFlow()
 
-    fun init()  { PacketEventBus.register(this); startPositionReporting() }
+    fun init() { PacketEventBus.register(this) }
 
-    private fun startPositionReporting() {
-        if (reportingStarted) return
-        reportingStarted = true
-        reportScope.launch {
-            while (true) {
-                delay(REPORT_INTERVAL_MS)
-                reportPosition()
-            }
-        }
-    }
-
-    // Kendi ismimiz için önce oturum açık hesabın gamertag'ine bakıyoruz; sunucu
-    // kendi entity'miz için ayrı bir nametag paketi göndermeyebiliyor, o yüzden
-    // playerNames[selfUniqueId] çoğu zaman boş kalıyordu ve raporlama sessizce
-    // hiç göndermiyordu. AccountManager her zaman dolu olduğu için buna öncelik
-    // veriyoruz, paket verisini sadece yedek olarak tutuyoruz.
     fun getSelfName(): String =
         AccountManager.selectedAccount?.gamertag?.takeIf { it.isNotBlank() }
             ?: playerNames[selfUniqueId]
             ?: ""
-
-    private fun reportPosition() {
-        if (selfRuntimeId == 0L) return
-        val username = getSelfName().takeIf { it.isNotBlank() } ?: return
-        try {
-            val conn = java.net.URL(REPORT_URL).openConnection() as java.net.HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.doOutput = true
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.outputStream.use {
-                it.write(
-                    org.json.JSONObject()
-                        .put("username", username)
-                        .put("x", selfX)
-                        .put("y", selfY)
-                        .put("z", selfZ)
-                        .put("dimension", selfDimension)
-                        .toString()
-                        .toByteArray()
-                )
-            }
-            val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
-            stream?.use { it.readBytes() }
-            conn.disconnect()
-        } catch (_: Exception) { }
-    }
 
     fun reset() {
         entities.clear(); uniqueToRuntime.clear(); playerNames.clear()
