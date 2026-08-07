@@ -6,6 +6,7 @@ import com.rubidiumclient.events.PacketEventBus
 import com.rubidiumclient.module.*
 import com.rubidiumclient.utils.BlockTracker
 import com.rubidiumclient.utils.BlockTracker.TrackedBlockType
+import com.rubidiumclient.utils.WorldBlockTracker
 import org.cloudburstmc.math.vector.Vector3f
 import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginData
 import org.cloudburstmc.protocol.bedrock.data.command.CommandOriginType
@@ -13,19 +14,27 @@ import org.cloudburstmc.protocol.bedrock.packet.CommandRequestPacket
 import org.cloudburstmc.protocol.bedrock.packet.SetEntityMotionPacket
 import org.cloudburstmc.protocol.bedrock.packet.TextPacket
 import java.util.UUID
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.floor
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 class AutoTravel : BaseModule(
     name        = "AutoTravel",
     category    = ModuleCategory.MISC,
-    description = "Belirlenen Y seviyesine cikar, hedef X/Z koordinatina ucar, varinca /sethome atar. Opsiyonel Base Hunting: hareket etmeden, gecerken depolama bloklari bulunca ayrica /sethome atar"
+    description = "Belirlenen Y seviyesine cikar, hedef X/Z koordinatina ucar (Fly) veya yururek gider (Walk), varinca /sethome atar. Walk modu engelleri gercek dunya blok verisiyle onceden tarar, tikaninca zipla/yon degistir, hala ilerlemiyorsa sikisma tespitiyle otomatik kurtulur. Opsiyonel Base Hunting: hareket etmeden, gecerken depolama bloklari bulunca ayrica /sethome atar"
 ) {
     enum class Stage { ASCEND, TRAVEL, ARRIVED }
+    enum class TravelMode { FLY, WALK }
+    private enum class AheadState { CLEAR, BLOCKED_JUMPABLE, BLOCKED_WALL }
 
+    private val travelMode    = enum ("Travel Mode",   TravelMode.FLY)
     private val targetX      = string("Target X",      "0")
     private val targetZ      = string("Target Z",      "0")
     private val targetY      = string("Target Y",      "120")
     private val flySpeed     = float ("Fly Speed",     1.0f, 0.1f,         3f)
+    private val walkSpeed    = float ("Walk Speed",    0.28f, 0.05f,       1.2f)
     private val ascendSpeed  = float ("Ascend Speed",  0.9f, 0.1f,         3f)
     private val arriveRadius = float ("Arrive Radius", 2f,   0.5f,         10f)
     private val homeName     = string("Home Name",     "target")
@@ -41,6 +50,31 @@ class AutoTravel : BaseModule(
     companion object {
         private const val TICK_MS = 250L
         private const val Y_BAND  = 1.5f
+
+        // Yürüme modu ayarları
+        private const val PROBE_DIST          = 0.9f   // ileri tarama mesafesi (blok)
+        private const val JUMP_VELOCITY       = 0.42f  // minecraft standart ziplama hizi
+        private const val JUMP_COOLDOWN_MS    = 550L
+        private const val STEER_STEP_DEG      = 15f    // her tikta yon degistirme adimi
+        private const val STEER_MAX_DEG       = 90f    // maksimum sapma acisi
+        private const val STEER_RECOVER_DEG   = 5f     // yol acilinca hedefe geri donme adimi
+        private const val STUCK_MOVE_THRESHOLD_SQ = 0.02f * 0.02f
+        private const val STUCK_TICKS_TRIGGER = 4       // ~1 sn hareketsizlik -> kacinmaya basla
+        private const val STUCK_TICKS_HARD    = 12      // ~3 sn tam kilitli -> geri adim dene
+        private const val JUMP_RETRY_EVERY_TICKS = 3
+
+        // Ic gecirgen (carpismasiz) sayilan blok turleri icin anahtar kelimeler.
+        // Veri yoksa/eslesmiyorsa katı (solid) kabul edilir; bilinmeyen durumda
+        // ise sikisma tespiti (stuck detection) devreye girip gercek fiziksel
+        // sonuca gore karar verir — bu yuzden liste eksik olsa bile modul
+        // engellere karsi dirençli kalir.
+        private val PASSABLE_KEYWORDS = listOf(
+            "air", "water", "grass", "flower", "sapling", "fern", "torch",
+            "carpet", "snow_layer", "vine", "ladder", "rail", "sign",
+            "button", "lever", "pressure_plate", "redstone_wire", "web",
+            "tall_grass", "seagrass", "kelp", "coral", "fire", "dead_bush",
+            "structure_void", "light_block", "wall_banner", "banner"
+        )
     }
 
     @Volatile private var tickJob: kotlinx.coroutines.Job? = null
@@ -48,11 +82,25 @@ class AutoTravel : BaseModule(
     @Volatile private var huntCounter = 1
     @Volatile private var lastHuntMs  = 0L
 
+    // Yürüme modu durumu
+    @Volatile private var lastWalkX = 0f
+    @Volatile private var lastWalkZ = 0f
+    @Volatile private var walkStuckTicks = 0
+    @Volatile private var steerAngleDeg = 0f
+    @Volatile private var steerDirSign = 1f
+    @Volatile private var lastJumpMs = 0L
+
     override fun onEnable() {
         super.onEnable()
-        stage = Stage.ASCEND
+        stage = if (travelMode.value == TravelMode.WALK) Stage.TRAVEL else Stage.ASCEND
         huntCounter = 1
         lastHuntMs  = 0L
+        lastWalkX = EntityTracker.selfX
+        lastWalkZ = EntityTracker.selfZ
+        walkStuckTicks = 0
+        steerAngleDeg = 0f
+        steerDirSign = 1f
+        lastJumpMs = 0L
         tickJob = launchTickLoop(TICK_MS) { tick() }
     }
 
@@ -64,9 +112,10 @@ class AutoTravel : BaseModule(
 
     private fun tick() {
         val session = PacketEventBus.currentSession ?: return
+        val walking = travelMode.value == TravelMode.WALK
         when (stage) {
-            Stage.ASCEND  -> tickAscend(session)
-            Stage.TRAVEL  -> tickTravel(session)
+            Stage.ASCEND  -> if (walking) stage = Stage.TRAVEL else tickAscend(session)
+            Stage.TRAVEL  -> if (walking) tickTravelWalk(session) else tickTravel(session)
             Stage.ARRIVED -> tickArrived(session)
         }
         if (baseHunting.value) scanForBases(session)
@@ -127,6 +176,127 @@ class AutoTravel : BaseModule(
 
     private fun tickArrived(session: RubidiumRelaySession) {
         sendMotion(session, 0f, 0f, 0f)
+    }
+
+    // ---- Yürüme (Walk) modu ----
+    //
+    // Iki katmanli engel direnci:
+    // 1) Ongoru: hedef yonde WorldBlockTracker'dan gercek blok verisini okuyup
+    //    1 bloklu engellerde otomatik ziplama, duvarlarda yon degistirme yapar.
+    // 2) Sikisma tespiti: blok verisi eksik/yaniltici olsa bile, karakter
+    //    gercekten ilerlemiyorsa (pozisyon degismiyorsa) bunu yakalayip
+    //    kacinma acisini agresiflestirir, gerekirse kisa bir geri adim dener.
+    // Bu sayede yururken karsilasilan surekli/beklenmedik engellere karsi
+    // modul kendi kendine yeniden rota bulur, tikanip kalmaz.
+    private fun tickTravelWalk(session: RubidiumRelaySession) {
+        val dx = parsedTargetX() - EntityTracker.selfX
+        val dz = parsedTargetZ() - EntityTracker.selfZ
+        val dist = sqrt(dx * dx + dz * dz)
+
+        if (dist <= arriveRadius.value) {
+            stage = Stage.ARRIVED
+            onArrived(session)
+            return
+        }
+
+        // Ilerleme kontrolu (sikisma tespiti)
+        val movedDx = EntityTracker.selfX - lastWalkX
+        val movedDz = EntityTracker.selfZ - lastWalkZ
+        val movedSq = movedDx * movedDx + movedDz * movedDz
+        lastWalkX = EntityTracker.selfX
+        lastWalkZ = EntityTracker.selfZ
+
+        if (movedSq < STUCK_MOVE_THRESHOLD_SQ) {
+            walkStuckTicks++
+        } else {
+            walkStuckTicks = 0
+            // yol acikken sapmayi kademeli olarak dogru rotaya geri getir
+            if (steerAngleDeg != 0f) {
+                val recover = if (steerAngleDeg > 0f) -STEER_RECOVER_DEG else STEER_RECOVER_DEG
+                steerAngleDeg += recover
+                if (kotlin.math.abs(steerAngleDeg) < STEER_RECOVER_DEG) steerAngleDeg = 0f
+            }
+        }
+
+        val baseAngle = atan2(dz.toDouble(), dx.toDouble())
+        val steerRad  = Math.toRadians(steerAngleDeg.toDouble())
+        val dirX = cos(baseAngle + steerRad).toFloat()
+        val dirZ = sin(baseAngle + steerRad).toFloat()
+
+        when (probeAhead(dirX, dirZ)) {
+            AheadState.BLOCKED_JUMPABLE -> tryJump(session)
+            AheadState.BLOCKED_WALL     -> widenSteer()
+            AheadState.CLEAR            -> {}
+        }
+
+        // Ongoru engeli kacirmis olabilir — uzun sureli sikismada agresif kacinma
+        if (walkStuckTicks >= STUCK_TICKS_TRIGGER) {
+            widenSteer()
+            if (walkStuckTicks % JUMP_RETRY_EVERY_TICKS == 0) tryJump(session)
+            if (walkStuckTicks >= STUCK_TICKS_HARD) {
+                // tamamen kilitlendiysek kisa bir geri adim atip tekrar dene
+                sendMotion(session, -dirX * walkSpeed.value * 0.6f, 0f, -dirZ * walkSpeed.value * 0.6f)
+                walkStuckTicks = STUCK_TICKS_TRIGGER
+                return
+            }
+        }
+
+        val finalDirX = cos(baseAngle + Math.toRadians(steerAngleDeg.toDouble())).toFloat()
+        val finalDirZ = sin(baseAngle + Math.toRadians(steerAngleDeg.toDouble())).toFloat()
+        sendMotion(session, finalDirX * walkSpeed.value, 0f, finalDirZ * walkSpeed.value)
+    }
+
+    private fun tryJump(session: RubidiumRelaySession) {
+        val now = System.currentTimeMillis()
+        if (now - lastJumpMs < JUMP_COOLDOWN_MS) return
+        lastJumpMs = now
+
+        val steerRad = Math.toRadians(steerAngleDeg.toDouble())
+        val baseAngle = atan2(
+            (parsedTargetZ() - EntityTracker.selfZ).toDouble(),
+            (parsedTargetX() - EntityTracker.selfX).toDouble()
+        )
+        val dirX = cos(baseAngle + steerRad).toFloat()
+        val dirZ = sin(baseAngle + steerRad).toFloat()
+
+        sendMotion(session, dirX * walkSpeed.value, JUMP_VELOCITY, dirZ * walkSpeed.value)
+    }
+
+    // Yol acilana kadar kacinma acisini kademeli artirir; bir tarafta
+    // maksimuma ulasilirsa diger taraftan denemeye gecer.
+    private fun widenSteer() {
+        steerAngleDeg += STEER_STEP_DEG * steerDirSign
+        if (kotlin.math.abs(steerAngleDeg) >= STEER_MAX_DEG) {
+            steerAngleDeg = STEER_MAX_DEG * steerDirSign
+            steerDirSign = -steerDirSign
+        }
+    }
+
+    // dirX/dirZ yonunde PROBE_DIST kadar ileriye bakip ayak/kafa/tavan
+    // hizasindaki gercek blok verisini okur.
+    private fun probeAhead(dirX: Float, dirZ: Float): AheadState {
+        val px = floor((EntityTracker.selfX + dirX * PROBE_DIST).toDouble()).toInt()
+        val pz = floor((EntityTracker.selfZ + dirZ * PROBE_DIST).toDouble()).toInt()
+        val feetY = floor(EntityTracker.selfY.toDouble()).toInt()
+
+        val feetBlocked = !isPassable(px, feetY, pz)
+        val headBlocked = !isPassable(px, feetY + 1, pz)
+        val stepClearAbove = isPassable(px, feetY + 2, pz)
+
+        return when {
+            !feetBlocked && !headBlocked -> AheadState.CLEAR
+            feetBlocked && !headBlocked && stepClearAbove -> AheadState.BLOCKED_JUMPABLE
+            else -> AheadState.BLOCKED_WALL
+        }
+    }
+
+    // Veri yoksa iyimser (gecirgen) varsayilir — yanlissa zaten sikisma
+    // tespiti bunu yakalayip kacinma davranisini tetikler.
+    private fun isPassable(x: Int, y: Int, z: Int): Boolean {
+        if (!WorldBlockTracker.hasData(x, y, z)) return true
+        val id = WorldBlockTracker.getBlockIdentifier(x, y, z) ?: return true
+        if (id == "minecraft:air") return true
+        return PASSABLE_KEYWORDS.any { id.contains(it) }
     }
 
     private fun onArrived(session: RubidiumRelaySession) {
