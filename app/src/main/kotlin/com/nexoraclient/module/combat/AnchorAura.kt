@@ -70,7 +70,10 @@ class AnchorAura : BaseModule(
             if (System.currentTimeMillis() - a.armedAt < ACTIVATE_DELAY_MS) return
 
             when (a.phase) {
-                Phase.PLACED -> chargeAnchor(session, a)
+                Phase.PLACED -> {
+                    if (!verifyPlaced(session, a)) { active = null; return }
+                    chargeAnchor(session, a)
+                }
                 Phase.CHARGED -> {
                     PlacementUtil.sendInteract(session, a.anchorPos, ANCHOR)
                     active = null
@@ -146,7 +149,7 @@ class AnchorAura : BaseModule(
         }
         val belowPos = Vector3i.from(anchorPos.x, anchorPos.y - 1, anchorPos.z)
         val belowId = below ?: "minecraft:obsidian"
-        
+
         val ok = PlacementUtil.sendPlacementUseRaw(
             session = session,
             prepared = prepared,
@@ -156,12 +159,28 @@ class AnchorAura : BaseModule(
         )
         PlacementUtil.revert(session, prepared)
         if (!ok) {
-            logFail(session, "Anchor yerleştirme başarısız (server reddetti)")
+            logFail(session, "Anchor yerleştirme paketi gönderilemedi (exception)")
             return
         }
 
         active = Attempt(anchorPos, Phase.PLACED, System.currentTimeMillis())
-        sendLog(session, "Anchor yerleştirildi")
+        sendLog(session, "Anchor yerleştirme paketi gönderildi (sunucu onayı bekleniyor)")
+    }
+
+    // "ok=true" sadece paketin exception'sız gittiğini gösterir, sunucunun
+    // gerçekten yerleştirdiğini değil. anchorPos'taki blok kısa süre içinde
+    // gerçekten "minecraft:respawn_anchor" olmadıysa sunucu reddetmiş demektir.
+    // Bu kontrol chargeAnchor() çağrılmadan hemen önce yapılır (aynı ACTIVATE_DELAY_MS
+    // penceresi zaten bekleniyor, WorldBlockTracker'ın UpdateBlockPacket'i işlemesi
+    // için yeterli süre).
+    private fun verifyPlaced(session: RubidiumRelaySession, attempt: Attempt): Boolean {
+        if (!WorldBlockTracker.hasAnyTerrainData()) return true // veri yoksa doğrulayamayız, iyimser devam
+        val id = WorldBlockTracker.getBlockIdentifier(attempt.anchorPos.x, attempt.anchorPos.y, attempt.anchorPos.z)
+        val ok = id == ANCHOR
+        if (!ok) {
+            logFail(session, "Anchor sunucu tarafından reddedildi (paket gitti ama blok yerleşmedi, görünen: ${id ?: "bilinmiyor"} — hotbar/blockDef/mesafe uyuşmazlığı olabilir)")
+        }
+        return ok
     }
 
     // ── Log ──────────────────────────────────────────────────────────────

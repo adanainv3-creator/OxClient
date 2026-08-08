@@ -73,12 +73,25 @@ object InventoryUtil {
     }
 
     fun sendHotbarSelect(session: RubidiumRelaySession, slot: Int) {
+        // FIX (ASIL KÖK NEDEN — CrystalAura + AnchorAura "yerleştirildi diyor
+        // ama hiçbir şey olmuyor"): item HER ZAMAN ItemData.AIR gönderiliyordu.
+        // Bu paket sunucuya "artık elimde HİÇBİR ŞEY yok" diyor. Hemen ardından
+        // gönderilen ITEM_USE (placement) paketi itemInHand=kristal/anchor/glowstone
+        // derken, sunucu bir önceki paketten "eli boş" biliyor — çelişkili state,
+        // çoğu sunucu bunu geçersiz sayıp placement'ı SESSİZCE reddediyor (hata
+        // fırlatmıyor, hiçbir şey de olmuyor — kodun "başarılı" sanmasının sebebi
+        // de bu: sendPlacementUseRaw sadece paket gönderiminin exception atmamasına
+        // bakıyor, sunucunun gerçekten kabul edip etmediğine değil).
+        // PlacementUtil.prepareItemForUse hem CrystalAura hem AnchorAura hem
+        // AutoTrap/BedAura/PistonAura tarafından kullanıldığı için bu TEK
+        // fonksiyondaki hata hepsini simetrik şekilde etkiliyordu.
+        val actualItem = EntityTracker.getInventoryItem(slot) ?: ItemData.AIR
         session.serverBound(MobEquipmentPacket().apply {
             runtimeEntityId = EntityTracker.selfRuntimeId
             containerId     = ContainerId.INVENTORY
             inventorySlot   = slot
             hotbarSlot      = slot
-            item            = ItemData.AIR
+            item            = actualItem
         })
     }
 
