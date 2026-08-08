@@ -72,7 +72,11 @@ class AutoDupe : BaseModule(
             is ContainerOpenPacket -> {
                 val windowId = p.id.toInt()
                 val pos = p.blockPosition ?: return
-                if (EntityTracker.distanceTo(pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f) <= chestRange.value) {
+                val dx = pos.x + 0.5f - EntityTracker.selfX
+                val dy = pos.y + 0.5f - EntityTracker.selfY
+                val dz = pos.z + 0.5f - EntityTracker.selfZ
+                val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+                if (dist <= chestRange.value) {
                     openContainers[windowId] = TrackedChest(pos, windowId, open = true)
                 }
             }
@@ -89,7 +93,7 @@ class AutoDupe : BaseModule(
                 if (p.transactionType != InventoryTransactionType.NORMAL) return
                 val actions = p.actions
                 var chestAction = false
-                var takenItems = mutableListOf<ItemData>()
+                val takenItems = mutableListOf<ItemData>()
                 
                 for (action in actions) {
                     val source = action.source
@@ -106,13 +110,13 @@ class AutoDupe : BaseModule(
                 }
                 
                 if (chestAction && takenItems.isNotEmpty()) {
-                    val chest = openContainers.values.firstOrNull { it.open && it.pos.distance(event.session.clientSession.socketAddress.toString()) < chestRange.value }
+                    val chest = openContainers.values.firstOrNull { it.open }
                     if (chest != null) {
                         event.cancel()
                         val closePacket = ContainerClosePacket().apply {
                             id = chest.windowId.toByte()
-                            serverInitiated = false
                             type = ContainerType.CONTAINER
+                            serverInitiated = false
                         }
                         session.sendToServer(closePacket)
                         chest.open = false
@@ -186,11 +190,12 @@ class AutoDupe : BaseModule(
 
     private fun closeChest(windowId: Int) {
         val session = com.rubidiumclient.events.PacketEventBus.currentSession ?: return
-        session.sendToServer(ContainerClosePacket().apply {
+        val packet = ContainerClosePacket().apply {
             id = windowId.toByte()
-            serverInitiated = false
             type = ContainerType.CONTAINER
-        })
+            serverInitiated = false
+        }
+        session.sendToServer(packet)
     }
 
     private fun tick() {
