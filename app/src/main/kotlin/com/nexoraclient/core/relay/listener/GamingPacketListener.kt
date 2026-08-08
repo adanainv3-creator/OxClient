@@ -174,21 +174,22 @@ class GamingPacketListener : RubidiumPacketListener {
     }
 
     private fun handleChunk(pkt: LevelChunkPacket) {
-        // pkt.data, Netty'nin havuzlanmış ByteBuf'ı — bu handler döndükten sonra
-        // pipeline onu serbest bırakabilir/yeniden kullanabilir. Arka planda güvenle
-        // okuyabilmek için burada retain() ediyoruz, iş bitince release() ediyoruz.
         val buf = try { pkt.data } catch (_: Throwable) { null }
         if (buf == null) return
         buf.retain()
 
         parserScope.launch {
             try {
+                // Terrain blok verisi — AutoMapArt ve diğer WorldBlockTracker
+                // kullananlar için zorunlu. Daha önce bu çağrı eksikti,
+                // hasAnyTerrainData() sürekli false dönüyordu.
+                try { WorldBlockTracker.parseChunk(pkt) } catch (_: Exception) {}
+
                 val entities = try {
                     ChunkParser.extractBlockEntities(pkt)
                 } catch (e: Exception) {
                     emptyList()
                 }
-                if (entities.isEmpty()) return@launch
                 for (be in entities) {
                     val id = be.tag.getString("id") ?: continue
                     val type = BlockTracker.resolveBlockName(id) ?: continue

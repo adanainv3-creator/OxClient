@@ -57,7 +57,8 @@ class AutoMapArt : BaseModule(
         // kırılmıyordu, sadece mesaj yanlış zamanda/yanlış yorumla çıkıyordu.
         // Artık gerçekten kalıcı bir sorun (5 saniye sonra hâlâ veri yoksa)
         // varsa TEK SEFER uyarıyoruz.
-        private const val CHUNK_DATA_GRACE_MS = 5000L
+        private const val CHUNK_DATA_GRACE_MS    = 5000L
+        private const val CHUNK_DIAG_INTERVAL_MS = 3000L
 
         private const val SCHEMATIC_MAX_PX  = 240f
         private const val SCHEMATIC_MARGIN  = 28f
@@ -147,8 +148,9 @@ class AutoMapArt : BaseModule(
     @Volatile private var lastContainerContents: List<ItemData>? = null
     private var containerAwaitSinceMs = 0L
 
-    private var enabledAtMs = 0L
+    private var enabledAtMs       = 0L
     private var chunkWarningShown = false
+    private var lastDiagMs        = 0L
 
     @Volatile var availableBlocks: Set<String> = emptySet()
         set(value) {
@@ -169,8 +171,9 @@ class AutoMapArt : BaseModule(
         if (MapArtPlan.grid.value == null) {
             sendMessage("§eAutoMapArt: No image analyzed yet. Pick one from Dashboard > Configs > AutoMapArt.")
         }
-        enabledAtMs = System.currentTimeMillis()
+        enabledAtMs       = System.currentTimeMillis()
         chunkWarningShown = false
+        lastDiagMs        = 0L
 
         originSet   = false
         paused      = false
@@ -297,17 +300,44 @@ class AutoMapArt : BaseModule(
 
         if (!originSet) {
             if (!WorldBlockTracker.hasAnyTerrainData()) {
-                if (!chunkWarningShown && System.currentTimeMillis() - enabledAtMs >= CHUNK_DATA_GRACE_MS) {
-                    chunkWarningShown = true
-                    sendMessage("§eAutoMapArt: No chunk data — are you connected and in a world?")
+                val now     = System.currentTimeMillis()
+                val elapsed = now - enabledAtMs
+
+                if (elapsed >= CHUNK_DATA_GRACE_MS) {
+                    if (!chunkWarningShown) {
+                        chunkWarningShown = true
+                        val session = PacketEventBus.currentSession
+                        val hasSession = session != null
+                        val selfId = EntityTracker.selfRuntimeId
+
+                        sendMessage("§c[AutoMapArt] §fNo chunk data — teşhis:")
+                        sendMessage("§7  Session: ${if (hasSession) "§aBağlı" else "§cYok (bağlantı kesildi?)"}")
+                        sendMessage("§7  Self runtimeId: ${if (selfId > 0L) "§a$selfId" else "§cBilinmiyor — spawn paketi gelmedi mi?"}")
+                        sendMessage("§7  Beklenen sebep: §eClientCacheStatus override edilmedi")
+                        sendMessage("§7  Çözüm: §fSunucuya bağlıyken modülü tekrar aç veya yeniden bağlan")
+                    }
+
+                    // Grace geçtikten sonra her 3 saniyede bir özet log gönder
+                    val now2 = System.currentTimeMillis()
+                    if (now2 - lastDiagMs >= CHUNK_DIAG_INTERVAL_MS) {
+                        lastDiagMs = now2
+                        val elapsed2 = (now2 - enabledAtMs) / 1000
+                        sendMessage("§e[AutoMapArt] §fChunk verisi bekleniyor... (${elapsed2}s) — bağlantıyı kontrol et")
+                    }
                 }
                 return
             }
-            originX = floor(EntityTracker.selfX).toInt()
-            originY = floor(EntityTracker.selfY - 1f).toInt()
-            originZ = floor(EntityTracker.selfZ).toInt()
+
+            // Chunk data geldi — origin'i kaydet ve kullanıcıya bilgi ver
+            val ox = floor(EntityTracker.selfX).toInt()
+            val oy = floor(EntityTracker.selfY - 1f).toInt()
+            val oz = floor(EntityTracker.selfZ).toInt()
+            originX = ox; originY = oy; originZ = oz
             originSet = true
-            sendMessage("§aAutoMapArt started — origin: ($originX, $originY, $originZ)")
+
+            val waited = (System.currentTimeMillis() - enabledAtMs) / 1000
+            sendMessage("§a[AutoMapArt] §fChunk verisi alındı (${waited}s beklendi)")
+            sendMessage("§a[AutoMapArt] §fOrigin: ($ox, $oy, $oz) — build başlıyor")
         }
 
         if (stage == Stage.COLLECTING) {

@@ -18,7 +18,6 @@ import com.rubidiumclient.module.KeybindManager
 import com.rubidiumclient.module.social.FriendManager
 import com.rubidiumclient.module.combat.AutoArmor
 import com.rubidiumclient.module.misc.Performance
-import com.rubidiumclient.module.movement.AutoScaffold
 import com.rubidiumclient.module.misc.AutoMapArt
 import com.rubidiumclient.module.combat.AutoTotem
 import com.rubidiumclient.module.combat.Criticals
@@ -63,7 +62,6 @@ import com.rubidiumclient.module.movement.AntiPiston
 import com.rubidiumclient.module.combat.BedAura
 import com.rubidiumclient.module.combat.AntiBed
 import com.rubidiumclient.module.misc.AutoMine
-import com.rubidiumclient.module.misc.FakePlayer
 import com.rubidiumclient.utils.WorldBlockTracker
 import com.rubidiumclient.utils.OreTracker
 
@@ -204,9 +202,7 @@ class RubidiumClientApp : Application() {
             AutoMine(),
             AutoMapArt(),
             BypassFly(),
-            AutoScaffold(),
             CommandHelper(),
-            FakePlayer()
         )
     }
 }
