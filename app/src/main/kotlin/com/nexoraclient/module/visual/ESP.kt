@@ -183,7 +183,7 @@ class ESP : BaseModule(
                 when (renderMode.value) {
                     RenderMode.Tracer, RenderMode.Both -> {
                         tracerPaint.color = color
-                        tracerPaint.alpha = (165 * alphaScale).toInt().coerceIn(0, 255)
+                        tracerPaint.alpha = (255 * alphaScale).toInt().coerceIn(0, 255)
                         tracerPaint.strokeWidth = if (isNearest) tracerWidth.value + 1.5f else tracerWidth.value
                         canvas.drawLine(centerX, centerY, screenPos.first, screenPos.second, tracerPaint)
                     }
@@ -348,16 +348,22 @@ class ESP : BaseModule(
         )
 
         val screenCorners = arrayOfNulls<FloatArray>(8)
+        var visibleCount = 0
         for (i in worldCorners.indices) {
             val c = worldCorners[i]
             val p = MathUtil.worldToScreen(
                 c[0], c[1], c[2], selfX, selfY, selfZ, yaw, pitch, screenW, screenH, fov
-            ) ?: return
-            screenCorners[i] = floatArrayOf(p.first + deltaX, p.second + deltaY)
+            )
+            if (p != null) {
+                screenCorners[i] = floatArrayOf(p.first + deltaX, p.second + deltaY)
+                visibleCount++
+            }
         }
+        // Hiç köşe yoksa çizme
+        if (visibleCount == 0) return
 
         strokePaint.color = colorArgb
-        strokePaint.alpha = (185 * alphaScale).toInt().coerceIn(0, 255)
+        strokePaint.alpha = (255 * alphaScale).toInt().coerceIn(0, 255)
         strokePaint.strokeWidth = if (isNearest) tracerWidth.value + 1.5f else tracerWidth.value
 
         val edges = intArrayOf(
@@ -369,14 +375,16 @@ class ESP : BaseModule(
 
         fillPaint.color = colorArgb
         fillPaint.alpha = (boxAlpha.value * alphaScale).toInt().coerceIn(0, 255)
-        val topPath = Path().apply {
-            val p4 = screenCorners[4]!!; moveTo(p4[0], p4[1])
-            val p5 = screenCorners[5]!!; lineTo(p5[0], p5[1])
-            val p6 = screenCorners[6]!!; lineTo(p6[0], p6[1])
-            val p7 = screenCorners[7]!!; lineTo(p7[0], p7[1])
-            close()
+        val p4 = screenCorners[4]; val p5 = screenCorners[5]
+        val p6 = screenCorners[6]; val p7 = screenCorners[7]
+        if (p4 != null && p5 != null && p6 != null && p7 != null) {
+            val topPath = Path().apply {
+                moveTo(p4[0], p4[1]); lineTo(p5[0], p5[1])
+                lineTo(p6[0], p6[1]); lineTo(p7[0], p7[1])
+                close()
+            }
+            canvas.drawPath(topPath, fillPaint)
         }
-        canvas.drawPath(topPath, fillPaint)
 
         if (isNearest) {
             val glowPaint = Paint(strokePaint)
@@ -390,9 +398,9 @@ class ESP : BaseModule(
     private fun drawEdges(canvas: Canvas, corners: Array<FloatArray?>, edges: IntArray, paint: Paint) {
         var i = 0
         while (i < edges.size) {
-            val a = corners[edges[i]]!!
-            val b = corners[edges[i + 1]]!!
-            canvas.drawLine(a[0], a[1], b[0], b[1], paint)
+            val a = corners[edges[i]]
+            val b = corners[edges[i + 1]]
+            if (a != null && b != null) canvas.drawLine(a[0], a[1], b[0], b[1], paint)
             i += 2
         }
     }

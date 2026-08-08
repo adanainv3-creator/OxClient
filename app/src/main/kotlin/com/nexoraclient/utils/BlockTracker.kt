@@ -7,19 +7,19 @@ import java.util.concurrent.ConcurrentHashMap
 object BlockTracker {
 
     enum class TrackedBlockType(val displayName: String, val colorArgb: Int) {
-        CHEST        ("Chest",       0xFFC08A4E.toInt()),
-        SHULKER_BOX  ("Shulker",     0xFFB97AA0.toInt()),
-        ENDER_CHEST  ("Ender Chest", 0xFF7A6BA6.toInt()),
-        SPAWNER      ("Spawner",     0xFF54525C.toInt()),
-        HOPPER       ("Hopper",      0xFFA8A8AC.toInt()),
-        BARREL       ("Barrel",      0xFF8A6B4E.toInt()),
-        TRAPPED_CHEST("Trapped Chest",0xFFA68F4A.toInt()),
-        FURNACE      ("Furnace",     0xFF8F8F8F.toInt()),
-        BLAST_FURNACE("Blast Furnace",0xFF9C5347.toInt()),
-        SMOKER       ("Smoker",      0xFF7A9270.toInt()),
-        BREWING_STAND("Brewing Stand",0xFF5F6FA3.toInt()),
-        DISPENSER    ("Dispenser",   0xFF5E7A9E.toInt()),
-        DROPPER      ("Dropper",     0xFF8A7A3E.toInt()),
+        CHEST        ("Chest",        0xFFFF9B1A.toInt()),
+        SHULKER_BOX  ("Shulker",      0xFFE040FB.toInt()),
+        ENDER_CHEST  ("Ender Chest",  0xFF7C4DFF.toInt()),
+        SPAWNER      ("Spawner",      0xFFFF1744.toInt()),
+        HOPPER       ("Hopper",       0xFF00E5FF.toInt()),
+        BARREL       ("Barrel",       0xFFFFD600.toInt()),
+        TRAPPED_CHEST("Trapped Chest",0xFFFF6D00.toInt()),
+        FURNACE      ("Furnace",      0xFFFF6E40.toInt()),
+        BLAST_FURNACE("Blast Furnace",0xFFFF3D00.toInt()),
+        SMOKER       ("Smoker",       0xFF69F0AE.toInt()),
+        BREWING_STAND("Brewing Stand",0xFF40C4FF.toInt()),
+        DISPENSER    ("Dispenser",    0xFF18FFFF.toInt()),
+        DROPPER      ("Dropper",      0xFFFFFF00.toInt()),
     }
 
     data class TrackedBlock(

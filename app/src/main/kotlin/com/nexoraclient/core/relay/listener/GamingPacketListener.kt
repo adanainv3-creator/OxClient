@@ -180,11 +180,6 @@ class GamingPacketListener : RubidiumPacketListener {
 
         parserScope.launch {
             try {
-                // Terrain blok verisi — AutoMapArt ve diğer WorldBlockTracker
-                // kullananlar için zorunlu. Daha önce bu çağrı eksikti,
-                // hasAnyTerrainData() sürekli false dönüyordu.
-                try { WorldBlockTracker.parseChunk(pkt) } catch (_: Exception) {}
-
                 val entities = try {
                     ChunkParser.extractBlockEntities(pkt)
                 } catch (e: Exception) {
