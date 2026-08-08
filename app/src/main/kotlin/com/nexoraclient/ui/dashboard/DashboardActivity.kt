@@ -746,7 +746,7 @@ private fun DashboardTab(
     Column(modifier = Modifier.fillMaxSize()) {
         val privateState by PrivateAccessManager.state.collectAsStateWithLifecycle()
         DashboardHeader(
-            title    = if (privateState.isActive) "Rubidium Private" else "Rubidium Client V1.3",
+            title    = if (privateState.isActive) "Rubidium Private" else "Rubidium Client v1.4",
             subtitle = "Made by Oxygen8315"
         )
 
