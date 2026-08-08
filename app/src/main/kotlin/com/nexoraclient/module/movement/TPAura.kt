@@ -267,7 +267,7 @@ class TPAura : BaseModule(
                 val CHAOS_STRAFE  = 50.0
                 val CHAOS_RADIUS  = radius
                 val VERT_RANGE    = 3f
-                val VERT_STEP     = 0.15f
+                val VERT_STEP     = 0.25f * verticalSpeed.value
 
                 chaosAngle += Math.toRadians(CHAOS_STRAFE) * 0.05
 

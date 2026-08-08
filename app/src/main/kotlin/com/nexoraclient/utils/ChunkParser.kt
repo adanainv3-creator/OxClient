@@ -112,8 +112,8 @@ object ChunkParser {
         val isPersistent = (header and 1) == 1
 
         if (isPersistent) {
-
-            throw IllegalStateException("Persistent (NBT) palette formatı desteklenmiyor")
+            skipPersistentPalette(buf, bitsPerBlock)
+            return
         }
 
         if (bitsPerBlock == 0) {
@@ -141,6 +141,31 @@ object ChunkParser {
             if (shift > 35) throw IllegalStateException("VarInt çok uzun")
         }
         return result
+    }
+
+    // FIX (Xray'in bazı yükseklikte cevher bulamamasının sebebi): persistent
+    // (NBT) paletli bir subchunk'a rastlanınca eskiden exception fırlatılıyordu,
+    // bu da extractOreBlocks/extractBlockEntities'in dış catch'ine düşüp o
+    // chunk sütunundaki DAHA YÜKSEK subchunk'ların hiç işlenmemesine sebep
+    // oluyordu. Artık bu bloğu (WorldBlockTracker'daki aynı yaklaşımla) doğru
+    // NBT reader ile atlayıp buffer'ı hizalı tutuyoruz — bu tek subchunk'ın
+    // kendi cevherleri hâlâ bulunamıyor (nadir, özel bloklar), ama sütunun
+    // geri kalanı artık kaybolmuyor.
+    private fun skipPersistentPalette(buf: ByteBuf, bitsPerBlock: Int) {
+        if (bitsPerBlock > 0) {
+            val blocksPerWord = 32 / bitsPerBlock
+            val wordCount = (4096 + blocksPerWord - 1) / blocksPerWord
+            buf.skipBytes(wordCount * 4)
+        }
+        val paletteSize = readUnsignedVarInt(buf)
+        if (paletteSize <= 0 || paletteSize > 8192) throw IllegalStateException("Geçersiz persistent palette boyutu")
+        repeat(paletteSize) {
+            ByteBufInputStream(buf).use { stream ->
+                NbtUtils.createNetworkReader(stream).use { reader ->
+                    reader.readTag()
+                }
+            }
+        }
     }
 
     private fun tryParseCompoundsFrom(buf: ByteBuf): List<ParsedBlockEntity> {
@@ -217,7 +242,9 @@ object ChunkParser {
      * hiç gelmeyebilir) doğru çalışır. Predicate her subchunk'ın palette dizisindeki
      * benzersiz girişler için bir kez çağrılır (4096 blok için değil), bu yüzden
      * maliyeti ihmal edilebilir düzeydedir.
-     * Persistent (NBT) palette formatlı subchunk'lar desteklenmiyor (skipBlockStorage ile aynı kısıt).
+     * Persistent (NBT) palette formatlı subchunk'lar hâlâ cevher üretmiyor (o
+     * bölüm atlanıyor), ama artık sütundaki üst subchunk'ların işlenmesini
+     * engellemiyor — bkz. skipPersistentPalette.
      */
     fun extractOreBlocks(
         pkt: LevelChunkPacket,
@@ -276,7 +303,8 @@ object ChunkParser {
         val isPersistent = (header and 1) == 1
 
         if (isPersistent) {
-            throw IllegalStateException("Persistent (NBT) palette formatı desteklenmiyor")
+            skipPersistentPalette(buf, bitsPerBlock)
+            return
         }
 
         if (bitsPerBlock == 0) {
