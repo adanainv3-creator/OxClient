@@ -13,6 +13,7 @@ import com.rubidiumclient.config.Config
 import com.rubidiumclient.config.PrivateAccessManager
 import com.rubidiumclient.config.ServerConfig
 import com.rubidiumclient.core.relay.Definitions
+import com.rubidiumclient.module.misc.AutoDupe
 import com.rubidiumclient.module.ModuleManager
 import com.rubidiumclient.module.KeybindManager
 import com.rubidiumclient.module.social.FriendManager
@@ -202,7 +203,8 @@ class RubidiumClientApp : Application() {
             AutoMine(),
             AutoMapArt(),
             BypassFly(),
-            CommandHelper(),
+            AutoDupe(),
+            CommandHelper()
         )
     }
 }
