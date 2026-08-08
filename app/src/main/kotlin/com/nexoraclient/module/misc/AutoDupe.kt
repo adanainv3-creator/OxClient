@@ -116,7 +116,7 @@ class AutoDupe : BaseModule(
                         val closePacket = ContainerClosePacket().apply {
                             id = chest.windowId.toByte()
                             type = ContainerType.CONTAINER
-                            serverInitiated = false
+                            setServerInitiated(false) // use setter
                         }
                         session.sendToServer(closePacket)
                         chest.open = false
@@ -137,7 +137,7 @@ class AutoDupe : BaseModule(
                 val windowId = p.id.toInt()
                 val chest = openContainers[windowId]
                 if (chest != null && chest.open) {
-                    if (!p.serverInitiated) {
+                    if (!p.isServerInitiated()) { // use getter
                         openContainers.remove(windowId)
                     }
                 }
@@ -193,7 +193,7 @@ class AutoDupe : BaseModule(
         val packet = ContainerClosePacket().apply {
             id = windowId.toByte()
             type = ContainerType.CONTAINER
-            serverInitiated = false
+            setServerInitiated(false) // use setter
         }
         session.sendToServer(packet)
     }
