@@ -34,8 +34,10 @@ object PacketEventBus {
         for (raw in snapshot) {
             val l = raw as PacketListener
             try { l.onPacket(event) } catch (_: Exception) {}
-            // cancelAndReplace: replacementPacket set edilmişse da dur
-            if (event.isCancelled || event.replacementPacket != null) break
+            // Only break if packet is CANCELLED (rejected completely)
+            // If replacementPacket is set, continue to next listener
+            // so they can read the modified packet and apply their changes
+            if (event.isCancelled) break
         }
     }
 

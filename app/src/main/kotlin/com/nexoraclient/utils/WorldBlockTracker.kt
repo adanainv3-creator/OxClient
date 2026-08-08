@@ -21,6 +21,13 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
 
     private val sections = ConcurrentHashMap<Long, IntArray>()
 
+    // FIX: persistent/NBT-paletli subchunk'lar için palet indexi -> identifier
+    // string eşlemesi. Eskiden bu tip subchunk'lar tamamen "-1 = bilinmiyor"
+    // olarak atılıyordu (aşağıdaki readBlockStorage yorumuna bak) — artık NBT
+    // palette'i gerçekten okuyup "name" alanını çıkarıyoruz, o yüzden bu
+    // subchunk'lardaki bloklar da normal şekilde sorgulanabiliyor.
+    private val persistentPalettes = ConcurrentHashMap<Long, Array<String?>>()
+
     private val insertOrder = ConcurrentLinkedQueue<Long>()
 
     private const val MAX_SECTIONS = 4096
@@ -49,7 +56,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
     }
 
     fun reset() {
-        sections.clear(); insertOrder.clear(); overrides.clear()
+        sections.clear(); insertOrder.clear(); overrides.clear(); persistentPalettes.clear()
     }
 
     @Volatile private var loggedCacheOverride = false
@@ -95,13 +102,26 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         val cx = x shr 4
         val cz = z shr 4
         val sy = y shr 4
-        val arr = sections[sectionKey(cx, sy, cz)] ?: return null
+        val key = sectionKey(cx, sy, cz)
+        val arr = sections[key] ?: return null
 
         val lx = x and 15
         val ly = y and 15
         val lz = z and 15
         val idx = (ly shl 8) or (lz shl 4) or lx
         val runtimeId = arr[idx]
+
+        // FIX: persistent-palette sentinel (<= -2). Normal runtime id'ler her
+        // zaman >= 0 olduğu için bu aralık çakışmıyor. -1 eski "bilinmiyor"
+        // sentinel'i olarak geriye dönük uyumluluk için hâlâ null döndürüyor.
+        if (runtimeId <= -2) {
+            val paletteIdx = -(runtimeId + 2)
+            val names = persistentPalettes[key] ?: return null
+            val name = names.getOrNull(paletteIdx)
+            return if (name.isNullOrBlank()) null else name
+        }
+        if (runtimeId < 0) return null
+
         return resolveIdentifier(runtimeId)
     }
 
@@ -170,10 +190,10 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
                 val buf = sub.data ?: continue
                 if (!buf.isReadable) continue
 
-                val blocks = decodeSubChunkBlocks(buf.duplicate())
-                if (blocks == null) continue
+                val decoded = decodeSubChunkBlocks(buf.duplicate())
+                if (decoded == null) continue
 
-                storeSection(origin.x + rel.x, origin.y + rel.y, origin.z + rel.z, blocks)
+                storeSection(origin.x + rel.x, origin.y + rel.y, origin.z + rel.z, decoded.first, decoded.second)
             } catch (e: Exception) {
             }
         }
@@ -213,8 +233,8 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
             val dup = buf.duplicate()
             for (i in 0 until subChunksLength) {
                 val sy = minSectionY + i
-                val blocks = decodeSubChunkBlocks(dup) ?: break
-                storeSection(cx, sy, cz, blocks)
+                val decoded = decodeSubChunkBlocks(dup) ?: break
+                storeSection(cx, sy, cz, decoded.first, decoded.second)
             }
         } catch (e: Exception) {
         }
@@ -234,18 +254,22 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         return direct
     }
 
-    private fun storeSection(cx: Int, sy: Int, cz: Int, blocks: IntArray) {
+    private fun storeSection(cx: Int, sy: Int, cz: Int, blocks: IntArray, names: Array<String?>?) {
         val key = sectionKey(cx, sy, cz)
         sections[key] = blocks
+        if (names != null) persistentPalettes[key] = names else persistentPalettes.remove(key)
         insertOrder.add(key)
 
         while (insertOrder.size > MAX_SECTIONS) {
             val old = insertOrder.poll() ?: break
             sections.remove(old)
+            persistentPalettes.remove(old)
         }
     }
 
-    private fun decodeSubChunkBlocks(buf: ByteBuf): IntArray? {
+    // FIX: artık (IntArray, Array<String?>?) çifti dönüyor. İkinci değer sadece
+    // primary storage persistent formatındaysa dolu oluyor, aksi halde null.
+    private fun decodeSubChunkBlocks(buf: ByteBuf): Pair<IntArray, Array<String?>?>? {
         return try {
             buf.markReaderIndex()
             tryDecode(buf, skipYByte = false)
@@ -259,7 +283,7 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         }
     }
 
-    private fun tryDecode(buf: ByteBuf, skipYByte: Boolean): IntArray? {
+    private fun tryDecode(buf: ByteBuf, skipYByte: Boolean): Pair<IntArray, Array<String?>?>? {
         val version = buf.readUnsignedByte().toInt()
         val storageCount: Int
         when (version) {
@@ -273,96 +297,94 @@ object WorldBlockTracker : PacketEventBus.PacketListener {
         if (storageCount <= 0 || storageCount > 8) return null
 
         var primary: IntArray? = null
+        var primaryNames: Array<String?>? = null
         repeat(storageCount) { idx ->
             val storage = readBlockStorage(buf) ?: return null
-            if (idx == 0) primary = storage
+            if (idx == 0) { primary = storage.first; primaryNames = storage.second }
         }
-        return primary
+        val p = primary ?: return null
+        return p to primaryNames
     }
 
-    private fun readBlockStorage(buf: ByteBuf): IntArray? {
+    // FIX (ANA DÜZELTME): Eskiden persistent (NBT paletli) storage tamamen
+    // atlanıp bloğun TÜMÜ (4096 blok) "-1 = bilinmiyor" olarak işaretleniyordu.
+    // Bu, subchunk içinde chest/kapı/tabela gibi TEK bir özel bloklu blok
+    // storage'ı NBT paletine geçirdiğinde, o subchunk'taki obsidian/taş/her
+    // şeyin de "bilinmiyor" sayılması demekti — AnchorAura ve CrystalAura'nın
+    // "below block" ve "searchPlaceBase" kontrolleri bu yüzden sürekli null
+    // dönüyor, iki modül de PvP haritalarında (chest/kapı/tabela çok yaygın)
+    // neredeyse hiç çalışmıyordu.
+    //
+    // Artık: index dizisini normal (word-packed) formatla AYNI ŞEKİLDE okuyoruz,
+    // ardından palette'i NBT reader ile gerçekten parse edip her compound'dan
+    // "name" alanını çıkarıyoruz. Sonuç, indices[i] -> paletteNames[indices[i]]
+    // eşlemesiyle gerçek identifier'lara ulaşılabiliyor. Bunu negatif sentinel
+    // (-(paletteIndex+2)) ile aynı IntArray içinde encode edip getBlockIdentifier
+    // içinde çözüyoruz — storage formatını değiştirmeden geriye dönük uyumlu.
+    private fun readBlockStorage(buf: ByteBuf): Pair<IntArray, Array<String?>?>? {
         val header = buf.readUnsignedByte().toInt()
         val bitsPerBlock = header ushr 1
         val isPersistent = (header and 1) == 1
         if (bitsPerBlock !in intArrayOf(0, 1, 2, 3, 4, 5, 6, 8, 16)) return null
 
-        // FIX: persistent (NBT) paletli subchunk'larda eskiden direkt `return null`
-        // yapılıyordu. Bu, tryDecode() -> handleLevelChunkPacket() zincirinde
-        // "break"e sebep oluyordu — yani bu subchunk'ın ÜSTÜNDEKİ tüm subchunk'lar
-        // da (aynı sütunda) hiç okunmadan atlanıyordu, buffer hizası bozulacağı
-        // için değil, sadece "decode başarısız" sayılıp erken çıkıldığı için.
-        // Artık bu bloğu (içeriğini sections'a yazmadan) doğru NBT reader ile
-        // atlayıp buffer'ı hizalı tutuyoruz — böylece üstteki subchunk'lar normal
-        // şekilde okunmaya devam ediyor. Sadece bu TEK subchunk'ın kendi verisi
-        // (nadir, özel bloklar) hâlâ eksik kalıyor, ama sütunun geri kalanı artık
-        // kaybolmuyor.
-        if (isPersistent) {
-            return try {
-                skipPersistentPalette(buf, bitsPerBlock)
-                // null DEĞİL — placeholder IntArray dönüyoruz. tryDecode()'daki
-                // `readBlockStorage(buf) ?: return null` null görürse yine aynı
-                // break'e sebep olurdu. -1 = "bilinmiyor" sentinel; getBlockIdentifier
-                // bu bloklar için null döner (resolveIdentifier(-1) registry'de
-                // bulunamaz), ama en azından ÜSTTEKİ subchunk'lar okunmaya devam eder.
-                IntArray(SECTION_BLOCKS) { -1 }
-            } catch (_: Exception) {
-                null
-            }
-        }
-
-        if (bitsPerBlock == 0) {
-
+        // bitsPerBlock == 0 && !persistent: tek runtimeId'lik "uniform" storage,
+        // index array'i yok, palette de tek elemanlı VarInt.
+        if (bitsPerBlock == 0 && !isPersistent) {
             val id = readUnsignedVarInt(buf)
-            return IntArray(SECTION_BLOCKS) { id }
+            return IntArray(SECTION_BLOCKS) { id } to null
         }
 
-        val blocksPerWord = 32 / bitsPerBlock
-        val wordCount = (SECTION_BLOCKS + blocksPerWord - 1) / blocksPerWord
+        // Index dizisini oku (persistent olsun olmasın format aynı word-packed
+        // yapı). bitsPerBlock == 0 && persistent ise (tek elemanlı persistent
+        // palette) indices hep 0 kalır (IntArray default).
         val indices = IntArray(SECTION_BLOCKS)
-        val mask = (1 shl bitsPerBlock) - 1
-        var bi = 0
-        repeat(wordCount) {
-            val word = buf.readIntLE()
-            var w = word
-            var c = 0
-            while (c < blocksPerWord && bi < SECTION_BLOCKS) {
-                indices[bi] = w and mask
-                w = w ushr bitsPerBlock
-                bi++; c++
+        if (bitsPerBlock > 0) {
+            val blocksPerWord = 32 / bitsPerBlock
+            val wordCount = (SECTION_BLOCKS + blocksPerWord - 1) / blocksPerWord
+            val mask = (1 shl bitsPerBlock) - 1
+            var bi = 0
+            repeat(wordCount) {
+                val word = buf.readIntLE()
+                var w = word
+                var c = 0
+                while (c < blocksPerWord && bi < SECTION_BLOCKS) {
+                    indices[bi] = w and mask
+                    w = w ushr bitsPerBlock
+                    bi++; c++
+                }
             }
+        }
+
+        if (isPersistent) {
+            val paletteSize = readUnsignedVarInt(buf)
+            if (paletteSize <= 0 || paletteSize > 8192) return null
+            val names = arrayOfNulls<String>(paletteSize)
+            repeat(paletteSize) { pIdx ->
+                names[pIdx] = try {
+                    io.netty.buffer.ByteBufInputStream(buf).use { stream ->
+                        org.cloudburstmc.nbt.NbtUtils.createNetworkReader(stream).use { reader ->
+                            val tag = reader.readTag()
+                            (tag as? org.cloudburstmc.nbt.NbtMap)?.getString("name")
+                        }
+                    }
+                } catch (_: Exception) { null }
+            }
+            val encoded = IntArray(SECTION_BLOCKS) { i ->
+                val p = indices[i]
+                if (p < names.size) -(p + 2) else -1
+            }
+            return encoded to names
         }
 
         val paletteSize = readUnsignedVarInt(buf)
         if (paletteSize <= 0 || paletteSize > 8192) return null
         val palette = IntArray(paletteSize) { readUnsignedVarInt(buf) }
 
-        return IntArray(SECTION_BLOCKS) { i ->
+        val result = IntArray(SECTION_BLOCKS) { i ->
             val p = indices[i]
             if (p < palette.size) palette[p] else 0
         }
-    }
-
-    // Persistent format: index dizisi normal (word-packed) formatla aynı şekilde
-    // kodlanır, ama paletin kendisi runtimeId VarInt listesi değil, N adet NBT
-    // compound tag'idir (her biri bir blok state'ini doğrudan tanımlar). İçeriği
-    // sections'a yazmıyoruz (ayrı bir string-bazlı depoya ihtiyaç duyar) — sadece
-    // buffer'ı doğru NBT reader ile ileri sararak sonraki subchunk'ların
-    // hizasını koruyoruz.
-    private fun skipPersistentPalette(buf: ByteBuf, bitsPerBlock: Int) {
-        if (bitsPerBlock > 0) {
-            val blocksPerWord = 32 / bitsPerBlock
-            val wordCount = (SECTION_BLOCKS + blocksPerWord - 1) / blocksPerWord
-            buf.skipBytes(wordCount * 4)
-        }
-        val paletteSize = readUnsignedVarInt(buf)
-        if (paletteSize <= 0 || paletteSize > 8192) throw IllegalStateException("Geçersiz persistent palette boyutu")
-        repeat(paletteSize) {
-            io.netty.buffer.ByteBufInputStream(buf).use { stream ->
-                org.cloudburstmc.nbt.NbtUtils.createNetworkReader(stream).use { reader ->
-                    reader.readTag()
-                }
-            }
-        }
+        return result to null
     }
 
     private fun readUnsignedVarInt(buf: ByteBuf): Int {
